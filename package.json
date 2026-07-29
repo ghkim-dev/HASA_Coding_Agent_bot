@@ -1,0 +1,25 @@
+{
+  "name": "hasa-agent-arena",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HASA Agent Arena — model runner, isolated workspaces, verifiable evaluator",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "probe": "node --env-file-if-exists=.env src/probe/cli.ts",
+    "serve": "node --env-file-if-exists=.env src/server/main.ts",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3"
+  }
+}

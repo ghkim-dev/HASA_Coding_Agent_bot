@@ -1,0 +1,18 @@
+# Line endings are normalised to LF in the repository and on checkout.
+#
+# Not cosmetic: the test suite asserts on file contents after `git apply`, and
+# with the machine's global core.autocrlf deciding, the same commit passes on
+# one developer's laptop and fails on another's.
+* text=auto eol=lf
+
+# Never touch binary content.
+*.png binary
+*.jpg binary
+*.gif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Patches carry their own line endings; rewriting them breaks `git apply`.
+*.patch -text
+*.diff -text

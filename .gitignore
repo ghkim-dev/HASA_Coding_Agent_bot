@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# runtime artifacts — run outputs, worktrees, capability matrix
+.arena/
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.npmrc
+
+# build / logs
+dist/
+*.log
+*.tsbuildinfo
+
+# editor / OS
+.DS_Store
+Thumbs.db
