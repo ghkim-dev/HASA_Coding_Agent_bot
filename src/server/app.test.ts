@@ -85,6 +85,16 @@ describe("HTTP API", () => {
     assert.equal(res.statusCode, 200);
   });
 
+  test("GET /models reports an empty catalogue rather than failing when unprobed", async () => {
+    // The extension's model picker must be able to render "run pnpm probe
+    // first" instead of showing an error it cannot act on.
+    const res = await app.inject({ method: "GET", url: "/models", headers: auth });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as { models: unknown[]; staleness: string[] };
+    assert.deepEqual(body.models, []);
+    assert.ok(body.staleness.length > 0);
+  });
+
   test("every other route requires the shared token", async () => {
     const res = await app.inject({ method: "GET", url: "/runs" });
     assert.equal(res.statusCode, 401);

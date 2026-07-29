@@ -49,6 +49,32 @@ export class ModelRegistry {
     return this.matrix?.models.find((m) => m.modelId === modelId)?.eligibility ?? null;
   }
 
+  /**
+   * Everything a client needs to populate a model picker.
+   *
+   * Deliberately includes ineligible models with their reasons rather than
+   * hiding them: a user who cannot find `qwen2.5-coder-32b` in the list has no
+   * way to learn that the gateway, not the model, is the problem.
+   */
+  list(): Array<{
+    modelId: string;
+    eligibility: Eligibility;
+    maxOutputTokens: number | null;
+    latencyMs: number | null;
+    toolsStatus: string;
+    toolsDetail: string | null;
+  }> {
+    if (this.matrix === null) return [];
+    return this.matrix.models.map((m) => ({
+      modelId: m.modelId,
+      eligibility: m.eligibility,
+      maxOutputTokens: m.limits.observedMaxOutputTokens,
+      latencyMs: m.limits.latencyMs?.p50 ?? null,
+      toolsStatus: m.capabilities["tools"]?.status ?? "unknown",
+      toolsDetail: m.capabilities["tools"]?.errorCode ?? m.capabilities["tools"]?.evidence ?? null,
+    }));
+  }
+
   staleness(now: number): string[] {
     return this.matrix === null ? ["capability matrix not found"] : checkStaleness(this.matrix, { now }).reasons;
   }

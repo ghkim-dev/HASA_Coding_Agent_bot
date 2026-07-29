@@ -12,7 +12,7 @@
 | 0 | capability probe CLI | 완료 — 실제 HASA 19개 모델 측정 완료 |
 | 1 | Response Compare 모드 + 오케스트레이터 | 완료 |
 | 2 | Code Candidate 모드 (worktree, 게이트, apply) | 완료 |
-| 3 | VS Code Extension | 미착수 |
+| 3 | VS Code Extension | 완료 (타입검사·빌드 검증. UI 동작은 수동 확인 필요) |
 
 ## 요구 사항
 
@@ -35,8 +35,11 @@ pnpm probe --help
 
 pnpm serve          # 오케스트레이터 HTTP 서버 (127.0.0.1 전용)
 pnpm test           # 전체 테스트
-pnpm typecheck      # tsc --noEmit
+pnpm typecheck      # src + extension 타입 검사
+pnpm build:extension # VS Code 확장 컴파일 → extension/out
 ```
+
+VS Code 확장은 [extension/](extension/) 에 있습니다. 신뢰 경계와 화면 구성은 [extension/README.md](extension/README.md) 참조.
 
 ## 환경 변수
 

@@ -12,7 +12,8 @@
     "probe": "node --env-file-if-exists=.env src/probe/cli.ts",
     "serve": "node --env-file-if-exists=.env src/server/main.ts",
     "test": "node --test \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p extension --noEmit",
+    "build:extension": "tsc -p extension"
   },
   "dependencies": {
     "fastify": "^5.2.1",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/vscode": "^1.125.0",
     "typescript": "^5.8.3"
   }
 }

@@ -8,6 +8,7 @@ import { createLogger, type Logger } from "../hasa-client/logger.ts";
 import { FairnessError } from "../core/fairness.ts";
 import { CodeRunPrecondition, type CodeRunManager } from "../core/codeRunManager.ts";
 import type { EventHub } from "../core/events.ts";
+import type { ModelRegistry } from "../core/registry.ts";
 import type { RunManager } from "../core/runManager.ts";
 import type { Store } from "../core/store.ts";
 
@@ -15,6 +16,8 @@ export interface ServerDeps {
   runs: RunManager;
   /** Phase 2. Absent means code mode is unavailable and returns 501. */
   codeRuns?: CodeRunManager;
+  /** Backs `GET /models`. Absent means the picker gets an empty list. */
+  registry?: ModelRegistry;
   store: Store;
   hub: EventHub;
   logger?: Logger;
@@ -66,6 +69,17 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   });
 
   app.get("/healthz", async () => ({ ok: true, sqlite: deps.store.sqliteEnabled }));
+
+  /**
+   * Backs the model picker. Carries eligibility and the reason a model is
+   * ineligible, so a UI can grey an entry out *and say why* — the alternative
+   * is a user hunting for a model that was silently filtered away.
+   */
+  app.get("/models", async () => ({
+    probedAt: deps.registry?.probedAt ?? null,
+    staleness: deps.registry?.staleness(Date.now()) ?? ["capability matrix not loaded"],
+    models: deps.registry?.list() ?? [],
+  }));
 
   app.post("/runs", async (req, reply) => {
     const parsed = CreateRunRequestSchema.safeParse(req.body);

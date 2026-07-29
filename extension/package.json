@@ -1,0 +1,75 @@
+{
+  "name": "hasa-agent-arena",
+  "displayName": "HASA Agent Arena",
+  "description": "Compare HASA models on the same task in isolated git worktrees, and apply the winner only after you have reviewed it.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "hasa-arena",
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=20"
+  },
+  "categories": ["AI", "Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "hasaArena.compare",
+        "title": "HASA: Compare Models",
+        "category": "HASA Arena"
+      },
+      {
+        "command": "hasaArena.setApiKey",
+        "title": "HASA: Set API Key",
+        "category": "HASA Arena"
+      },
+      {
+        "command": "hasaArena.clearApiKey",
+        "title": "HASA: Clear Stored API Key",
+        "category": "HASA Arena"
+      },
+      {
+        "command": "hasaArena.showLog",
+        "title": "HASA: Show Orchestrator Log",
+        "category": "HASA Arena"
+      }
+    ],
+    "configuration": {
+      "title": "HASA Agent Arena",
+      "properties": {
+        "hasaArena.orchestratorPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the HASA Agent Arena checkout used to launch the orchestrator. Leave empty to use the extension's own installation directory."
+        },
+        "hasaArena.orchestratorUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Connect to an already-running orchestrator instead of launching one, e.g. `http://127.0.0.1:7801`. The token is still taken from secret storage."
+        },
+        "hasaArena.defaultCandidateCount": {
+          "type": "number",
+          "default": 2,
+          "minimum": 2,
+          "maximum": 6,
+          "description": "How many candidate models a new comparison starts with."
+        },
+        "hasaArena.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "Timeout for orchestrator HTTP requests made by the extension."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.8.3"
+  }
+}

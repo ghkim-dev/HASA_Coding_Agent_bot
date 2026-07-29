@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   });
 
   const token = process.env["ARENA_TOKEN"] ?? randomBytes(24).toString("hex");
-  const app = buildServer({ runs, codeRuns, store, hub, logger: log.child("http"), token });
+  const app = buildServer({ runs, codeRuns, registry, store, hub, logger: log.child("http"), token });
 
   const port = Number(process.env["ARENA_PORT"] ?? 7801);
   // Loopback only: this process holds the API key, so it must not be reachable
