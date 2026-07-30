@@ -48,6 +48,11 @@ export interface CandidateRow {
   /** Code mode: serialised CandidateArtifacts. */
   artifacts: string | null;
   score: number | null;
+  /** 0 for the initial field; incremented for each refinement round. */
+  round: number;
+  /** The candidate this one was produced from, for a refinement neighbour. */
+  parentCandidateId: string | null;
+  origin: "seed" | "refinement";
 }
 
 export interface GateResultRow {
@@ -116,6 +121,9 @@ CREATE TABLE IF NOT EXISTS candidates (
   error_code TEXT,
   artifacts TEXT,
   score REAL,
+  round INTEGER NOT NULL DEFAULT 0,
+  parent_candidate_id TEXT,
+  origin TEXT NOT NULL DEFAULT 'seed',
   UNIQUE(run_id, label)
 );
 CREATE TABLE IF NOT EXISTS gate_results (
@@ -162,6 +170,20 @@ async function openSqlite(dbPath: string, log: Logger): Promise<SqliteDatabase |
     if (dbPath !== ":memory:") await mkdir(dirname(dbPath), { recursive: true });
     const db = new mod.DatabaseSync(dbPath);
     db.exec(SCHEMA);
+    // `CREATE TABLE IF NOT EXISTS` does not reach a database that already
+    // exists, so columns added after the first release need an explicit
+    // migration. A duplicate-column error means it already ran.
+    for (const column of [
+      "round INTEGER NOT NULL DEFAULT 0",
+      "parent_candidate_id TEXT",
+      "origin TEXT NOT NULL DEFAULT 'seed'",
+    ]) {
+      try {
+        db.exec(`ALTER TABLE candidates ADD COLUMN ${column}`);
+      } catch {
+        // already present
+      }
+    }
     return db;
   } catch (err) {
     log.warn("node:sqlite unavailable — falling back to memory + JSONL only", {
@@ -234,6 +256,9 @@ export class Store {
         errorCode: row["error_code"] === null ? null : String(row["error_code"]),
         artifacts: row["artifacts"] == null ? null : String(row["artifacts"]),
         score: row["score"] == null ? null : Number(row["score"]),
+        round: row["round"] == null ? 0 : Number(row["round"]),
+        parentCandidateId: row["parent_candidate_id"] == null ? null : String(row["parent_candidate_id"]),
+        origin: row["origin"] === "refinement" ? "refinement" : "seed",
       };
       const list = this.candidates.get(candidate.runId) ?? [];
       list.push(candidate);
@@ -287,7 +312,7 @@ export class Store {
     this.candidates.set(row.runId, list);
     this.db
       ?.prepare(
-        "INSERT OR REPLACE INTO candidates (id, run_id, label, model_id, spec, status, order_index, excluded_reason, response_text, tokens_in, tokens_out, latency_ms, error_code, artifacts, score) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO candidates (id, run_id, label, model_id, spec, status, order_index, excluded_reason, response_text, tokens_in, tokens_out, latency_ms, error_code, artifacts, score, round, parent_candidate_id, origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         row.id,
@@ -305,6 +330,9 @@ export class Store {
         row.errorCode,
         row.artifacts,
         row.score,
+        row.round,
+        row.parentCandidateId,
+        row.origin,
       );
   }
 

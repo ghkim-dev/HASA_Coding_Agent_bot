@@ -3,6 +3,7 @@ import {
   type ArenaEvent,
   type CandidateSpec,
   type CreateRunRequest,
+  type RoundRecord,
   type RunResult,
   type RunStatus,
 } from "../protocol/index.ts";
@@ -11,12 +12,13 @@ import { HasaError } from "../hasa-client/errors.ts";
 import { createLogger, type Logger } from "../hasa-client/logger.ts";
 import { redactString } from "../hasa-client/redact.ts";
 import type { Scheduler } from "./scheduler.ts";
-import type { Store } from "./store.ts";
+import type { CandidateRow, Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
 import { passedCount, runChecks } from "./checks.ts";
 import { decide } from "./decide.ts";
-import { assertFairness, resolveCandidateSpecs, shuffled } from "./fairness.ts";
+import { assertComparable, assertFairness, resolveCandidateSpecs, shuffled } from "./fairness.ts";
 import { scrubIdentifiers } from "./judge.ts";
+import { assertDistinctRoles, critique, neighbourMessages } from "./refine.ts";
 
 export interface RunManagerOptions {
   client: HasaClient;
@@ -48,10 +50,15 @@ function textOf(content: unknown): string {
  * did. The trace is empty because nothing was judged, which is different from
  * a trace that is empty because judging was skipped.
  */
-const NO_LADDER = (): Pick<RunResult, "decidedAt" | "ladderTrace" | "judgeCallsSpent"> => ({
+const NO_LADDER = (): Pick<
+  RunResult,
+  "decidedAt" | "ladderTrace" | "judgeCallsSpent" | "rounds" | "convergedBy"
+> => ({
   decidedAt: null,
   ladderTrace: [],
   judgeCallsSpent: 0,
+  rounds: [],
+  convergedBy: null,
 });
 
 export class RunManager {
@@ -77,6 +84,13 @@ export class RunManager {
   /** Throws FairnessError before anything is persisted. */
   create(req: CreateRunRequest): string {
     assertFairness({ candidates: req.candidates, sampling: req.sampling, judge: req.judge });
+    if (req.refine) {
+      assertDistinctRoles(
+        req.refine.criticModelId,
+        req.judge.modelId,
+        req.candidates.map((c) => c.modelId),
+      );
+    }
 
     const runId = randomUUID();
     const specs = resolveCandidateSpecs(runId, req.candidates, req.sampling, req.taskSpec);
@@ -116,6 +130,9 @@ export class RunManager {
         errorCode: null,
         artifacts: null,
         score: null,
+        round: 0,
+        parentCandidateId: null,
+        origin: "seed",
       });
     }
 
@@ -186,7 +203,16 @@ export class RunManager {
     if (signal.aborted) return;
 
     this.setStatus(runId, "evaluating");
-    const result = await this.evaluate(runId, req, specs, signal);
+    const tournament = await this.evaluate(runId, req, specs, signal);
+    if (signal.aborted) return;
+
+    // Refinement only makes sense once there is an incumbent to improve on. A
+    // run with no winner has nothing to defend, and building neighbours for a
+    // draft the system could not rank would optimise against an unknown target.
+    const result =
+      req.refine && req.refine.maxRounds > 0 && tournament.winnerCandidateId !== null
+        ? await this.refineWinner(runId, req, tournament, signal)
+        : tournament;
     if (signal.aborted) return;
 
     this.store.updateRun(runId, { result: JSON.stringify(result) });
@@ -285,6 +311,228 @@ export class RunManager {
         at: this.now(),
       });
     }
+  }
+
+  /**
+   * Hill-climbing around the tournament winner.
+   *
+   * Each round criticises the incumbent, asks the incumbent's own model for a
+   * revision addressing the critique, and puts the two through the same blind
+   * ladder. The incumbent is replaced only by a win — a tie or an undecidable
+   * verdict leaves it standing — so the run's output can never be worse than
+   * what the tournament produced. The stopping condition is what makes the
+   * result a *local* optimum: a neighbour was constructed and it lost.
+   */
+  private async refineWinner(
+    runId: string,
+    req: CreateRunRequest,
+    tournament: RunResult,
+    signal: AbortSignal,
+  ): Promise<RunResult> {
+    const config = req.refine;
+    if (!config) return tournament;
+
+    const rows = this.store.listCandidates(runId);
+    const champion = rows.find((r) => r.id === tournament.winnerCandidateId);
+    if (!champion) return tournament;
+    let incumbent: CandidateRow = champion;
+
+    const identifiers = req.candidates.map((c) => c.modelId);
+    const rounds: RoundRecord[] = [];
+    let convergedBy: RunResult["convergedBy"] = "round_budget";
+    let judgeCallsSpent = tournament.judgeCallsSpent;
+    const ladderTrace = [...tournament.ladderTrace];
+
+    for (let round = 1; round <= config.maxRounds; round += 1) {
+      if (signal.aborted) break;
+      const draft = incumbent.responseText ?? "";
+
+      const critiqued = await critique(this.client, config, req.taskSpec, draft, {
+        logger: this.log,
+        signal,
+        dispatch: (modelId, fn) => this.scheduler.submit({ modelId, priority: 1, signal, run: fn }),
+      });
+      if (critiqued.failed) {
+        // Not the same as "nothing to fix" — the critic broke. Saying the
+        // answer converged would credit the run with a check it never made.
+        convergedBy = "critic_unavailable";
+        break;
+      }
+      if (critiqued.defects.length === 0) {
+        convergedBy = "no_defects_found";
+        break;
+      }
+
+      const label = `${incumbent.label}~r${round}`;
+      const neighbourId = `${runId}-${label}`;
+      const parentLabel = incumbent.label;
+      this.store.insertCandidate({
+        id: neighbourId,
+        runId,
+        label,
+        modelId: incumbent.modelId,
+        spec: incumbent.spec,
+        status: "running",
+        orderIndex: rows.length + round,
+        excludedReason: null,
+        responseText: null,
+        tokensIn: null,
+        tokensOut: null,
+        latencyMs: null,
+        errorCode: null,
+        artifacts: null,
+        score: null,
+        round,
+        parentCandidateId: incumbent.id,
+        origin: "refinement",
+      });
+      this.emit(runId, {
+        type: "candidate.status",
+        runId,
+        candidateId: neighbourId,
+        label,
+        status: "running",
+        at: this.now(),
+      });
+
+      let neighbourText = "";
+      try {
+        const response = await this.scheduler.submit({
+          modelId: incumbent.modelId,
+          priority: 0,
+          signal,
+          run: (jobSignal) =>
+            this.client.chat(
+              {
+                model: incumbent.modelId,
+                messages: neighbourMessages(req.taskSpec, draft, critiqued.defects),
+                temperature: req.sampling.temperature,
+                top_p: req.sampling.topP,
+                max_tokens: req.sampling.maxOutputTokens,
+              },
+              jobSignal ? { signal: jobSignal } : {},
+            ),
+        });
+        neighbourText = textOf(response.choices[0]?.message?.content);
+        this.store.updateCandidate(neighbourId, {
+          status: neighbourText.trim().length === 0 ? "failed" : "completed",
+          responseText: neighbourText,
+          tokensIn: response.usage?.prompt_tokens ?? null,
+          tokensOut: response.usage?.completion_tokens ?? null,
+        });
+      } catch (err) {
+        this.log.warn("refinement neighbour failed", { runId, round, error: err });
+        this.store.updateCandidate(neighbourId, { status: "failed", errorCode: "error" });
+      }
+
+      if (neighbourText.trim().length === 0) {
+        rounds.push({ round, neighbourLabel: label, defects: critiqued.defects, replaced: false, detail: "이웃 생성 실패" });
+        convergedBy = "neighbour_failed";
+        break;
+      }
+      await this.store.writeArtifact(runId, `candidates/${label}.txt`, neighbourText);
+
+      // The neighbour differs from the incumbent by its input, not its model —
+      // a refinement comparison, checked as one.
+      assertComparable(
+        { modelId: incumbent.modelId, ...req.sampling, systemPromptVersion: req.taskSpec.systemPromptVersion },
+        { modelId: incumbent.modelId, ...req.sampling, systemPromptVersion: req.taskSpec.systemPromptVersion },
+        "refinement",
+      );
+
+      const checks = req.taskSpec.checks;
+      const scoreOf = (text: string): number | null =>
+        checks.length === 0 ? null : passedCount(runChecks(text, checks));
+      if (checks.length > 0) this.store.updateCandidate(neighbourId, { score: scoreOf(neighbourText) });
+
+      const decision = await decide(
+        this.client,
+        {
+          taskPrompt: req.taskSpec.prompt,
+          ...(req.taskSpec.rubric ? { rubric: req.taskSpec.rubric } : {}),
+          subjects: [
+            {
+              id: incumbent.id,
+              label: parentLabel,
+              text: scrubIdentifiers(draft, identifiers),
+              objectiveScore: scoreOf(draft),
+            },
+            {
+              id: neighbourId,
+              label,
+              text: scrubIdentifiers(neighbourText, identifiers),
+              objectiveScore: scoreOf(neighbourText),
+            },
+          ],
+          forbidden: identifiers,
+          judge: req.judge,
+          kind: "refinement",
+        },
+        {
+          logger: this.log,
+          signal,
+          dispatch: (modelId, fn) => this.scheduler.submit({ modelId, priority: 1, signal, run: fn }),
+          onProgress: (pair, order) =>
+            this.emit(runId, { type: "judge.progress", runId, pair, order, attempt: 1, at: this.now() }),
+          onVerdict: (record) => {
+            this.store.insertVerdict({
+              id: randomUUID(),
+              runId,
+              judgeModel: record.judgeModel,
+              pair: record.pair,
+              presentationOrder: record.presentationOrder,
+              winnerLabel: record.winnerLabel,
+              confidence: record.confidence,
+              reasons: JSON.stringify(record.reasons),
+              parseAttempts: record.parseAttempts,
+              rawPath: null,
+            });
+          },
+        },
+      );
+      judgeCallsSpent += decision.judgeCallsSpent;
+      ladderTrace.push(...decision.trace);
+
+      const replaced = decision.winnerLabel === label;
+      rounds.push({
+        round,
+        neighbourLabel: label,
+        defects: critiqued.defects,
+        replaced,
+        detail: replaced ? `이웃이 우세 (${decision.decidedAt})` : decision.detail,
+      });
+      this.emit(runId, {
+        type: "candidate.status",
+        runId,
+        candidateId: neighbourId,
+        label,
+        status: "completed",
+        at: this.now(),
+      });
+
+      if (!replaced) {
+        // The claim the whole loop exists to license: an alternative was built
+        // and it did not win. Anything short of a win keeps the incumbent,
+        // including a tie — refinement rounds are not free coin flips.
+        convergedBy = "neighbour_not_better";
+        break;
+      }
+      incumbent = this.store.listCandidates(runId).find((r) => r.id === neighbourId) ?? incumbent;
+    }
+
+    return {
+      ...tournament,
+      winnerCandidateId: incumbent.id,
+      winnerLabel: incumbent.label,
+      reason:
+        rounds.length === 0
+          ? tournament.reason
+          : `${tournament.reason} · 개선 ${rounds.length}라운드, ${rounds.filter((r) => r.replaced).length}회 교체 (${convergedBy})`,
+      ladderTrace,
+      judgeCallsSpent,
+      rounds,
+      convergedBy,
+    };
   }
 
   private async evaluate(
@@ -416,6 +664,8 @@ export class RunManager {
       decidedAt: decision.decidedAt,
       ladderTrace: decision.trace,
       judgeCallsSpent: decision.judgeCallsSpent,
+      rounds: [],
+      convergedBy: null,
     };
 
     if (decision.winnerLabel === null) {

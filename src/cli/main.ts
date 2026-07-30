@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   CheckSchema,
   JudgeConfigSchema,
+  RefineConfigSchema,
   type ArenaEvent,
   type CandidateArtifacts,
   type Check,
@@ -53,6 +54,8 @@ Options
   --max-words <n>    응답 길이 상한 (단어)
   --ensemble <a,b>   판정이 갈렸을 때 의견을 물을 추가 judge 모델 (사다리 S3)
   --max-judge-calls  judge 호출 상한 (기본 60). 소진되면 budget_exhausted
+  --critic <id>      승자를 개선해볼 비평가 모델. judge·후보와 모두 달라야 한다
+  --rounds <n>       개선 라운드 상한 (기본 2). --critic 없으면 무시
   --json             결과를 JSON 으로 출력
   -h, --help
 
@@ -74,6 +77,8 @@ interface Args {
   checks: Check[];
   ensemble: string[];
   maxJudgeCalls: number;
+  critic: string;
+  rounds: number;
   json: boolean;
   help: boolean;
 }
@@ -102,6 +107,8 @@ function parseArgs(argv: string[]): Args {
     checks: [],
     ensemble: [],
     maxJudgeCalls: 60,
+    critic: "",
+    rounds: 2,
     json: false,
     help: false,
   };
@@ -167,6 +174,12 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--ensemble":
         args.ensemble = next().split(",").map((s) => s.trim()).filter(Boolean);
+        break;
+      case "--critic":
+        args.critic = next();
+        break;
+      case "--rounds":
+        args.rounds = Number.parseInt(next(), 10);
         break;
       case "--max-judge-calls":
         args.maxJudgeCalls = Number.parseInt(next(), 10);
@@ -316,6 +329,9 @@ export async function main(argv: string[]): Promise<number> {
       candidates: args.models.map((modelId) => ({ modelId })),
       sampling: { temperature: 0.2, topP: 1, maxOutputTokens: 2048 },
       judge: judgeConfig(args),
+      ...(args.critic === ""
+        ? {}
+        : { refine: RefineConfigSchema.parse({ criticModelId: args.critic, maxRounds: args.rounds }) }),
     });
     hub.forRun(runId).subscribe(onEvent);
     await runs.waitFor(runId);

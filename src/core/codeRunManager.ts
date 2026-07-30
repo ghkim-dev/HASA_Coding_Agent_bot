@@ -48,10 +48,17 @@ const CODE_EVIDENCE_AXES: RunResult["evidenceAxes"] = ["objective", "judge"];
  * or the objective score settled it outright. The trace is empty because
  * nothing was judged.
  */
-const NO_LADDER = (): Pick<RunResult, "decidedAt" | "ladderTrace" | "judgeCallsSpent"> => ({
+const NO_LADDER = (): Pick<
+  RunResult,
+  "decidedAt" | "ladderTrace" | "judgeCallsSpent" | "rounds" | "convergedBy"
+> => ({
   decidedAt: null,
   ladderTrace: [],
   judgeCallsSpent: 0,
+  // Refinement is response-mode only for now; a code-mode neighbour needs its
+  // own worktree and a full gate pass, which is a larger change than this one.
+  rounds: [],
+  convergedBy: null,
 });
 
 
@@ -200,6 +207,9 @@ export class CodeRunManager {
         errorCode: null,
         artifacts: null,
         score: null,
+        round: 0,
+        parentCandidateId: null,
+        origin: "seed",
       });
     }
 
@@ -706,6 +716,8 @@ export class CodeRunManager {
       decidedAt: decision.decidedAt,
       ladderTrace: decision.trace,
       judgeCallsSpent: decision.judgeCallsSpent,
+      rounds: [],
+      convergedBy: null,
     };
 
     if (decision.winnerLabel === null) {

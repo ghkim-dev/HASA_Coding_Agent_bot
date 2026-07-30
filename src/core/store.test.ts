@@ -49,6 +49,9 @@ function candidateRow(runId: string, label: string): CandidateRow {
     errorCode: null,
     artifacts: null,
     score: null,
+    round: 0,
+    parentCandidateId: null,
+    origin: "seed",
   };
 }
 

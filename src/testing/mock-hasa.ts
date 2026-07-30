@@ -54,6 +54,13 @@ export interface MockModelProfile {
   /** Always picks this presentation slot — simulates pure position bias. */
   judgeAlwaysPicksSlot?: 1 | 2;
   /**
+   * Ordered preference: the submission containing the earliest listed marker
+   * wins. Lets one judge rank three or more texts consistently, which
+   * `judgePrefers` cannot — a refinement run needs the same judge to prefer the
+   * draft over a rival and the revision over the draft.
+   */
+  judgeRanks?: string[];
+  /**
    * Answers against `judgePrefers` for this many calls, then normally.
    *
    * Reproduces a judge that is noisy rather than biased: the first reading of a
@@ -62,6 +69,24 @@ export interface MockModelProfile {
    * inseparable pair, which is the entire justification for the rung.
    */
   judgeContrarianCalls?: number;
+  /**
+   * Turns the model into a refinement critic returning these defects.
+   *
+   * Deliberately a function of the draft rather than of a call counter: the
+   * critic is asked about a different draft each round, and a counter would
+   * make its answer depend on how many other tests had run first.
+   */
+  criticDefects?: string[];
+  /** Drafts containing this are judged clean, so the loop can converge. */
+  criticSatisfiedBy?: string;
+  /** Critic that never returns parseable JSON — a broken critic, not a happy one. */
+  criticGarbage?: boolean;
+  /**
+   * Reply used when the prompt carries a critique, i.e. for a refinement
+   * neighbour. Distinct from `cannedReply` so a test can decide whether the
+   * revision is actually an improvement or merely a change.
+   */
+  refinedReply?: string;
   /** Emits unparseable output this many times before answering properly. */
   judgeGarbageTimes?: number;
   /**
@@ -167,6 +192,22 @@ function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, coun
   const conversation = messages.map((m) => textOf(m.content)).join("\n");
   const toolResult = messages.find((m) => m.role === "tool");
 
+  // Critic calls are keyed off their own marker, checked before the judge so a
+  // model can play only one role per request.
+  if (conversation.includes("<<<DRAFT>>>") && (profile.criticDefects || profile.criticGarbage)) {
+    if (profile.criticGarbage) {
+      return { content: "제 생각에는 이 초안이 괜찮습니다.", toolCalls: [], reasoning: null };
+    }
+    const draft = between(conversation, "<<<DRAFT>>>", "<<<END_DRAFT>>>");
+    const satisfied =
+      profile.criticSatisfiedBy !== undefined && draft.includes(profile.criticSatisfiedBy);
+    return {
+      content: JSON.stringify({ defects: satisfied ? [] : profile.criticDefects }),
+      toolCalls: [],
+      reasoning: null,
+    };
+  }
+
   // Judge behaviour is keyed off the submission markers so it survives the
   // retry turns, where the last user message is the corrective instruction.
   const isJudgeCall = conversation.includes("<<<SUBMISSION_1>>>");
@@ -198,7 +239,19 @@ function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, coun
     const s1 = between(conversation, "<<<SUBMISSION_1>>>", "<<<END_SUBMISSION_1>>>");
     const s2 = between(conversation, "<<<SUBMISSION_2>>>", "<<<END_SUBMISSION_2>>>");
     const marker = profile.judgePrefers;
-    const preferred = marker === undefined ? null : s1.includes(marker) ? 1 : s2.includes(marker) ? 2 : null;
+    let preferred: 1 | 2 | null;
+    if (profile.judgeRanks) {
+      const ranks = profile.judgeRanks;
+      const rankOf = (text: string): number => {
+        const hit = ranks.findIndex((r) => text.includes(r));
+        return hit === -1 ? Number.POSITIVE_INFINITY : hit;
+      };
+      const r1 = rankOf(s1);
+      const r2 = rankOf(s2);
+      preferred = r1 === r2 ? null : r1 < r2 ? 1 : 2;
+    } else {
+      preferred = marker === undefined ? null : s1.includes(marker) ? 1 : s2.includes(marker) ? 2 : null;
+    }
 
     const contrarianBudget = profile.judgeContrarianCalls ?? 0;
     const contrarianSeen = judgeContrarianSeen.get(profile.id) ?? 0;
@@ -311,7 +364,11 @@ function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, coun
     return { content: `The sea is calm today (${counter}).`, toolCalls: [], reasoning: null };
   }
 
-  const content = profile.cannedReply ?? `[${profile.id}] ${prompt.slice(0, 120)}`;
+  const isNeighbour = conversation.includes("## 검토에서 지적된 결함");
+  const content =
+    (isNeighbour ? profile.refinedReply : undefined) ??
+    profile.cannedReply ??
+    `[${profile.id}] ${prompt.slice(0, 120)}`;
   return {
     content,
     toolCalls: [],

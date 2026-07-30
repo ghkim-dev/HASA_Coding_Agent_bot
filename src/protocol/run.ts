@@ -133,6 +133,33 @@ export const JudgeConfigSchema = z.object({
 });
 export type JudgeConfig = z.infer<typeof JudgeConfigSchema>;
 
+/**
+ * Turns the run from a tournament into a search.
+ *
+ * Absent, the run picks the best of N independent samples. Present, it then
+ * tries to beat that winner with neighbours built from a critique of it, and
+ * stops when it cannot — which is the only form in which "locally optimal" is
+ * a claim rather than a figure of speech.
+ */
+export const RefineConfigSchema = z.object({
+  /** Must differ from the judge and from every candidate. See core/refine.ts. */
+  criticModelId: z.string().min(1),
+  /** Zero disables refinement while leaving the config in the record. */
+  maxRounds: z.number().int().min(0).max(5).default(2),
+  temperature: z.number().min(0).max(2).default(0.2),
+  maxOutputTokens: z.number().int().min(256).max(32_768).default(1024),
+});
+export type RefineConfig = z.infer<typeof RefineConfigSchema>;
+
+export const RoundRecordSchema = z.object({
+  round: z.number().int().positive(),
+  neighbourLabel: z.string(),
+  defects: z.array(z.string()),
+  replaced: z.boolean(),
+  detail: z.string(),
+});
+export type RoundRecord = z.infer<typeof RoundRecordSchema>;
+
 export const CreateRunRequestSchema = z.object({
   mode: RunModeSchema.default("response"),
   taskSpec: TaskSpecSchema,
@@ -143,6 +170,7 @@ export const CreateRunRequestSchema = z.object({
     maxOutputTokens: 2048,
   }),
   judge: JudgeConfigSchema,
+  refine: RefineConfigSchema.optional(),
 });
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 
@@ -280,6 +308,24 @@ export const RunResultSchema = z.object({
   /** Everything the ladder attempted, in order. The receipt for `reviewReason`. */
   ladderTrace: z.array(LadderStepSchema).default([]),
   judgeCallsSpent: z.number().int().default(0),
+  /** Refinement rounds actually run. Empty when the run was a plain tournament. */
+  rounds: z.array(RoundRecordSchema).default([]),
+  /**
+   * Why refinement stopped. `neighbour_not_better` is the interesting one: it
+   * is the run reporting that it built an alternative and the alternative lost,
+   * which is what makes the winner a measured local optimum rather than an
+   * unexamined pick.
+   */
+  convergedBy: z
+    .enum([
+      "no_defects_found",
+      "neighbour_not_better",
+      "round_budget",
+      "critic_unavailable",
+      "neighbour_failed",
+    ])
+    .nullable()
+    .default(null),
 });
 export type RunResult = z.infer<typeof RunResultSchema>;
 

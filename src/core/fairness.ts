@@ -60,6 +60,56 @@ export function assertFairness(input: FairnessInput): void {
   if (violations.length > 0) throw new FairnessError(violations);
 }
 
+/**
+ * Fairness is a property of a comparison, not of a run.
+ *
+ * `assertFairness` above answers "is this a model comparison?" and is right to
+ * demand that nothing but `modelId` varies. But a refinement round compares one
+ * model's draft against the same model's revision, where the *input* is
+ * deliberately different — under the run-level rule that comparison is unfair
+ * by definition, and the loop it enables becomes inexpressible.
+ *
+ * So the question moves to the pair. Each kind names what must hold for its own
+ * question to be answerable, and the two kinds never share a ranking: mixing
+ * "which model is better" with "did this get better" contaminates both answers.
+ */
+export type ComparisonKind = "model" | "refinement";
+
+export interface ComparableSide {
+  modelId: string;
+  temperature: number;
+  topP: number;
+  maxOutputTokens: number;
+  systemPromptVersion: string;
+}
+
+export function assertComparable(a: ComparableSide, b: ComparableSide, kind: ComparisonKind): void {
+  const violations: string[] = [];
+
+  // Sampling and system prompt must match either way: they change the output
+  // for reasons that have nothing to do with the question being asked.
+  if (a.temperature !== b.temperature) violations.push(`temperature ${a.temperature} vs ${b.temperature}`);
+  if (a.topP !== b.topP) violations.push(`topP ${a.topP} vs ${b.topP}`);
+  if (a.maxOutputTokens !== b.maxOutputTokens) {
+    violations.push(`maxOutputTokens ${a.maxOutputTokens} vs ${b.maxOutputTokens}`);
+  }
+  if (a.systemPromptVersion !== b.systemPromptVersion) {
+    violations.push(`systemPromptVersion ${a.systemPromptVersion} vs ${b.systemPromptVersion}`);
+  }
+
+  if (kind === "model" && a.modelId === b.modelId) {
+    violations.push(`같은 모델(${a.modelId})끼리는 모델 비교가 되지 않는다`);
+  }
+  if (kind === "refinement" && a.modelId !== b.modelId) {
+    // Otherwise the round measures a model swap and reports it as an
+    // improvement — the loop would "converge" on whichever model happened to
+    // produce the neighbour.
+    violations.push(`개선 비교인데 모델이 다르다: ${a.modelId} vs ${b.modelId}`);
+  }
+
+  if (violations.length > 0) throw new FairnessError(violations);
+}
+
 const LABEL_ALPHABET = "abcdefghijklmnopqrstuvwxyz";
 
 export function labelFor(index: number): string {
