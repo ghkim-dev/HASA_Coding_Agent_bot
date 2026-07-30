@@ -3,7 +3,6 @@ import {
   type ArenaEvent,
   type CandidateSpec,
   type CreateRunRequest,
-  type JudgeVerdict,
   type RunResult,
   type RunStatus,
 } from "../protocol/index.ts";
@@ -12,10 +11,11 @@ import { HasaError } from "../hasa-client/errors.ts";
 import { createLogger, type Logger } from "../hasa-client/logger.ts";
 import { redactString } from "../hasa-client/redact.ts";
 import type { Scheduler } from "./scheduler.ts";
-import type { CandidateRow, Store } from "./store.ts";
+import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
+import { decide } from "./decide.ts";
 import { assertFairness, resolveCandidateSpecs, shuffled } from "./fairness.ts";
-import { runJudge, scrubIdentifiers, type Submission } from "./judge.ts";
+import { scrubIdentifiers } from "./judge.ts";
 
 export interface RunManagerOptions {
   client: HasaClient;
@@ -30,22 +30,6 @@ export interface RunManagerOptions {
 interface RunContext {
   controller: AbortController;
   done: Promise<void>;
-}
-
-interface PairOutcome {
-  pair: string;
-  winnerLabel: string | null;
-  /**
-   * `null` when the pair was decided (or tied) on the judge's own terms.
-   *
-   * `unavailable` and `unstable` are kept apart because they call for opposite
-   * remedies: a judge that never returned parseable JSON has told us nothing
-   * about the candidates and needs a bigger budget or a different model, while
-   * a judge that answered twice and contradicted itself has measured its own
-   * unreliability and needs more evidence, not more retries.
-   */
-  failure: "unavailable" | "unstable" | null;
-  detail: string;
 }
 
 function textOf(content: unknown): string {
@@ -324,182 +308,81 @@ export class RunManager {
       };
     }
 
-    const outcomes: PairOutcome[] = [];
-    for (let i = 0; i < survivors.length; i += 1) {
-      for (let j = i + 1; j < survivors.length; j += 1) {
-        const a = survivors[i];
-        const b = survivors[j];
-        if (!a || !b) continue;
-        outcomes.push(await this.judgePair(runId, req, a, b, signal));
-      }
-    }
+    // Every candidate's model id is scrubbed from every submission, not just
+    // its own — otherwise "unlike GPT-x, I…" still identifies the field.
+    const identifiers = req.candidates.map((c) => c.modelId);
+    const decision = await decide(
+      this.client,
+      {
+        taskPrompt: req.taskSpec.prompt,
+        ...(req.taskSpec.rubric ? { rubric: req.taskSpec.rubric } : {}),
+        subjects: survivors.map((row) => ({
+          id: row.id,
+          label: row.label,
+          text: scrubIdentifiers(row.responseText ?? "", identifiers),
+        })),
+        forbidden: identifiers,
+        judge: req.judge,
+        kind: "model",
+      },
+      {
+        logger: this.log,
+        signal,
+        // Judging shares the scheduler so its calls obey the same caps, at a
+        // higher priority — a run stuck waiting to be judged holds worktrees.
+        dispatch: (modelId, fn) => this.scheduler.submit({ modelId, priority: 1, signal, run: fn }),
+        onProgress: (pair, order) =>
+          this.emit(runId, { type: "judge.progress", runId, pair, order, attempt: 1, at: this.now() }),
+        onVerdict: async (record) => {
+          const rawPath = await this.store.writeArtifact(
+            runId,
+            `verdicts/${record.pair.replace("|", "-")}-${record.presentationOrder}.json`,
+            `${JSON.stringify({ winnerLabel: record.winnerLabel, confidence: record.confidence, reasons: record.reasons, attempts: record.parseAttempts, raw: record.rawResponses }, null, 2)}\n`,
+          );
+          this.store.insertVerdict({
+            id: randomUUID(),
+            runId,
+            judgeModel: req.judge.modelId,
+            pair: record.pair,
+            presentationOrder: record.presentationOrder,
+            winnerLabel: record.winnerLabel,
+            confidence: record.confidence,
+            reasons: JSON.stringify(record.reasons),
+            parseAttempts: record.parseAttempts,
+            rawPath,
+          });
+        },
+      },
+    );
 
-    const wins = new Map<string, number>();
-    for (const outcome of outcomes) {
-      if (outcome.winnerLabel) wins.set(outcome.winnerLabel, (wins.get(outcome.winnerLabel) ?? 0) + 1);
-    }
-    // A judge that never answered and a judge that answered inconsistently are
-    // reported separately; the first is a broken instrument, the second is a
-    // measurement of ambiguity.
-    const unavailable = outcomes.filter((o) => o.failure === "unavailable");
-    if (unavailable.length > 0) {
+    if (decision.winnerLabel === null) {
       return {
         outcome: "no_winner",
         winnerCandidateId: null,
         winnerLabel: null,
         confidence: null,
-        reason: `judge 응답을 판정으로 읽을 수 없었다: ${unavailable.map((o) => `${o.pair}(${o.detail})`).join(", ")}`,
-        reviewReason: "judge_unavailable",
-        requiresHumanReview: true,
-        evidenceAxes,
-      };
-    }
-    const unstable = outcomes.filter((o) => o.failure === "unstable");
-    if (unstable.length > 0) {
-      return {
-        outcome: "no_winner",
-        winnerCandidateId: null,
-        winnerLabel: null,
-        confidence: null,
-        reason: `judge 불안정: ${unstable.map((o) => `${o.pair}(${o.detail})`).join(", ")}`,
-        reviewReason: "unstable_judge",
-        requiresHumanReview: true,
+        reason: decision.detail,
+        reviewReason: decision.reviewReason,
+        requiresHumanReview: decision.reviewReason !== null,
         evidenceAxes,
       };
     }
 
-    const ranked = [...wins.entries()].sort((x, y) => y[1] - x[1]);
-    const top = ranked[0];
-    const runnerUp = ranked[1];
-    if (!top || (runnerUp && runnerUp[1] === top[1])) {
-      return {
-        outcome: "no_winner",
-        winnerCandidateId: null,
-        winnerLabel: null,
-        confidence: null,
-        reason: "판정 결과가 동률이다",
-        reviewReason: "tie",
-        requiresHumanReview: true,
-        evidenceAxes,
-      };
-    }
-
-    const winner = survivors.find((s) => s.label === top[0]);
     return {
       outcome: "winner",
-      winnerCandidateId: winner?.id ?? null,
-      winnerLabel: top[0],
+      winnerCandidateId: decision.winnerId,
+      winnerLabel: decision.winnerLabel,
       confidence: "judge",
-      reason: `blind pairwise 판정: ${outcomes.map((o) => `${o.pair}→${o.winnerLabel ?? "tie"}`).join(", ")}`,
+      reason: decision.detail,
       // The judge picked the same submission with the order flipped, which is
       // the strongest evidence this mode can produce. Reporting doubt here
       // reported it in every decided response run, and a field that never
       // varies is not a signal — `evidenceAxes` carries the mode's limitation
       // instead, where it belongs.
-      reviewReason: null,
-      requiresHumanReview: false,
+      reviewReason: decision.reviewReason,
+      requiresHumanReview: decision.reviewReason !== null,
       evidenceAxes,
     };
-  }
-
-  /**
-   * Runs the same pair twice with the order flipped. A judge that changes its
-   * mind when the submissions swap places has told us nothing, so disagreement
-   * is recorded as instability rather than resolved by picking one.
-   */
-  private async judgePair(
-    runId: string,
-    req: CreateRunRequest,
-    a: CandidateRow,
-    b: CandidateRow,
-    signal: AbortSignal,
-  ): Promise<PairOutcome> {
-    const pair = `${a.label}|${b.label}`;
-    // Every candidate's model id is scrubbed from every submission, not just
-    // its own — otherwise "unlike GPT-x, I…" still identifies the field.
-    const identifiers = req.candidates.map((c) => c.modelId);
-    const subA: Submission = { label: a.label, text: scrubIdentifiers(a.responseText ?? "", identifiers) };
-    const subB: Submission = { label: b.label, text: scrubIdentifiers(b.responseText ?? "", identifiers) };
-    const orders: Array<{ order: "AB" | "BA"; first: Submission; second: Submission }> = [
-      { order: "AB", first: subA, second: subB },
-      { order: "BA", first: subB, second: subA },
-    ];
-
-    const decisions: Array<string | null> = [];
-    for (const leg of orders) {
-      this.emit(runId, { type: "judge.progress", runId, pair, order: leg.order, attempt: 1, at: this.now() });
-      const result = await runJudge(
-        this.client,
-        req.judge,
-        {
-          taskPrompt: req.taskSpec.prompt,
-          ...(req.taskSpec.rubric ? { rubric: req.taskSpec.rubric } : {}),
-          first: leg.first,
-          second: leg.second,
-          forbidden: identifiers,
-        },
-        {
-          logger: this.log,
-          signal,
-          // Judging shares the scheduler so its calls obey the same caps, at a
-          // higher priority — a run stuck waiting to be judged holds worktrees.
-          dispatch: (modelId, fn) => this.scheduler.submit({ modelId, priority: 1, signal, run: fn }),
-        },
-      );
-
-      const decided = this.decisionOf(result.verdict, leg.first.label, leg.second.label);
-      decisions.push(decided);
-
-      const rawPath = await this.store.writeArtifact(
-        runId,
-        `verdicts/${pair.replace("|", "-")}-${leg.order}.json`,
-        `${JSON.stringify({ verdict: result.verdict, attempts: result.attempts, raw: result.rawResponses }, null, 2)}\n`,
-      );
-      this.store.insertVerdict({
-        id: randomUUID(),
-        runId,
-        judgeModel: req.judge.modelId,
-        pair,
-        presentationOrder: leg.order,
-        winnerLabel: decided,
-        confidence: result.verdict?.confidence ?? null,
-        reasons: JSON.stringify(result.verdict?.reasons ?? [result.failureReason ?? "unparseable"]),
-        parseAttempts: result.attempts,
-        rawPath,
-      });
-
-      if (!result.verdict) {
-        return {
-          pair,
-          winnerLabel: null,
-          failure: "unavailable",
-          detail: `${result.attempts}회 시도 후에도 판정 JSON을 얻지 못했다`,
-        };
-      }
-    }
-
-    const [first, second] = decisions;
-    if (first === null && second === null) {
-      return { pair, winnerLabel: null, failure: null, detail: "양쪽 순서 모두 tie" };
-    }
-    if (first !== second) {
-      return {
-        pair,
-        winnerLabel: null,
-        failure: "unstable",
-        detail: `AB=${first ?? "tie"} BA=${second ?? "tie"}`,
-      };
-    }
-    return { pair, winnerLabel: first ?? null, failure: null, detail: "AB/BA 일치" };
-  }
-
-  private decisionOf(
-    verdict: JudgeVerdict | null,
-    firstLabel: string,
-    secondLabel: string,
-  ): string | null {
-    if (!verdict || verdict.winner === null) return null;
-    return verdict.winner === 1 ? firstLabel : secondLabel;
   }
 
   /**

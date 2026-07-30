@@ -26,8 +26,9 @@ import {
   scoreCandidate,
   type BaselineMeasurement,
 } from "./gates.ts";
+import { decide } from "./decide.ts";
 import { GitRepo, worktreePathFor } from "./git.ts";
-import { runJudge, scrubIdentifiers, type Submission } from "./judge.ts";
+import { scrubIdentifiers } from "./judge.ts";
 import { ModelRegistry } from "./registry.ts";
 import { Sandbox } from "./sandbox.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -640,151 +641,73 @@ export class CodeRunManager {
     specs: CandidateSpec[],
   ): Promise<RunResult> {
     const identifiers = ctx.request.candidates.map((c) => c.modelId);
-    const wins = new Map<string, number>();
-    const unstable: string[] = [];
-    const unavailable: string[] = [];
+    const subjects = [];
+    for (const row of survivors) {
+      subjects.push({
+        id: row.id,
+        label: row.label,
+        text: await this.diffFor(runId, row.label, identifiers),
+      });
+    }
 
-    for (let i = 0; i < survivors.length; i += 1) {
-      for (let j = i + 1; j < survivors.length; j += 1) {
-        const a = survivors[i];
-        const b = survivors[j];
-        if (!a || !b) continue;
-        const pair = `${a.label}|${b.label}`;
-        const subA: Submission = { label: a.label, text: await this.diffFor(runId, a.label, identifiers) };
-        const subB: Submission = { label: b.label, text: await this.diffFor(runId, b.label, identifiers) };
-
-        const decisions: Array<string | null> = [];
-        let parseFailed = false;
-        for (const leg of [
-          { order: "AB" as const, first: subA, second: subB },
-          { order: "BA" as const, first: subB, second: subA },
-        ]) {
-          this.emit(runId, {
-            type: "judge.progress",
-            runId,
-            pair,
-            order: leg.order,
-            attempt: 1,
-            at: this.now(),
-          });
-          const verdict = await runJudge(
-            this.client,
-            ctx.request.judge,
-            {
-              taskPrompt: ctx.request.taskSpec.prompt,
-              ...(ctx.request.taskSpec.rubric ? { rubric: ctx.request.taskSpec.rubric } : {}),
-              first: leg.first,
-              second: leg.second,
-              forbidden: identifiers,
-            },
-            {
-              logger: this.log,
-              signal: ctx.controller.signal,
-              dispatch: (modelId, fn) =>
-                this.scheduler.submit({
-                  modelId,
-                  priority: 1,
-                  signal: ctx.controller.signal,
-                  run: fn,
-                }),
-            },
-          );
+    const decision = await decide(
+      this.client,
+      {
+        taskPrompt: ctx.request.taskSpec.prompt,
+        ...(ctx.request.taskSpec.rubric ? { rubric: ctx.request.taskSpec.rubric } : {}),
+        subjects,
+        forbidden: identifiers,
+        judge: ctx.request.judge,
+        kind: "model",
+      },
+      {
+        logger: this.log,
+        signal: ctx.controller.signal,
+        dispatch: (modelId, fn) =>
+          this.scheduler.submit({ modelId, priority: 1, signal: ctx.controller.signal, run: fn }),
+        onProgress: (pair, order) =>
+          this.emit(runId, { type: "judge.progress", runId, pair, order, attempt: 1, at: this.now() }),
+        onVerdict: (record) => {
           this.store.insertVerdict({
             id: randomUUID(),
             runId,
             judgeModel: ctx.request.judge.modelId,
-            pair,
-            presentationOrder: leg.order,
-            winnerLabel:
-              verdict.verdict === null || verdict.verdict.winner === null
-                ? null
-                : verdict.verdict.winner === 1
-                  ? leg.first.label
-                  : leg.second.label,
-            confidence: verdict.verdict?.confidence ?? null,
-            reasons: JSON.stringify(verdict.verdict?.reasons ?? [verdict.failureReason ?? "unparseable"]),
-            parseAttempts: verdict.attempts,
+            pair: record.pair,
+            presentationOrder: record.presentationOrder,
+            winnerLabel: record.winnerLabel,
+            confidence: record.confidence,
+            reasons: JSON.stringify(record.reasons),
+            parseAttempts: record.parseAttempts,
             rawPath: null,
           });
-          if (!verdict.verdict) {
-            parseFailed = true;
-            break;
-          }
-          decisions.push(
-            verdict.verdict.winner === null
-              ? null
-              : verdict.verdict.winner === 1
-                ? leg.first.label
-                : leg.second.label,
-          );
-        }
+        },
+      },
+    );
 
-        if (parseFailed) {
-          unavailable.push(`${pair}(판정 JSON 파싱 실패)`);
-          continue;
-        }
-        const [first, second] = decisions;
-        if (first !== second) {
-          unstable.push(`${pair}(AB=${first ?? "tie"} BA=${second ?? "tie"})`);
-          continue;
-        }
-        if (first !== null && first !== undefined) wins.set(first, (wins.get(first) ?? 0) + 1);
-      }
-    }
-
-    if (unavailable.length > 0) {
+    if (decision.winnerLabel === null) {
       return {
         outcome: "no_winner",
         winnerCandidateId: null,
         winnerLabel: null,
         confidence: null,
-        reason: `judge 응답을 판정으로 읽을 수 없었다: ${unavailable.join(", ")}`,
-        reviewReason: "judge_unavailable",
-        requiresHumanReview: true,
+        reason: decision.detail,
+        reviewReason: decision.reviewReason,
+        requiresHumanReview: decision.reviewReason !== null,
         evidenceAxes: CODE_EVIDENCE_AXES,
       };
     }
 
-    if (unstable.length > 0) {
-      return {
-        outcome: "no_winner",
-        winnerCandidateId: null,
-        winnerLabel: null,
-        confidence: null,
-        reason: `judge 불안정: ${unstable.join(", ")}`,
-        reviewReason: "unstable_judge",
-        requiresHumanReview: true,
-        evidenceAxes: CODE_EVIDENCE_AXES,
-      };
-    }
-
-    const ranked = [...wins.entries()].sort((x, y) => y[1] - x[1]);
-    const top = ranked[0];
-    const runnerUp = ranked[1];
-    if (!top || (runnerUp && runnerUp[1] === top[1])) {
-      return {
-        outcome: "no_winner",
-        winnerCandidateId: null,
-        winnerLabel: null,
-        confidence: null,
-        reason: "판정 결과가 동률이다",
-        reviewReason: "tie",
-        requiresHumanReview: true,
-        evidenceAxes: CODE_EVIDENCE_AXES,
-      };
-    }
-    const winner = survivors.find((s) => s.label === top[0]);
     return {
       outcome: "winner",
-      winnerCandidateId: winner?.id ?? null,
-      winnerLabel: top[0],
+      winnerCandidateId: decision.winnerId,
+      winnerLabel: decision.winnerLabel,
       confidence: "judge",
       reason: `blind pairwise 판정 (후보 ${specs.length}개 중 ${survivors.length}개 생존)`,
       // Every survivor cleared the hard gates and the judge agreed in both
       // presentation orders — the strongest evidence this system produces.
       // Saying "review required" here would say it everywhere.
-      reviewReason: null,
-      requiresHumanReview: false,
+      reviewReason: decision.reviewReason,
+      requiresHumanReview: decision.reviewReason !== null,
       evidenceAxes: CODE_EVIDENCE_AXES,
     };
   }
