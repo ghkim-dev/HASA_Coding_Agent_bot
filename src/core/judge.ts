@@ -36,7 +36,8 @@ export const JUDGE_SYSTEM_PROMPT = `너는 코드/응답 리뷰 평가자다. �
 
 출력 스키마:
 {"winner": 1 | 2 | null, "confidence": 0.0~1.0, "reasons": ["...", "..."]}
-winner는 제시 순서(1 또는 2)를 가리키며, 우열을 가릴 수 없으면 null이다.`;
+winner는 제시 순서(1 또는 2)를 가리키며, 우열을 가릴 수 없으면 null이다.
+reasons는 1~3개, 각 항목은 200자 이내로 간결하게 작성하라. 길게 쓰다 출력이 잘리면 판정이 무효가 된다.`;
 
 export const SUBMISSION_MARKERS = {
   open: (n: 1 | 2): string => `<<<SUBMISSION_${n}>>>`,
@@ -118,6 +119,39 @@ export function buildJudgeMessages(input: JudgeInput): ChatMessage[] {
   ];
 }
 
+/**
+ * Detects a response that stops mid-JSON.
+ *
+ * `finish_reason` is the authoritative signal, but gateways do not always set
+ * it, so unbalanced delimiters act as a second check — a verdict cut off at
+ * `"reasons": ["…` looks exactly like a model that cannot produce JSON, and
+ * they need opposite remedies.
+ */
+function looksTruncated(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  const open = trimmed.indexOf("{");
+  if (open === -1) return false;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = open; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === "{") depth += 1;
+    else if (!inString && ch === "}") depth -= 1;
+  }
+  return depth > 0 || inString;
+}
+
 function unfence(text: string): string {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   return (fenced?.[1] ?? text).trim();
@@ -187,6 +221,7 @@ export async function runJudge(
   const dispatch = opts.dispatch ?? (<T,>(_model: string, fn: () => Promise<T>) => fn());
   const rawResponses: string[] = [];
   const conversation: ChatMessage[] = [...messages];
+  let budget = config.maxOutputTokens;
 
   for (let attempt = 0; attempt <= config.maxParseRetries; attempt += 1) {
     const response = await dispatch(config.modelId, () =>
@@ -195,23 +230,41 @@ export async function runJudge(
           model: config.modelId,
           messages: conversation,
           temperature: config.temperature,
-          max_tokens: 1024,
+          max_tokens: budget,
         },
         opts.signal ? { signal: opts.signal } : {},
       ),
     );
     const raw = textOf(response.choices[0]?.message?.content);
+    const finish = response.choices[0]?.finish_reason ?? null;
     rawResponses.push(raw);
 
     const verdict = parseVerdict(raw);
     if (verdict) return { verdict, attempts: attempt + 1, rawResponses, failureReason: null };
+
+    // An empty or truncated answer is a budget problem, not a competence
+    // problem. Repeating the request with the same ceiling — at temperature 0,
+    // no less — would produce the identical broken output.
+    const starved = raw.trim().length === 0 || finish === "length" || looksTruncated(raw);
+    if (starved) {
+      budget = Math.min(budget * 2, 16_384);
+      log.warn("judge response was cut off; retrying with a larger budget", {
+        attempt: attempt + 1,
+        chars: raw.length,
+        finishReason: finish,
+        nextBudget: budget,
+      });
+      // The conversation is left untouched: the model was not wrong, it was
+      // interrupted, so it should answer the original question again.
+      continue;
+    }
 
     log.warn("judge returned unparseable output", { attempt: attempt + 1, chars: raw.length });
     conversation.push({ role: "assistant", content: raw });
     conversation.push({
       role: "user",
       content:
-        '이전 응답을 JSON으로 파싱할 수 없었다. 설명 없이 {"winner": 1 | 2 | null, "confidence": 0.0~1.0, "reasons": ["..."]} 형식의 JSON 객체 하나만 출력하라.',
+        '이전 응답을 JSON으로 파싱할 수 없었다. 설명 없이 {"winner": 1 | 2 | null, "confidence": 0.0~1.0, "reasons": ["..."]} 형식의 JSON 객체 하나만 출력하라. reasons는 각 200자 이내로 짧게 쓰라.',
     });
   }
 

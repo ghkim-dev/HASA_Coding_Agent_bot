@@ -58,6 +58,13 @@ export const JudgeConfigSchema = z.object({
   /** Parse retries before the verdict is abandoned as `no_winner`. */
   maxParseRetries: z.number().int().min(0).max(5).default(2),
   temperature: z.number().min(0).max(2).default(0),
+  /**
+   * Starting output budget. Doubled on a retry whose response came back empty
+   * or truncated: reasoning-style models spend tokens before emitting anything
+   * visible, and a verdict cut off mid-JSON is indistinguishable from a model
+   * that cannot produce JSON at all.
+   */
+  maxOutputTokens: z.number().int().min(256).max(32_768).default(2048),
 });
 export type JudgeConfig = z.infer<typeof JudgeConfigSchema>;
 
@@ -88,15 +95,39 @@ export const CandidateSpecSchema = z.object({
 });
 export type CandidateSpec = z.infer<typeof CandidateSpecSchema>;
 
+export const MAX_REASON_CHARS = 600;
+export const MAX_REASONS = 5;
+
+/**
+ * Verbosity is a formatting difference, not an invalid verdict.
+ *
+ * An earlier version rejected any reason longer than 400 characters, which
+ * threw away well-formed judgments whose prose happened to run long — and at
+ * temperature 0 the retry produced the identical text, so the run ended in
+ * `no_winner` despite the judge having been decisive and consistent. Length is
+ * now normalised, and only genuinely absurd payloads are refused.
+ */
+const ReasonSchema = z
+  .string()
+  .min(1)
+  .max(8_000)
+  .transform((s) => (s.length > MAX_REASON_CHARS ? `${s.slice(0, MAX_REASON_CHARS - 1)}…` : s));
+
+const ReasonListSchema = z
+  .array(ReasonSchema)
+  .min(1)
+  .max(50)
+  .transform((list) => list.slice(0, MAX_REASONS));
+
 export const JudgeVerdictSchema = z.object({
   /** 1 or 2 refer to presentation slots, never to candidates. */
   winner: z.union([z.literal(1), z.literal(2), z.null()]),
   confidence: z.number().min(0).max(1),
-  reasons: z.array(z.string().max(400)).min(1).max(5),
+  reasons: ReasonListSchema,
   concerns: z
     .object({
-      submission1: z.array(z.string().max(400)).optional(),
-      submission2: z.array(z.string().max(400)).optional(),
+      submission1: ReasonListSchema.optional(),
+      submission2: ReasonListSchema.optional(),
     })
     .optional(),
 });

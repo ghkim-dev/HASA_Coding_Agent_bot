@@ -1,6 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import type { JudgeConfig } from "../protocol/index.ts";
+import { MAX_REASONS, MAX_REASON_CHARS, type JudgeConfig } from "../protocol/index.ts";
 import { HasaClient } from "../hasa-client/client.ts";
 import { nullLogger } from "../hasa-client/logger.ts";
 import { clearSecrets } from "../hasa-client/redact.ts";
@@ -24,6 +24,8 @@ before(async () => {
       { id: "judge/garbage", judgePrefers: "ALPHA", judgeGarbageTimes: 1 },
       { id: "judge/hopeless", judgePrefers: "ALPHA", judgeGarbageTimes: 99 },
       { id: "judge/biased", judgeAlwaysPicksSlot: 1 },
+      // Needs more room than the default budget before it can finish its JSON.
+      { id: "judge/starved", judgePrefers: "ALPHA", judgeNeedsTokens: 1500 },
     ],
   });
 });
@@ -43,10 +45,11 @@ function client(): HasaClient {
   });
 }
 
-const config = (modelId: string, retries = 2): JudgeConfig => ({
+const config = (modelId: string, retries = 2, maxOutputTokens = 2048): JudgeConfig => ({
   modelId,
   maxParseRetries: retries,
   temperature: 0,
+  maxOutputTokens,
 });
 
 describe("buildJudgeMessages", () => {
@@ -132,6 +135,28 @@ describe("parseVerdict", () => {
     assert.equal(parseVerdict('{"winner":1,"confidence":0.9,"reasons":[]}'), null);
   });
 
+  test("a long reason is truncated, not thrown away", () => {
+    // Regression from a live run: a 450-character reason failed schema
+    // validation, the temperature-0 retry returned the identical text, and a
+    // decisive verdict became no_winner.
+    const long = "x".repeat(1500);
+    const verdict = parseVerdict(JSON.stringify({ winner: 2, confidence: 0.95, reasons: [long] }));
+    assert.equal(verdict?.winner, 2);
+    assert.ok((verdict?.reasons[0] ?? "").length <= MAX_REASON_CHARS);
+    assert.ok((verdict?.reasons[0] ?? "").endsWith("…"));
+  });
+
+  test("more reasons than we display are trimmed rather than rejected", () => {
+    const many = Array.from({ length: 12 }, (_, i) => `reason ${i}`);
+    const verdict = parseVerdict(JSON.stringify({ winner: 1, confidence: 0.5, reasons: many }));
+    assert.equal(verdict?.reasons.length, MAX_REASONS);
+  });
+
+  test("an absurd payload is still refused", () => {
+    const absurd = "x".repeat(20_000);
+    assert.equal(parseVerdict(JSON.stringify({ winner: 1, confidence: 0.5, reasons: [absurd] })), null);
+  });
+
   test("never guesses a winner from prose", () => {
     // A scraped verdict looks as authoritative as a parsed one downstream,
     // so refusing to guess is the whole point.
@@ -167,6 +192,20 @@ describe("runJudge", () => {
     assert.equal(result.attempts, 2);
     assert.equal(result.verdict?.winner, 1);
     assert.equal(result.rawResponses.length, 2);
+  });
+
+  test("a truncated answer is retried with a larger budget, not the same one", async () => {
+    // Live-run regression: a judge cut off mid-JSON was retried at the identical
+    // ceiling and, at temperature 0, produced the identical broken output —
+    // turning a decisive verdict into no_winner.
+    const result = await runJudge(client(), config("judge/starved", 2, 1024), input);
+    assert.equal(result.verdict?.winner, 1);
+    assert.equal(result.attempts, 2, "the second attempt should have twice the budget");
+  });
+
+  test("a budget that never becomes sufficient still ends in no_winner", async () => {
+    const result = await runJudge(client(), config("judge/starved", 0, 256), input);
+    assert.equal(result.verdict, null);
   });
 
   test("gives up after the retry budget instead of guessing", async () => {

@@ -56,6 +56,12 @@ export interface MockModelProfile {
   /** Emits unparseable output this many times before answering properly. */
   judgeGarbageTimes?: number;
   /**
+   * Below this max_tokens the judge answer comes back truncated (or empty),
+   * reproducing a reasoning-style model that spends its budget before emitting
+   * anything parseable.
+   */
+  judgeNeedsTokens?: number;
+  /**
    * Scripted agent behaviour: on the Nth turn, emit the Nth tool call. Lets the
    * real tool-calling runner be driven deterministically without a live model.
    */
@@ -155,6 +161,14 @@ function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, coun
   // retry turns, where the last user message is the corrective instruction.
   const isJudgeCall = conversation.includes("<<<SUBMISSION_1>>>");
   if (isJudgeCall) {
+    if (
+      typeof profile.judgeNeedsTokens === "number" &&
+      typeof body.max_tokens === "number" &&
+      body.max_tokens < profile.judgeNeedsTokens
+    ) {
+      // Cut off mid-JSON, exactly as a real gateway does when the ceiling hits.
+      return { content: '{"winner": 1, "confidence": 0.9, "reasons": ["cut off her', toolCalls: [], reasoning: null };
+    }
     const seen = judgeGarbageSeen.get(profile.id) ?? 0;
     if (seen < (profile.judgeGarbageTimes ?? 0)) {
       judgeGarbageSeen.set(profile.id, seen + 1);

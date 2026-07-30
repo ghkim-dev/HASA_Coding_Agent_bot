@@ -4,7 +4,12 @@ import type { CandidateInput, JudgeConfig, Sampling, TaskSpec } from "../protoco
 import { FairnessError, assertFairness, labelFor, resolveCandidateSpecs, shuffled } from "./fairness.ts";
 
 const sampling: Sampling = { temperature: 0.2, topP: 1, maxOutputTokens: 2048 };
-const judge: JudgeConfig = { modelId: "judge/model", maxParseRetries: 2, temperature: 0 };
+const judge: JudgeConfig = {
+  modelId: "judge/model",
+  maxParseRetries: 2,
+  temperature: 0,
+  maxOutputTokens: 2048,
+};
 const taskSpec: TaskSpec = { prompt: "compare these", systemPromptVersion: "response-compare-v1" };
 
 function candidates(...ids: string[]): CandidateInput[] {
