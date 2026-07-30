@@ -89,7 +89,10 @@ export interface CandidateView {
   gates?: GateView[];
 }
 
-export type ReviewReason = "never_compared" | "unstable_judge" | "tie" | "judge_only";
+export type ReviewReason = "never_compared" | "unstable_judge" | "tie" | "judge_unavailable";
+
+/** What could corroborate the verdict. A property of the mode, not of the run. */
+export type EvidenceAxis = "objective" | "judge";
 
 export interface RunResultView {
   outcome: "winner" | "no_winner";
@@ -100,6 +103,7 @@ export interface RunResultView {
   /** Null when the verdict is self-supporting. Applying still needs approval. */
   reviewReason: ReviewReason | null;
   requiresHumanReview: boolean;
+  evidenceAxes?: EvidenceAxis[];
 }
 
 export interface VerdictView {

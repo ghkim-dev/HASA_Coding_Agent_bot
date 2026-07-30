@@ -36,6 +36,12 @@ import { ToolCallingRunner } from "../runtime/agentRunner.ts";
 import { PatchGenerationRunner } from "../runtime/patchRunner.ts";
 import type { AgentRunner } from "../runtime/types.ts";
 
+/**
+ * Code mode measures the candidates before it asks anyone's opinion, so a
+ * verdict here can be corroborated by something that is not a language model.
+ */
+const CODE_EVIDENCE_AXES: RunResult["evidenceAxes"] = ["objective", "judge"];
+
 export interface CodeRunManagerOptions {
   client: HasaClient;
   scheduler: Scheduler;
@@ -551,6 +557,7 @@ export class CodeRunManager {
           .join(", ")}`,
         reviewReason: null,
         requiresHumanReview: false,
+        evidenceAxes: CODE_EVIDENCE_AXES,
       };
     }
 
@@ -599,6 +606,7 @@ export class CodeRunManager {
         reason: "게이트를 통과한 후보가 1개뿐이다 — 비교가 이루어지지 않았다",
         reviewReason: "never_compared",
         requiresHumanReview: true,
+        evidenceAxes: CODE_EVIDENCE_AXES,
       };
     }
 
@@ -617,6 +625,7 @@ export class CodeRunManager {
         // it just moves blame. Applying still requires explicit approval.
         reviewReason: null,
         requiresHumanReview: false,
+        evidenceAxes: CODE_EVIDENCE_AXES,
       };
     }
 
@@ -633,6 +642,7 @@ export class CodeRunManager {
     const identifiers = ctx.request.candidates.map((c) => c.modelId);
     const wins = new Map<string, number>();
     const unstable: string[] = [];
+    const unavailable: string[] = [];
 
     for (let i = 0; i < survivors.length; i += 1) {
       for (let j = i + 1; j < survivors.length; j += 1) {
@@ -710,7 +720,7 @@ export class CodeRunManager {
         }
 
         if (parseFailed) {
-          unstable.push(`${pair}(판정 파싱 실패)`);
+          unavailable.push(`${pair}(판정 JSON 파싱 실패)`);
           continue;
         }
         const [first, second] = decisions;
@@ -722,6 +732,19 @@ export class CodeRunManager {
       }
     }
 
+    if (unavailable.length > 0) {
+      return {
+        outcome: "no_winner",
+        winnerCandidateId: null,
+        winnerLabel: null,
+        confidence: null,
+        reason: `judge 응답을 판정으로 읽을 수 없었다: ${unavailable.join(", ")}`,
+        reviewReason: "judge_unavailable",
+        requiresHumanReview: true,
+        evidenceAxes: CODE_EVIDENCE_AXES,
+      };
+    }
+
     if (unstable.length > 0) {
       return {
         outcome: "no_winner",
@@ -731,6 +754,7 @@ export class CodeRunManager {
         reason: `judge 불안정: ${unstable.join(", ")}`,
         reviewReason: "unstable_judge",
         requiresHumanReview: true,
+        evidenceAxes: CODE_EVIDENCE_AXES,
       };
     }
 
@@ -746,6 +770,7 @@ export class CodeRunManager {
         reason: "판정 결과가 동률이다",
         reviewReason: "tie",
         requiresHumanReview: true,
+        evidenceAxes: CODE_EVIDENCE_AXES,
       };
     }
     const winner = survivors.find((s) => s.label === top[0]);
@@ -760,6 +785,7 @@ export class CodeRunManager {
       // Saying "review required" here would say it everywhere.
       reviewReason: null,
       requiresHumanReview: false,
+      evidenceAxes: CODE_EVIDENCE_AXES,
     };
   }
 

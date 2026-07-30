@@ -30,6 +30,8 @@ before(async () => {
       { id: "cand/self-naming", cannedReply: "As cand/self-naming I say ALPHA" },
       { id: "judge/content", judgePrefers: "ALPHA" },
       { id: "judge/biased", judgeAlwaysPicksSlot: 1 },
+      // Never emits parseable JSON, however many times it is asked.
+      { id: "judge/prose", judgePrefers: "ALPHA", judgeGarbageTimes: 99 },
     ],
   });
 });
@@ -108,14 +110,36 @@ describe("RunManager — response compare", () => {
     assert.equal(biased.result.reviewReason, "unstable_judge");
     assert.equal(sole.result.reviewReason, "never_compared");
     assert.equal(tie.result.reviewReason, "tie");
-    // Response mode has no objective gate, so even a stable verdict rests on
-    // the judge alone — that is a property of the mode, stated as such.
-    assert.equal(decided.result.reviewReason, "judge_only");
+    assert.equal(decided.result.reviewReason, null);
 
     const distinct = new Set(
       [biased, sole, tie, decided].map((r) => r.result.reviewReason),
     );
     assert.equal(distinct.size, 4, "every outcome must map to a different reason");
+  });
+
+  test("response mode can reach a verdict it does not hedge on", async () => {
+    // The property this pins is the one the mode used to fail: before
+    // `judge_only` was removed, *every* decided response run asked for human
+    // review, so the request carried no information about this run. A mode in
+    // which the flag is structurally always on has no way to say "decided".
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/content");
+    assert.equal(result.outcome, "winner");
+    assert.equal(result.reviewReason, null);
+    assert.equal(result.requiresHumanReview, false);
+    // The mode's real limitation is still reported — as a fact about what
+    // evidence existed, not as doubt about this particular verdict.
+    assert.deepEqual(result.evidenceAxes, ["judge"]);
+  });
+
+  test("a judge that never returns parseable JSON is broken, not undecided", async () => {
+    // Different remedies: a bigger budget or another judge model fixes this,
+    // whereas more evidence fixes an inconsistent judge. Folding both into
+    // `unstable_judge` told the operator to do the wrong thing half the time.
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/prose");
+    assert.equal(result.outcome, "no_winner");
+    assert.equal(result.reviewReason, "judge_unavailable");
+    assert.equal(result.requiresHumanReview, true);
   });
 
   test("an all-failed run needs no review — there is nothing ambiguous about it", async () => {

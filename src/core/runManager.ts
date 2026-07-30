@@ -35,7 +35,16 @@ interface RunContext {
 interface PairOutcome {
   pair: string;
   winnerLabel: string | null;
-  stable: boolean;
+  /**
+   * `null` when the pair was decided (or tied) on the judge's own terms.
+   *
+   * `unavailable` and `unstable` are kept apart because they call for opposite
+   * remedies: a judge that never returned parseable JSON has told us nothing
+   * about the candidates and needs a bigger budget or a different model, while
+   * a judge that answered twice and contradicted itself has measured its own
+   * unreliability and needs more evidence, not more retries.
+   */
+  failure: "unavailable" | "unstable" | null;
   detail: string;
 }
 
@@ -284,6 +293,11 @@ export class RunManager {
       (r) => r.status === "completed" && (r.responseText ?? "").trim().length > 0,
     );
 
+    // Response mode has no build, no test suite and no diff to measure, so the
+    // judge is the only axis available. That is a fact about the mode and is
+    // reported as such rather than as a per-run doubt.
+    const evidenceAxes: RunResult["evidenceAxes"] = ["judge"];
+
     if (survivors.length === 0) {
       return {
         outcome: "no_winner",
@@ -293,6 +307,7 @@ export class RunManager {
         reason: `모든 후보가 기준 미달: ${rows.map((r) => `${r.label}=${r.status}${r.errorCode ? `(${r.errorCode})` : ""}`).join(", ")}`,
         reviewReason: null,
         requiresHumanReview: false,
+        evidenceAxes,
       };
     }
     if (survivors.length === 1) {
@@ -305,6 +320,7 @@ export class RunManager {
         reason: "생존 후보가 1개뿐이다 — 비교가 이루어지지 않았다",
         reviewReason: "never_compared",
         requiresHumanReview: true,
+        evidenceAxes,
       };
     }
 
@@ -322,7 +338,23 @@ export class RunManager {
     for (const outcome of outcomes) {
       if (outcome.winnerLabel) wins.set(outcome.winnerLabel, (wins.get(outcome.winnerLabel) ?? 0) + 1);
     }
-    const unstable = outcomes.filter((o) => !o.stable);
+    // A judge that never answered and a judge that answered inconsistently are
+    // reported separately; the first is a broken instrument, the second is a
+    // measurement of ambiguity.
+    const unavailable = outcomes.filter((o) => o.failure === "unavailable");
+    if (unavailable.length > 0) {
+      return {
+        outcome: "no_winner",
+        winnerCandidateId: null,
+        winnerLabel: null,
+        confidence: null,
+        reason: `judge 응답을 판정으로 읽을 수 없었다: ${unavailable.map((o) => `${o.pair}(${o.detail})`).join(", ")}`,
+        reviewReason: "judge_unavailable",
+        requiresHumanReview: true,
+        evidenceAxes,
+      };
+    }
+    const unstable = outcomes.filter((o) => o.failure === "unstable");
     if (unstable.length > 0) {
       return {
         outcome: "no_winner",
@@ -332,6 +364,7 @@ export class RunManager {
         reason: `judge 불안정: ${unstable.map((o) => `${o.pair}(${o.detail})`).join(", ")}`,
         reviewReason: "unstable_judge",
         requiresHumanReview: true,
+        evidenceAxes,
       };
     }
 
@@ -347,6 +380,7 @@ export class RunManager {
         reason: "판정 결과가 동률이다",
         reviewReason: "tie",
         requiresHumanReview: true,
+        evidenceAxes,
       };
     }
 
@@ -357,12 +391,14 @@ export class RunManager {
       winnerLabel: top[0],
       confidence: "judge",
       reason: `blind pairwise 판정: ${outcomes.map((o) => `${o.pair}→${o.winnerLabel ?? "tie"}`).join(", ")}`,
-      // Response mode has no objective gate to corroborate the judge, so the
-      // verdict rests entirely on one model's reading of prose. That is a real
-      // limitation of the mode, not a hedge — and it is the same for 2
-      // candidates as for 5, which the old `specs.length > 2` rule got wrong.
-      reviewReason: "judge_only",
-      requiresHumanReview: true,
+      // The judge picked the same submission with the order flipped, which is
+      // the strongest evidence this mode can produce. Reporting doubt here
+      // reported it in every decided response run, and a field that never
+      // varies is not a signal — `evidenceAxes` carries the mode's limitation
+      // instead, where it belongs.
+      reviewReason: null,
+      requiresHumanReview: false,
+      evidenceAxes,
     };
   }
 
@@ -433,18 +469,28 @@ export class RunManager {
       });
 
       if (!result.verdict) {
-        return { pair, winnerLabel: null, stable: false, detail: "judge 출력 파싱 실패 → no_winner" };
+        return {
+          pair,
+          winnerLabel: null,
+          failure: "unavailable",
+          detail: `${result.attempts}회 시도 후에도 판정 JSON을 얻지 못했다`,
+        };
       }
     }
 
     const [first, second] = decisions;
     if (first === null && second === null) {
-      return { pair, winnerLabel: null, stable: true, detail: "양쪽 순서 모두 tie" };
+      return { pair, winnerLabel: null, failure: null, detail: "양쪽 순서 모두 tie" };
     }
     if (first !== second) {
-      return { pair, winnerLabel: null, stable: false, detail: `AB=${first ?? "tie"} BA=${second ?? "tie"}` };
+      return {
+        pair,
+        winnerLabel: null,
+        failure: "unstable",
+        detail: `AB=${first ?? "tie"} BA=${second ?? "tie"}`,
+      };
     }
-    return { pair, winnerLabel: first ?? null, stable: true, detail: "AB/BA 일치" };
+    return { pair, winnerLabel: first ?? null, failure: null, detail: "AB/BA 일치" };
   }
 
   private decisionOf(

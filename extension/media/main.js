@@ -571,9 +571,19 @@
             never_compared: "게이트를 통과한 후보가 하나뿐이라 비교가 이루어지지 않았습니다.",
             unstable_judge: "순서를 뒤집자 judge가 판정을 바꿨습니다. 이 판정은 근거로 쓸 수 없습니다.",
             tie: "후보를 가를 근거가 없습니다.",
-            judge_only: "객관 게이트 없이 judge 판단에만 의존한 결과입니다.",
+            judge_unavailable: "judge가 판정 JSON을 내놓지 못했습니다. 판정이 갈린 것이 아니라 판정 자체가 없습니다.",
           }[result.reviewReason] || result.reviewReason,
         ]),
+
+      // Separate from the note above: this says what evidence the mode had,
+      // which is the same for every run of that mode. It is context for reading
+      // the verdict, not a reservation about this particular one.
+      Array.isArray(result.evidenceAxes) &&
+        !result.evidenceAxes.includes("objective") &&
+        el("p", {
+          class: "muted",
+          text: "이 모드에는 객관 게이트가 없습니다 — 판정 근거는 judge의 읽기뿐입니다.",
+        }),
 
       el("p", { class: "muted", text: "적용 여부는 항상 사용자가 결정합니다. Apply 전까지 workspace는 변경되지 않습니다." }),
 

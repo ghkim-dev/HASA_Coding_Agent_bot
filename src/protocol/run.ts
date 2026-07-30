@@ -152,10 +152,29 @@ export const ReviewReasonSchema = z.enum([
   "unstable_judge",
   /** Nothing separated the candidates. */
   "tie",
-  /** The judge decided, but on prose alone — no objective gate corroborated it. */
-  "judge_only",
+  /**
+   * The judge never produced a parseable verdict, so there is no judgment to be
+   * unstable. Kept apart from `unstable_judge` because the remedies are
+   * opposites: a broken judge is fixed with a larger budget or another model, a
+   * disagreeing one only with more evidence.
+   */
+  "judge_unavailable",
 ]);
 export type ReviewReason = z.infer<typeof ReviewReasonSchema>;
+
+/**
+ * Which kinds of evidence the run had available at all.
+ *
+ * This is a property of the mode, not of the verdict: response mode has no
+ * build to run, so `["judge"]` is true of every response run ever made. It
+ * used to be reported per-run as `reviewReason: "judge_only"`, which meant the
+ * field was non-null in every decided response run and therefore carried no
+ * information — the exact defect that had already been removed from code mode.
+ * Constant facts belong in metadata; `reviewReason` answers a question whose
+ * answer varies.
+ */
+export const EvidenceAxisSchema = z.enum(["objective", "judge"]);
+export type EvidenceAxis = z.infer<typeof EvidenceAxisSchema>;
 
 export const RunResultSchema = z.object({
   outcome: RunOutcomeSchema,
@@ -167,6 +186,8 @@ export const RunResultSchema = z.object({
   reviewReason: ReviewReasonSchema.nullable().default(null),
   /** Derived: `reviewReason !== null`. Kept for display convenience. */
   requiresHumanReview: z.boolean(),
+  /** What could corroborate this verdict. See EvidenceAxisSchema. */
+  evidenceAxes: z.array(EvidenceAxisSchema).default(["judge"]),
 });
 export type RunResult = z.infer<typeof RunResultSchema>;
 
