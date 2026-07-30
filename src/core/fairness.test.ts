@@ -5,7 +5,7 @@ import { FairnessError, assertFairness, labelFor, resolveCandidateSpecs, shuffle
 
 const sampling: Sampling = { temperature: 0.2, topP: 1, maxOutputTokens: 2048 };
 const judge: JudgeConfig = JudgeConfigSchema.parse({ modelId: "judge/model" });
-const taskSpec: TaskSpec = { prompt: "compare these", systemPromptVersion: "response-compare-v1" };
+const taskSpec: TaskSpec = { prompt: "compare these", systemPromptVersion: "response-compare-v1", checks: [] };
 
 function candidates(...ids: string[]): CandidateInput[] {
   return ids.map((modelId) => ({ modelId }));

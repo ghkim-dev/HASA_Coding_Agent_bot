@@ -13,6 +13,7 @@ import { redactString } from "../hasa-client/redact.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
+import { passedCount, runChecks } from "./checks.ts";
 import { decide } from "./decide.ts";
 import { assertFairness, resolveCandidateSpecs, shuffled } from "./fairness.ts";
 import { scrubIdentifiers } from "./judge.ts";
@@ -297,10 +298,12 @@ export class RunManager {
       (r) => r.status === "completed" && (r.responseText ?? "").trim().length > 0,
     );
 
-    // Response mode has no build, no test suite and no diff to measure, so the
-    // judge is the only axis available. That is a fact about the mode and is
-    // reported as such rather than as a per-run doubt.
-    const evidenceAxes: RunResult["evidenceAxes"] = ["judge"];
+    // Response mode has no build and no diff, so without declared checks the
+    // judge is the only axis there is. That is a fact about how the run was
+    // configured, reported as such rather than as a doubt about its verdict.
+    const checks = req.taskSpec.checks;
+    const evidenceAxes: RunResult["evidenceAxes"] =
+      checks.length > 0 ? ["objective", "judge"] : ["judge"];
 
     if (survivors.length === 0) {
       return {
@@ -330,6 +333,34 @@ export class RunManager {
       };
     }
 
+    // S0 runs before any judge is asked, on every survivor, from the checks
+    // declared with the task. Identical for all candidates by construction:
+    // they come from the run, not from the candidate.
+    const objectiveScores = new Map<string, number | null>();
+    for (const row of survivors) {
+      if (checks.length === 0) {
+        objectiveScores.set(row.id, null);
+        continue;
+      }
+      const results = runChecks(row.responseText ?? "", checks);
+      objectiveScores.set(row.id, passedCount(results));
+      this.store.updateCandidate(row.id, {
+        score: passedCount(results),
+        artifacts: JSON.stringify({ checks: results }),
+      });
+      for (const result of results) {
+        this.emit(runId, {
+          type: "gate.result",
+          runId,
+          candidateId: row.id,
+          gate: `check:${result.index}:${result.kind}`,
+          passed: result.passed,
+          durationMs: 0,
+          at: this.now(),
+        });
+      }
+    }
+
     // Every candidate's model id is scrubbed from every submission, not just
     // its own — otherwise "unlike GPT-x, I…" still identifies the field.
     const identifiers = req.candidates.map((c) => c.modelId);
@@ -342,6 +373,7 @@ export class RunManager {
           id: row.id,
           label: row.label,
           text: scrubIdentifiers(row.responseText ?? "", identifiers),
+          objectiveScore: objectiveScores.get(row.id) ?? null,
         })),
         forbidden: identifiers,
         judge: req.judge,
@@ -404,7 +436,10 @@ export class RunManager {
       outcome: "winner",
       winnerCandidateId: decision.winnerId,
       winnerLabel: decision.winnerLabel,
-      confidence: "judge",
+      // S0 settles a pair by counting, not by reading, and saying "judge" of a
+      // verdict no judge produced would misdescribe the strongest case the run
+      // has.
+      confidence: decision.decidedAt === "S0" ? "objective" : "judge",
       reason: decision.detail,
       // The judge picked the same submission with the order flipped, which is
       // the strongest evidence this mode can produce. Reporting doubt here
@@ -510,6 +545,8 @@ export class RunManager {
       latencyMs: row.latencyMs,
       tokensIn: row.tokensIn,
       tokensOut: row.tokensOut,
+      score: row.score,
+      checks: row.artifacts === null ? [] : (JSON.parse(row.artifacts) as { checks?: unknown }).checks ?? [],
       responseText: row.responseText === null ? null : redactString(row.responseText),
     }));
   }

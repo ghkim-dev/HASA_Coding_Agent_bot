@@ -163,6 +163,8 @@ export class CodeRunManager {
     const specs = resolveCandidateSpecs(runId, req.candidates, req.sampling, {
       prompt: req.taskSpec.prompt,
       systemPromptVersion: req.taskSpec.systemPromptVersion,
+      // Code mode's objective axis is the gates, not text checks.
+      checks: [],
     });
     const createdAt = this.now();
 

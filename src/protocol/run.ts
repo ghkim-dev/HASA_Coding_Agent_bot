@@ -38,12 +38,52 @@ export const SamplingSchema = z.object({
 });
 export type Sampling = z.infer<typeof SamplingSchema>;
 
+/**
+ * A machine-checkable assertion about a response.
+ *
+ * Response mode had no evidence but the judge's reading, which is why every
+ * decided run there once carried a request for human review: with one axis and
+ * no way to corroborate it, "the judge said so" was the whole case. These are
+ * the second axis. They are deliberately dull — no model runs them, they take
+ * no network and no filesystem, and they answer questions with only one right
+ * answer.
+ *
+ * They are declared before any candidate runs and applied identically to all of
+ * them, or they would be a fairness hole rather than a fairness aid.
+ */
+export const CheckSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("must_include"), items: z.array(z.string().min(1)).min(1).max(50) }),
+  z.object({ kind: z.literal("must_not"), items: z.array(z.string().min(1)).min(1).max(50) }),
+  /** The whole response, or its single fenced block, must parse as JSON. */
+  z.object({ kind: z.literal("json_parses") }),
+  z.object({ kind: z.literal("max_words"), limit: z.number().int().positive() }),
+  z.object({ kind: z.literal("min_words"), limit: z.number().int().positive() }),
+  z.object({
+    kind: z.literal("regex"),
+    pattern: z.string().min(1).max(500),
+    flags: z.string().max(8).default("i"),
+    /** Whether a match is the passing outcome. */
+    expect: z.boolean().default(true),
+  }),
+]);
+export type Check = z.infer<typeof CheckSchema>;
+
+export const CheckResultSchema = z.object({
+  index: z.number().int().nonnegative(),
+  kind: z.string(),
+  passed: z.boolean(),
+  detail: z.string().max(1_000),
+});
+export type CheckResult = z.infer<typeof CheckResultSchema>;
+
 export const TaskSpecSchema = z.object({
   prompt: z.string().min(1).max(200_000),
   systemPrompt: z.string().max(50_000).optional(),
   systemPromptVersion: z.string().default("response-compare-v1"),
   /** Free-form note shown to the judge as task context. Must not identify candidates. */
   rubric: z.string().max(4_000).optional(),
+  /** Objective assertions. Empty means the run has only the judge to go on. */
+  checks: z.array(CheckSchema).max(20).default([]),
 });
 export type TaskSpec = z.infer<typeof TaskSpecSchema>;
 

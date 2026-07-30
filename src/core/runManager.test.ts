@@ -212,6 +212,52 @@ describe("RunManager — response compare", () => {
     assert.equal(result.requiresHumanReview, true);
   });
 
+  test("declared checks settle a pair before any judge is asked", async () => {
+    // The rung that makes response mode's evidenceAxes honest. cand-a says
+    // ALPHA and cand-b says BETA, so a must_include check separates them
+    // without an opinion being involved — and the biased judge that would
+    // otherwise force `undecidable` is never consulted.
+    const runs = manager();
+    const runId = runs.create(
+      CreateRunRequestSchema.parse({
+        mode: "response",
+        taskSpec: { prompt: "Summarise the tradeoffs.", checks: [{ kind: "must_include", items: ["ALPHA"] }] },
+        candidates: [{ modelId: "cand/alpha" }, { modelId: "cand/beta" }],
+        judge: { modelId: "judge/biased" },
+      }),
+    );
+    await runs.waitFor(runId);
+    const result = JSON.parse(store.getRun(runId)?.result ?? "{}") as RunResult;
+
+    assert.equal(result.outcome, "winner");
+    assert.equal(result.winnerLabel, "cand-a");
+    assert.equal(result.decidedAt, "S0");
+    assert.equal(result.confidence, "objective");
+    assert.equal(result.judgeCallsSpent, 0, "a settled pair should not reach the judge at all");
+    assert.equal(result.reviewReason, null);
+    assert.deepEqual(result.evidenceAxes, ["objective", "judge"]);
+  });
+
+  test("checks that do not separate the candidates leave the ladder to decide", async () => {
+    // The counterpart property: S0 must not manufacture a winner out of a
+    // check both candidates pass. It contributes only when it discriminates.
+    const runs = manager();
+    const runId = runs.create(
+      CreateRunRequestSchema.parse({
+        mode: "response",
+        taskSpec: { prompt: "Summarise the tradeoffs.", checks: [{ kind: "min_words", limit: 1 }] },
+        candidates: [{ modelId: "cand/alpha" }, { modelId: "cand/beta" }],
+        judge: { modelId: "judge/content" },
+      }),
+    );
+    await runs.waitFor(runId);
+    const result = JSON.parse(store.getRun(runId)?.result ?? "{}") as RunResult;
+
+    assert.equal(result.decidedAt, "S1", "an undiscriminating check must not settle anything");
+    assert.equal(result.winnerLabel, "cand-a");
+    assert.ok(result.judgeCallsSpent > 0);
+  });
+
   test("an all-failed run needs no review — there is nothing ambiguous about it", async () => {
     const { result } = await runToCompletion(["cand/empty", "cand/forbidden"], "judge/content");
     assert.equal(result.reviewReason, null);

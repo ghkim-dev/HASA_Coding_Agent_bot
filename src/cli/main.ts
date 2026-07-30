@@ -1,9 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
+  CheckSchema,
   JudgeConfigSchema,
   type ArenaEvent,
   type CandidateArtifacts,
+  type Check,
   type JudgeConfig,
   type RunResult,
 } from "../protocol/index.ts";
@@ -46,6 +48,9 @@ Options
   --test "<cmd>"     acceptance 명령. 여러 번 지정 가능
   --accept           바로 앞의 --test 를 acceptance 로 표시 (기본은 regression)
   --scope <a,b>      쓰기 허용 경로
+  --require <a,b>    응답이 반드시 포함해야 할 문구 (객관 검사, 사다리 S0)
+  --forbid <a,b>     응답에 있으면 안 되는 문구
+  --max-words <n>    응답 길이 상한 (단어)
   --ensemble <a,b>   판정이 갈렸을 때 의견을 물을 추가 judge 모델 (사다리 S3)
   --max-judge-calls  judge 호출 상한 (기본 60). 소진되면 budget_exhausted
   --json             결과를 JSON 으로 출력
@@ -66,6 +71,7 @@ interface Args {
   runtime: "agent" | "patch";
   commands: Array<{ cmd: string; args: string[]; kind: "regression" | "acceptance" }>;
   scope: string[];
+  checks: Check[];
   ensemble: string[];
   maxJudgeCalls: number;
   json: boolean;
@@ -93,6 +99,7 @@ function parseArgs(argv: string[]): Args {
     runtime: "agent",
     commands: [],
     scope: [],
+    checks: [],
     ensemble: [],
     maxJudgeCalls: 60,
     json: false,
@@ -144,6 +151,19 @@ function parseArgs(argv: string[]): Args {
       }
       case "--scope":
         args.scope = next().split(",").map((s) => s.trim()).filter(Boolean);
+        break;
+      case "--require":
+        args.checks.push(
+          CheckSchema.parse({ kind: "must_include", items: next().split(",").map((s) => s.trim()).filter(Boolean) }),
+        );
+        break;
+      case "--forbid":
+        args.checks.push(
+          CheckSchema.parse({ kind: "must_not", items: next().split(",").map((s) => s.trim()).filter(Boolean) }),
+        );
+        break;
+      case "--max-words":
+        args.checks.push(CheckSchema.parse({ kind: "max_words", limit: Number.parseInt(next(), 10) }));
         break;
       case "--ensemble":
         args.ensemble = next().split(",").map((s) => s.trim()).filter(Boolean);
@@ -292,7 +312,7 @@ export async function main(argv: string[]): Promise<number> {
     const runs = new RunManager({ client, scheduler, store, hub, logger: log });
     runId = runs.create({
       mode: "response",
-      taskSpec: { prompt: args.prompt, systemPromptVersion: "response-compare-v1" },
+      taskSpec: { prompt: args.prompt, systemPromptVersion: "response-compare-v1", checks: args.checks },
       candidates: args.models.map((modelId) => ({ modelId })),
       sampling: { temperature: 0.2, topP: 1, maxOutputTokens: 2048 },
       judge: judgeConfig(args),
