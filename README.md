@@ -19,6 +19,32 @@
 - **Node 24 이상** — 빌드 단계 없이 `.ts`를 직접 실행한다 (네이티브 타입 스트리핑)
 - pnpm
 
+## 빠른 시작
+
+```bash
+pnpm install
+cp .env.example .env          # HASA_API_KEY 를 채운다 (.env 는 gitignore 대상)
+
+pnpm probe                    # 모델 능력을 실제 요청으로 측정 → .arena/capability-matrix.json
+pnpm arena models             # 어떤 모델을 어느 모드에 쓸 수 있는지 확인
+
+pnpm arena compare \
+  --models "modelA,modelB" \
+  --judge  "modelC" \
+  --prompt "비교할 과제"
+```
+
+코드 모드는 git 저장소 루트에서, 워킹트리가 clean한 상태로 실행한다.
+
+```bash
+pnpm arena compare --code --repo . \
+  --models "modelA,modelB" --judge "modelC" \
+  --prompt "src/foo.ts 의 버그를 고쳐라" \
+  --test "pnpm test" --accept
+```
+
+후보는 각자의 worktree에서만 작업하고, **`Apply` 전까지 현재 workspace는 변경되지 않는다.** 결과는 `.arena/runs/<runId>/` 에 남는다.
+
 ## 설치
 
 ```bash
@@ -32,6 +58,10 @@ pnpm probe          # capability probe (HASA_API_KEY 필요)
 pnpm probe --mock   # 키·네트워크 없이 mock 게이트웨이로 실행
 pnpm probe --deep   # long_context, seed 포함
 pnpm probe --help
+
+pnpm arena models   # 자격이 확인된 모델 목록
+pnpm arena compare --models "a,b" --judge "c" --prompt "..."   # 한 번에 실행하고 결과 출력
+pnpm arena --help
 
 pnpm serve          # 오케스트레이터 HTTP 서버 (127.0.0.1 전용)
 pnpm test           # 전체 테스트
