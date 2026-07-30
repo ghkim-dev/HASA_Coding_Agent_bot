@@ -167,6 +167,7 @@ export type WebviewMessage =
   | { type: "start"; request: StartRunRequest }
   | { type: "cancel" }
   | { type: "openDiff"; candidateId: string; label: string }
+  | { type: "openResponse"; candidateId: string; label: string }
   | { type: "apply"; candidateId: string }
   | { type: "reject" }
   | { type: "dismissProblem" }

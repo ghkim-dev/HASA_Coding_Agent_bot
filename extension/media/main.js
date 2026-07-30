@@ -471,17 +471,25 @@
         el("h3", {}, [candidate.label, isWinner ? " · 승자" : ""]),
         statusBadge(candidate.status),
       ]),
-      el("div", { class: "mono muted", text: candidate.modelId }),
+      el("div", { class: "model-id", text: candidate.modelId }),
 
       candidate.excludedReason &&
         el("div", { class: "badge bad", text: `제외 사유: ${candidate.excludedReason}` }),
 
+      // Only facts that exist for this mode. A response comparison has no
+      // score, no diff and no tool calls, and printing "점수 —" for all of them
+      // is noise the reader has to filter out every time.
       el("div", { class: "stats" }, [
-        el("span", { text: `점수 ${candidate.score === null || candidate.score === undefined ? "—" : candidate.score}` }),
+        candidate.score !== null &&
+          candidate.score !== undefined &&
+          el("span", { text: `점수 ${candidate.score}` }),
         el("span", { text: `소요 ${fmtMs(candidate.latencyMs)}` }),
+        candidate.tokensOut && el("span", { text: `출력 ${candidate.tokensOut} 토큰` }),
         candidate.diffLines !== undefined && el("span", { text: `diff ${candidate.diffLines}줄` }),
-        candidate.changedFiles && el("span", { text: `변경 ${candidate.changedFiles.length}개 파일` }),
-        candidate.toolCalls !== undefined && el("span", { text: `tool ${candidate.toolCalls}회` }),
+        candidate.changedFiles &&
+          candidate.changedFiles.length > 0 &&
+          el("span", { text: `변경 ${candidate.changedFiles.length}개 파일` }),
+        candidate.toolCalls ? el("span", { text: `tool ${candidate.toolCalls}회` }) : null,
         candidate.attempts && candidate.attempts > 1 && el("span", { text: `재시도 ${candidate.attempts - 1}회` }),
       ]),
 
@@ -489,7 +497,9 @@
         el("div", { class: "badge warn", text: `범위 밖 수정 ${candidate.outOfScopeFiles.length}개` }),
 
       candidate.summary && el("p", { class: "muted", text: candidate.summary }),
-      candidate.responseText && el("pre", { class: "mono", text: candidate.responseText.slice(0, 1200) }),
+      // Full text, wrapped and scrolled inside the card. Truncating silently
+      // would hide exactly the part a reviewer is comparing.
+      candidate.responseText && el("pre", { text: candidate.responseText }),
 
       renderGates(candidate),
 
@@ -507,22 +517,31 @@
           ),
         ]),
 
-      candidate.diffLines !== undefined &&
-        candidate.diffLines > 0 &&
-        el(
-          "div",
-          { class: "row" },
-          [
-            el(
-              "button",
-              {
-                class: "secondary",
-                onclick: () => post({ type: "openDiff", candidateId: candidate.candidateId, label: candidate.label }),
-              },
-              ["diff 보기"],
-            ),
-          ],
-        ),
+      el("div", { class: "row" }, [
+        candidate.diffLines !== undefined &&
+          candidate.diffLines > 0 &&
+          el(
+            "button",
+            {
+              class: "secondary",
+              onclick: () => post({ type: "openDiff", candidateId: candidate.candidateId, label: candidate.label }),
+            },
+            ["diff 보기"],
+          ),
+        // Long answers are easier to compare in a real editor, where find,
+        // word wrap and side-by-side tabs already work.
+        candidate.responseText &&
+          candidate.responseText.length > 400 &&
+          el(
+            "button",
+            {
+              class: "secondary",
+              onclick: () =>
+                post({ type: "openResponse", candidateId: candidate.candidateId, label: candidate.label }),
+            },
+            ["에디터에서 열기"],
+          ),
+      ]),
     ]);
   }
 

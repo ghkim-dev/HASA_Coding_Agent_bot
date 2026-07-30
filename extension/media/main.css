@@ -254,6 +254,32 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Grid items default to min-width:auto, so a long unbroken line refuses to
+     shrink and spills over the neighbouring card. */
+  min-width: 0;
+}
+
+.candidate > * {
+  min-width: 0;
+}
+
+/* Model output is arbitrary text: it wraps, and long output scrolls inside its
+   own box rather than stretching the card. */
+.candidate pre {
+  margin: 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+  border-radius: var(--arena-radius);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.9em;
+}
+
+.candidate p {
+  overflow-wrap: anywhere;
 }
 
 .candidate.winner {
@@ -267,6 +293,17 @@ button:disabled {
   justify-content: space-between;
   gap: 8px;
   align-items: baseline;
+}
+
+.candidate header h3 {
+  overflow-wrap: anywhere;
+}
+
+.candidate .model-id {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+  overflow-wrap: anywhere;
 }
 
 .stats {
@@ -283,6 +320,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9em;
+  table-layout: fixed;
 }
 
 caption {
@@ -347,6 +385,14 @@ td.detail {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Server messages and judge prose are arbitrary text and must not widen the
+   page — a horizontally scrolling panel hides the controls at the right. */
+.problem .mono,
+.verdicts li,
+.result p {
+  overflow-wrap: anywhere;
 }
 
 /* ---------- result ---------- */

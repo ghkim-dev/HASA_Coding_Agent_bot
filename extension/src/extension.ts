@@ -190,6 +190,10 @@ async function handleMessage(context: vscode.ExtensionContext, message: WebviewM
       await openDiff(context, message.candidateId, message.label);
       return;
 
+    case "openResponse":
+      await openResponse(context, message.candidateId, message.label);
+      return;
+
     case "apply":
       await applyWinner(context, message.candidateId);
       return;
@@ -291,6 +295,37 @@ async function openDiff(
       return;
     }
     const doc = await vscode.workspace.openTextDocument({ content: patch, language: "diff" });
+    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+  } catch (err) {
+    reportProblem(problemOf(err));
+  }
+}
+
+/**
+ * Opens a candidate's answer in a Markdown tab.
+ *
+ * The panel shows the full text already, but comparing two long answers is a
+ * job for real editor tabs — find, word wrap and side-by-side already work
+ * there, and nothing in a webview will match that.
+ */
+async function openResponse(
+  context: vscode.ExtensionContext,
+  candidateId: string,
+  label: string,
+): Promise<void> {
+  if (currentRunId === null) return;
+  try {
+    const snapshot = await ensureOrchestrator(context).snapshot(currentRunId);
+    const candidate = snapshot.candidates.find((c) => c.candidateId === candidateId);
+    const text = candidate?.responseText ?? candidate?.summary ?? "";
+    if (text.trim().length === 0) {
+      vscode.window.showInformationMessage(`${label}: 표시할 응답이 없습니다.`);
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument({
+      content: `# ${label} · ${candidate?.modelId ?? ""}\n\n${text}\n`,
+      language: "markdown",
+    });
     await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
   } catch (err) {
     reportProblem(problemOf(err));
