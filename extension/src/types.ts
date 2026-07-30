@@ -89,12 +89,16 @@ export interface CandidateView {
   gates?: GateView[];
 }
 
+export type ReviewReason = "never_compared" | "unstable_judge" | "tie" | "judge_only";
+
 export interface RunResultView {
   outcome: "winner" | "no_winner";
   winnerCandidateId: string | null;
   winnerLabel: string | null;
   confidence: "sole_survivor" | "objective" | "judge" | null;
   reason: string;
+  /** Null when the verdict is self-supporting. Applying still needs approval. */
+  reviewReason: ReviewReason | null;
   requiresHumanReview: boolean;
 }
 

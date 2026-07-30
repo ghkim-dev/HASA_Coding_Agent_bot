@@ -559,8 +559,23 @@
       ]),
       el("p", { text: result.reason }),
       result.confidence && el("p", { class: "muted", text: `근거 유형: ${result.confidence}` }),
-      result.requiresHumanReview &&
-        el("p", { class: "muted", role: "note", text: "사람 검토가 필요합니다. 적용 전에 diff를 확인하세요." }),
+
+      // Two different statements, deliberately kept apart. The first says the
+      // verdict is weak and why; the second is unconditional and is about who
+      // decides what lands in the repository, not about confidence.
+      result.reviewReason &&
+        el("p", { role: "note" }, [
+          el("span", { class: "badge warn" }, ["검토 필요"]),
+          " ",
+          {
+            never_compared: "게이트를 통과한 후보가 하나뿐이라 비교가 이루어지지 않았습니다.",
+            unstable_judge: "순서를 뒤집자 judge가 판정을 바꿨습니다. 이 판정은 근거로 쓸 수 없습니다.",
+            tie: "후보를 가를 근거가 없습니다.",
+            judge_only: "객관 게이트 없이 judge 판단에만 의존한 결과입니다.",
+          }[result.reviewReason] || result.reviewReason,
+        ]),
+
+      el("p", { class: "muted", text: "적용 여부는 항상 사용자가 결정합니다. Apply 전까지 workspace는 변경되지 않습니다." }),
 
       snapshot.verdicts.length > 0 &&
         el("details", { open: true }, [

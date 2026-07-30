@@ -549,6 +549,7 @@ export class CodeRunManager {
         reason: `모든 후보가 기준 미달: ${rows
           .map((r) => `${r.label}=${r.status}${r.errorCode ? `(${r.errorCode})` : ""}`)
           .join(", ")}`,
+        reviewReason: null,
         requiresHumanReview: false,
       };
     }
@@ -595,7 +596,8 @@ export class CodeRunManager {
         winnerCandidateId: only?.id ?? null,
         winnerLabel: only?.label ?? null,
         confidence: "sole_survivor",
-        reason: "게이트를 통과한 후보가 1개뿐이다 — 비교 없이 사용자 검토가 필요하다",
+        reason: "게이트를 통과한 후보가 1개뿐이다 — 비교가 이루어지지 않았다",
+        reviewReason: "never_compared",
         requiresHumanReview: true,
       };
     }
@@ -610,7 +612,11 @@ export class CodeRunManager {
         winnerLabel: top.label,
         confidence: "objective",
         reason: `객관 점수 차이 ${gap.toFixed(1)}점 (${SCORING_VERSION}) — judge 생략`,
-        requiresHumanReview: true,
+        // Gates and score decided this. Flagging it anyway would make the flag
+        // true in every branch, and a flag that never varies is not a signal —
+        // it just moves blame. Applying still requires explicit approval.
+        reviewReason: null,
+        requiresHumanReview: false,
       };
     }
 
@@ -723,6 +729,7 @@ export class CodeRunManager {
         winnerLabel: null,
         confidence: null,
         reason: `judge 불안정: ${unstable.join(", ")}`,
+        reviewReason: "unstable_judge",
         requiresHumanReview: true,
       };
     }
@@ -737,6 +744,7 @@ export class CodeRunManager {
         winnerLabel: null,
         confidence: null,
         reason: "판정 결과가 동률이다",
+        reviewReason: "tie",
         requiresHumanReview: true,
       };
     }
@@ -747,7 +755,11 @@ export class CodeRunManager {
       winnerLabel: top[0],
       confidence: "judge",
       reason: `blind pairwise 판정 (후보 ${specs.length}개 중 ${survivors.length}개 생존)`,
-      requiresHumanReview: true,
+      // Every survivor cleared the hard gates and the judge agreed in both
+      // presentation orders — the strongest evidence this system produces.
+      // Saying "review required" here would say it everywhere.
+      reviewReason: null,
+      requiresHumanReview: false,
     };
   }
 

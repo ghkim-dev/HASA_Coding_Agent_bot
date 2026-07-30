@@ -291,6 +291,7 @@ export class RunManager {
         winnerLabel: null,
         confidence: null,
         reason: `모든 후보가 기준 미달: ${rows.map((r) => `${r.label}=${r.status}${r.errorCode ? `(${r.errorCode})` : ""}`).join(", ")}`,
+        reviewReason: null,
         requiresHumanReview: false,
       };
     }
@@ -301,7 +302,8 @@ export class RunManager {
         winnerCandidateId: only?.id ?? null,
         winnerLabel: only?.label ?? null,
         confidence: "sole_survivor",
-        reason: "생존 후보가 1개뿐이다 — 비교 없이 사용자 검토가 필요하다",
+        reason: "생존 후보가 1개뿐이다 — 비교가 이루어지지 않았다",
+        reviewReason: "never_compared",
         requiresHumanReview: true,
       };
     }
@@ -328,6 +330,7 @@ export class RunManager {
         winnerLabel: null,
         confidence: null,
         reason: `judge 불안정: ${unstable.map((o) => `${o.pair}(${o.detail})`).join(", ")}`,
+        reviewReason: "unstable_judge",
         requiresHumanReview: true,
       };
     }
@@ -342,6 +345,7 @@ export class RunManager {
         winnerLabel: null,
         confidence: null,
         reason: "판정 결과가 동률이다",
+        reviewReason: "tie",
         requiresHumanReview: true,
       };
     }
@@ -353,7 +357,12 @@ export class RunManager {
       winnerLabel: top[0],
       confidence: "judge",
       reason: `blind pairwise 판정: ${outcomes.map((o) => `${o.pair}→${o.winnerLabel ?? "tie"}`).join(", ")}`,
-      requiresHumanReview: specs.length > 2,
+      // Response mode has no objective gate to corroborate the judge, so the
+      // verdict rests entirely on one model's reading of prose. That is a real
+      // limitation of the mode, not a hedge — and it is the same for 2
+      // candidates as for 5, which the old `specs.length > 2` rule got wrong.
+      reviewReason: "judge_only",
+      requiresHumanReview: true,
     };
   }
 

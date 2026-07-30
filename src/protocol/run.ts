@@ -136,12 +136,36 @@ export type JudgeVerdict = z.infer<typeof JudgeVerdictSchema>;
 export const RunOutcomeSchema = z.enum(["winner", "no_winner"]);
 export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
 
+/**
+ * Why a verdict cannot stand on its own.
+ *
+ * `null` means the run reached a conclusion it can defend — not that the diff
+ * should be applied unread. Applying always requires explicit approval, which
+ * is a question of *authority* over the user's repository, not of the system's
+ * confidence. Conflating the two made this flag true in almost every branch,
+ * at which point it distinguished nothing and merely moved blame.
+ */
+export const ReviewReasonSchema = z.enum([
+  /** One candidate cleared the gates, so no comparison actually happened. */
+  "never_compared",
+  /** The judge changed its answer when the presentation order flipped. */
+  "unstable_judge",
+  /** Nothing separated the candidates. */
+  "tie",
+  /** The judge decided, but on prose alone — no objective gate corroborated it. */
+  "judge_only",
+]);
+export type ReviewReason = z.infer<typeof ReviewReasonSchema>;
+
 export const RunResultSchema = z.object({
   outcome: RunOutcomeSchema,
   winnerCandidateId: z.string().nullable(),
   winnerLabel: z.string().nullable(),
   confidence: z.enum(["sole_survivor", "objective", "judge"]).nullable(),
   reason: z.string(),
+  /** Null when the verdict is self-supporting. See ReviewReasonSchema. */
+  reviewReason: ReviewReasonSchema.nullable().default(null),
+  /** Derived: `reviewReason !== null`. Kept for display convenience. */
   requiresHumanReview: z.boolean(),
 });
 export type RunResult = z.infer<typeof RunResultSchema>;

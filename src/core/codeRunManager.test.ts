@@ -259,7 +259,18 @@ describe("failed candidates", () => {
     assert.equal(b?.["excludedReason"], "no_change");
     assert.equal(result.outcome, "winner");
     assert.equal(result.confidence, "sole_survivor");
+    assert.equal(result.reviewReason, "never_compared");
     assert.equal(result.requiresHumanReview, true);
+  });
+
+  test("a verdict backed by gates and an order-stable judge needs no review flag", async () => {
+    // The objective gates cleared both candidates and the judge agreed in both
+    // presentation orders. If this still said "review required", the flag would
+    // be true everywhere and would carry no information at all.
+    const { result } = await runToCompletion(editScript({ "cand-a": "42", "cand-b": "43" }));
+    assert.equal(result.outcome, "winner");
+    assert.equal(result.reviewReason, null);
+    assert.equal(result.requiresHumanReview, false);
   });
 
   test("a runner that throws does not take the run down with it", async () => {

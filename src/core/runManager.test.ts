@@ -93,7 +93,35 @@ describe("RunManager — response compare", () => {
     const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased");
     assert.equal(result.outcome, "no_winner");
     assert.match(result.reason, /judge 불안정/);
+    assert.equal(result.reviewReason, "unstable_judge");
     assert.equal(result.requiresHumanReview, true);
+  });
+
+  test("the review flag names a specific weakness rather than always firing", async () => {
+    // A flag that is true in every branch distinguishes nothing and only moves
+    // blame. Each value has to correspond to a distinct, checkable situation.
+    const biased = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased");
+    const sole = await runToCompletion(["cand/alpha", "cand/forbidden"], "judge/content");
+    const tie = await runToCompletion(["cand/same-1", "cand/same-2"], "judge/content");
+    const decided = await runToCompletion(["cand/alpha", "cand/beta"], "judge/content");
+
+    assert.equal(biased.result.reviewReason, "unstable_judge");
+    assert.equal(sole.result.reviewReason, "never_compared");
+    assert.equal(tie.result.reviewReason, "tie");
+    // Response mode has no objective gate, so even a stable verdict rests on
+    // the judge alone — that is a property of the mode, stated as such.
+    assert.equal(decided.result.reviewReason, "judge_only");
+
+    const distinct = new Set(
+      [biased, sole, tie, decided].map((r) => r.result.reviewReason),
+    );
+    assert.equal(distinct.size, 4, "every outcome must map to a different reason");
+  });
+
+  test("an all-failed run needs no review — there is nothing ambiguous about it", async () => {
+    const { result } = await runToCompletion(["cand/empty", "cand/forbidden"], "judge/content");
+    assert.equal(result.reviewReason, null);
+    assert.equal(result.requiresHumanReview, false);
   });
 
   test("indistinguishable answers end in no_winner, not an arbitrary pick", async () => {
