@@ -67,6 +67,10 @@ pnpm install
 pnpm build:extension     # extension/out 으로 컴파일
 ```
 
-VS Code에서 이 저장소를 열고 `extension` 폴더를 대상으로 F5(Extension Development Host)를 실행하면 패널을 확인할 수 있습니다.
+**저장소 루트**(`HAFA_Extension`)를 VS Code로 열고 F5를 누르면 됩니다. `.vscode/launch.json`의 `Run HASA Arena Extension` 구성이 자동 선택되고, `preLaunchTask`가 확장을 먼저 빌드합니다.
+
+- `extension` 폴더를 직접 열면 안 됩니다 — 빌드 스크립트와 `tsconfig`가 루트 기준입니다
+- F5에서 "Select debugger" 목록이 뜬다면 루트가 아닌 폴더를 열었거나 `.vscode/launch.json`이 없는 경우입니다
+- 디버그 사이드바 상단 드롭다운에서 구성을 직접 고를 수도 있습니다
 
 > **검증 상태:** 확장 코드는 타입 검사와 컴파일로 검증되었습니다. VS Code UI 동작(패널 렌더링, 명령 등록, SecretStorage 연동)은 Extension Development Host에서의 수동 확인이 필요합니다 — 자동화 테스트 범위 밖입니다.

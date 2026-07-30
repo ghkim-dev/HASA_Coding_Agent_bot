@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // The extension's `main` points at out/extension.js, which is gitignored
+      // and therefore absent on a fresh clone. Running this before F5 means the
+      // first launch works rather than failing on a missing entry point.
+      "label": "build extension",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["build:extension"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$tsc"],
+      "group": "build",
+      "presentation": { "reveal": "silent", "panel": "shared" }
+    },
+    {
+      "label": "watch extension",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["exec", "tsc", "-p", "extension", "--watch"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$tsc-watch"],
+      "isBackground": true,
+      "presentation": { "reveal": "never", "panel": "dedicated" }
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["test"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "typecheck",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["typecheck"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}
