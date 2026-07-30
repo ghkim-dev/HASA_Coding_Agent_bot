@@ -341,6 +341,7 @@ export class RunManager {
     const rounds: RoundRecord[] = [];
     let convergedBy: RunResult["convergedBy"] = "round_budget";
     let judgeCallsSpent = tournament.judgeCallsSpent;
+    let decidedAt = tournament.decidedAt;
     const ladderTrace = [...tournament.ladderTrace];
 
     for (let round = 1; round <= config.maxRounds; round += 1) {
@@ -492,6 +493,12 @@ export class RunManager {
       );
       judgeCallsSpent += decision.judgeCallsSpent;
       ladderTrace.push(...decision.trace);
+      // The run is only as settled as its least settled comparison, and a
+      // refinement round is one of them. Reporting the tournament's rung alone
+      // would describe a run as cheaper than the trace beneath it shows.
+      if (decision.decidedAt !== null && (decidedAt === null || decision.decidedAt > decidedAt)) {
+        decidedAt = decision.decidedAt;
+      }
 
       const replaced = decision.winnerLabel === label;
       rounds.push({
@@ -528,6 +535,7 @@ export class RunManager {
         rounds.length === 0
           ? tournament.reason
           : `${tournament.reason} · 개선 ${rounds.length}라운드, ${rounds.filter((r) => r.replaced).length}회 교체 (${convergedBy})`,
+      decidedAt,
       ladderTrace,
       judgeCallsSpent,
       rounds,

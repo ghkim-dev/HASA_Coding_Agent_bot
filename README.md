@@ -13,6 +13,7 @@
 | 1 | Response Compare 모드 + 오케스트레이터 | 완료 |
 | 2 | Code Candidate 모드 (worktree, 게이트, apply) | 완료 |
 | 3 | VS Code Extension | 완료 (타입검사·빌드 검증. UI 동작은 수동 확인 필요) |
+| 4 | 판정 사다리 (S0~S4) + 개선 루프 | 완료 — [docs/redesign-plan.md](docs/redesign-plan.md) |
 
 ## 요구 사항
 
@@ -124,9 +125,44 @@ curl -X POST http://127.0.0.1:7801/runs \
 - [docs/evaluation-protocol.md](docs/evaluation-protocol.md) — 게이트, 점수, blind pairwise 절차
 - [docs/implementation-plan.md](docs/implementation-plan.md) — Phase 계획, 위험 레지스터, 불확실 SDK API
 
+## 판정 사다리
+
+판정이 갈렸다고 곧바로 사람에게 넘기지 않는다. 한 번 물어보고 애매해서 넘기는 것은 유보가 아니라
+조기 포기다. 갈린 쌍만 다음 계단으로 올라간다.
+
+| 단계 | 무엇을 하는가 | 비용 |
+|---|---|---|
+| S0 | 객관 검사 (코드 모드는 게이트, 응답 모드는 `--require` 등) | 0회 |
+| S1 | blind pairwise, 순서 뒤집어 2회 | 2회 |
+| S2 | 같은 judge를 temperature>0으로 반복 — 잡음인지 진짜 애매함인지 측정 | 2k회 |
+| S3 | 다른 judge 모델들의 합의 | 2m회 |
+| S4 | judge에게 **확인 가능한 주장**을 받아 직접 실행 | 1회 |
+
+사다리를 다 오르고도 갈리면 `undecidable`이고, 그때 사람에게 넘긴다 — 무엇을 시도했는지는
+`ladderTrace`에 남는다. 예산이 먼저 끝나면 `budget_exhausted`로 **따로** 보고한다. 전자는 인식
+문제이고 후자는 돈 문제이며, 처방이 다르다.
+
+```bash
+pnpm arena compare --models "a,b" --judge "c" --prompt "..."   --require "지연시간,처리량" \        # S0 객관 검사
+  --ensemble "d,e" \                   # S3 앙상블
+  --critic "f" --rounds 2               # 개선 루프
+```
+
+## 개선 루프
+
+`--critic`을 주면 토너먼트 승자를 개선해 본다. critic이 검증 가능한 결함을 지목하고, **같은 모델**이
+그것을 고쳐 다시 답한다. 이웃은 blind pairwise에서 **이겼을 때만** 챔피언을 교체한다.
+
+그래서 최종 출력은 구조적으로 첫 라운드 최고 답보다 나쁠 수 없고, `convergedBy:
+"neighbour_not_better"`가 "이웃을 만들어봤는데 졌다" — 즉 local optimum이라는 **측정된 주장**이 된다.
+
+critic은 judge와도, 후보와도 달라야 한다. 같으면 개선이 채점자의 취향으로 수렴한다.
+
 ## 설계상 지키는 것
 
 - 후보는 **modelId만 다르고 나머지는 전부 동일**하다. 위반하면 Run이 시작되지 않는다 (`400`).
-- judge는 도구도 파일 접근도 없고, **모델명·후보 라벨을 보지 못한다**. 같은 쌍을 순서만 바꿔 2회 평가하고, 결과가 갈리면 `no_winner`다.
+  개선 라운드는 예외이며, 그쪽은 `assertComparable(a, b, "refinement")`이 별도로 검사한다.
+- judge는 도구도 파일 접근도 없고, **모델명·후보 라벨을 보지 못한다**.
 - **`no_winner`는 정상 결과다.** 억지 승자를 만들지 않는다.
+- **사람 검토 요청은 시도 기록과 함께 온다.** 모든 분기에서 켜지는 플래그는 신호가 아니라 책임 전가다.
 - API Key는 오케스트레이터 프로세스 밖으로 나가지 않는다. 로그·SSE·HTTP 응답 어디에도 실리지 않는다.

@@ -1,7 +1,8 @@
 # HASA Agent Arena — 판정 사다리와 개선 루프 재설계
 
-> 상태: **실행 계획**. §3의 여섯 단계를 순서대로 구현하며, 각 단계는 독립적으로 배포 가능하다.
-> 각 단계의 "프롬프트"는 그 단계를 착수하는 사람(또는 에이전트)에게 주는 작업 명세다.
+> 상태: **여섯 단계 모두 완료.** 각 단계는 별도 커밋이며 `pnpm test`·`pnpm typecheck`를 통과했다.
+> 각 단계의 "프롬프트"는 그 단계를 착수하는 사람(또는 에이전트)에게 준 작업 명세이고, 아래
+> §5에 실제로 무엇이 되었고 무엇이 남았는지 적어 두었다.
 
 ---
 
@@ -244,3 +245,30 @@ assertComparable(a, b, kind)   // kind에 따라 무엇이 같아야 하는지�
 | 개선 루프가 결과를 나쁘게 만든다 | incumbent 단조성 — 이겨야만 교체 |
 | 모델 비교와 개선 비교의 혼합 | `ComparisonKind`를 verdict에 기록하고 순위표를 분리 |
 | S2의 temperature>0가 재현성을 깬다 | 회차별 원문을 전부 기록. 재현은 기록 재생으로 보장 |
+
+
+---
+
+## 5. 실행 결과
+
+| 단계 | 커밋 | 결과 |
+|---|---|---|
+| 1 | `fix(evaluation): let response mode reach a verdict it does not hedge on` | `judge_only` 삭제 → `evidenceAxes`. `judge_unavailable` 분리 |
+| 2 | `refactor(core): give the two run managers one decision protocol` | `core/decide.ts` 신설, 중복 제거. 판정 결과 무변화 |
+| 3 | `feat(evaluation): escalate before deferring…` | S2·S3·예산. `undecidable` / `budget_exhausted` 분리 |
+| 4 | `feat(evaluation): give response mode something to check…` | `core/checks.ts`, S0 |
+| 5 | `feat(core): search around the winner instead of stopping at it` | `core/refine.ts`, incumbent 단조성, `assertComparable` |
+| 6 | `feat(evaluation): make the last rung check a claim…` | S4 분별 심문 |
+
+테스트 251개 → **277개**. 새 테스트는 전부 "이 설계가 막으려는 실패"를 직접 고정한다 — 예산 소진과
+판단 불가가 다른 값을 내는지, 잡음 judge와 편향 judge가 다른 결론에 이르는지, 진 이웃이 챔피언을
+교체하지 못하는지, 근거가 거짓인 judge가 승자를 만들지 못하는지.
+
+### 남긴 것
+
+- **개선 루프는 응답 모드 전용이다.** 코드 모드 이웃은 자체 worktree와 전체 게이트 통과가 필요하다.
+  `codeRunManager`의 결과에는 `rounds: []`가 실린다.
+- **S2의 temperature>0는 재현성을 떨어뜨린다.** 회차별 원문은 전부 기록되므로 재현은 기록 재생으로
+  보장되지만, 같은 입력으로 다시 돌렸을 때 같은 결론이 난다는 보장은 없다.
+- **S0 검사는 사용자가 직접 쓴다.** 과제에서 검사를 자동 생성하는 것은 다음 후보다 — 단, 생성한
+  검사는 후보 실행 전에 확정되고 사람이 승인해야 한다.
