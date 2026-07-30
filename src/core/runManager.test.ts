@@ -32,6 +32,10 @@ before(async () => {
       { id: "judge/biased", judgeAlwaysPicksSlot: 1 },
       // Never emits parseable JSON, however many times it is asked.
       { id: "judge/prose", judgePrefers: "ALPHA", judgeGarbageTimes: 99 },
+      // Wrong on its first reading, consistent afterwards: S1 sees a
+      // contradiction, S2 finds out it was one bad draw.
+      { id: "judge/noisy", judgePrefers: "ALPHA", judgeContrarianCalls: 1 },
+      { id: "judge/second-opinion", judgePrefers: "ALPHA" },
     ],
   });
 });
@@ -63,18 +67,26 @@ function manager(): RunManager {
   });
 }
 
-function request(models: string[], judgeModel: string): ReturnType<typeof CreateRunRequestSchema.parse> {
+function request(
+  models: string[],
+  judgeModel: string,
+  judgeOverrides: Record<string, unknown> = {},
+): ReturnType<typeof CreateRunRequestSchema.parse> {
   return CreateRunRequestSchema.parse({
     mode: "response",
     taskSpec: { prompt: "Summarise the tradeoffs." },
     candidates: models.map((modelId) => ({ modelId })),
-    judge: { modelId: judgeModel },
+    judge: { modelId: judgeModel, ...judgeOverrides },
   });
 }
 
-async function runToCompletion(models: string[], judgeModel: string): Promise<{ runId: string; result: RunResult; events: ArenaEvent[]; runs: RunManager }> {
+async function runToCompletion(
+  models: string[],
+  judgeModel: string,
+  judgeOverrides: Record<string, unknown> = {},
+): Promise<{ runId: string; result: RunResult; events: ArenaEvent[]; runs: RunManager }> {
   const runs = manager();
-  const runId = runs.create(request(models, judgeModel));
+  const runId = runs.create(request(models, judgeModel, judgeOverrides));
   const events: ArenaEvent[] = [];
   hub.forRun(runId).subscribe((e) => events.push(e));
   await runs.waitFor(runId);
@@ -94,9 +106,67 @@ describe("RunManager — response compare", () => {
   test("a position-biased judge yields no_winner instead of a coin flip", async () => {
     const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased");
     assert.equal(result.outcome, "no_winner");
-    assert.match(result.reason, /judge 불안정/);
-    assert.equal(result.reviewReason, "unstable_judge");
+    assert.equal(result.reviewReason, "undecidable");
     assert.equal(result.requiresHumanReview, true);
+    // The claim "undecidable" is only worth anything with the attempts behind
+    // it: position bias survives repetition, and the trace has to show that
+    // repetition was actually tried before the run gave up.
+    assert.ok(
+      result.ladderTrace.some((s) => s.stage === "S2"),
+      "gave up without climbing past the first reading",
+    );
+    assert.ok(result.judgeCallsSpent > 2, "reported undecidable after a single pass");
+  });
+
+  test("one noisy reading is not the same as an inseparable pair", async () => {
+    // This is the rung's whole justification. Judged once, this pair looks
+    // exactly like the position-biased case above — AB and BA disagree. Asking
+    // again is what tells the two situations apart, and only one of them is a
+    // reason to interrupt a person.
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/noisy");
+    assert.equal(result.outcome, "winner");
+    assert.equal(result.winnerLabel, "cand-a");
+    assert.equal(result.decidedAt, "S2");
+    assert.equal(result.reviewReason, null);
+    assert.equal(result.requiresHumanReview, false);
+
+    const s2 = result.ladderTrace.find((s) => s.stage === "S2");
+    assert.equal(s2?.agreement, 1, "every repetition agreed once the noise passed");
+  });
+
+  test("a second judge can settle what the first one could not", async () => {
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased", {
+      ensemble: ["judge/second-opinion"],
+    });
+    assert.equal(result.outcome, "winner");
+    assert.equal(result.winnerLabel, "cand-a");
+    assert.equal(result.decidedAt, "S3");
+    assert.equal(result.reviewReason, null);
+  });
+
+  test("running out of budget is reported as money, not as difficulty", async () => {
+    // Both end without a winner, and the difference is the whole point: one
+    // says buy more calls, the other says no number of calls would help.
+    // Reporting them alike sends the operator to read two answers by hand when
+    // the fix was a larger ceiling.
+    const starved = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased", {
+      maxJudgeCalls: 2,
+    });
+    assert.equal(starved.result.reviewReason, "budget_exhausted");
+    assert.ok(starved.result.judgeCallsSpent <= 2);
+    assert.ok(!starved.result.ladderTrace.some((s) => s.stage === "S2"), "S2 ran on an empty budget");
+
+    const exhausted = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased");
+    assert.equal(exhausted.result.reviewReason, "undecidable");
+    assert.notEqual(starved.result.reviewReason, exhausted.result.reviewReason);
+  });
+
+  test("the ladder is not climbed for a pair the judge already settled", async () => {
+    // Escalation is for ambiguity, not for every run. A ladder that always
+    // climbs is just a more expensive way to get the same answer.
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/content");
+    assert.equal(result.decidedAt, "S1");
+    assert.equal(result.judgeCallsSpent, 2, "one pair, two presentation orders, nothing more");
   });
 
   test("the review flag names a specific weakness rather than always firing", async () => {
@@ -107,7 +177,7 @@ describe("RunManager — response compare", () => {
     const tie = await runToCompletion(["cand/same-1", "cand/same-2"], "judge/content");
     const decided = await runToCompletion(["cand/alpha", "cand/beta"], "judge/content");
 
-    assert.equal(biased.result.reviewReason, "unstable_judge");
+    assert.equal(biased.result.reviewReason, "undecidable");
     assert.equal(sole.result.reviewReason, "never_compared");
     assert.equal(tie.result.reviewReason, "tie");
     assert.equal(decided.result.reviewReason, null);

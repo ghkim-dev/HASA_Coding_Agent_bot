@@ -53,6 +53,15 @@ export interface MockModelProfile {
   judgePrefers?: string;
   /** Always picks this presentation slot — simulates pure position bias. */
   judgeAlwaysPicksSlot?: 1 | 2;
+  /**
+   * Answers against `judgePrefers` for this many calls, then normally.
+   *
+   * Reproduces a judge that is noisy rather than biased: the first reading of a
+   * pair disagrees with itself, and repetition converges. Without it there is
+   * no way to test that S2 distinguishes one bad draw from a genuinely
+   * inseparable pair, which is the entire justification for the rung.
+   */
+  judgeContrarianCalls?: number;
   /** Emits unparseable output this many times before answering properly. */
   judgeGarbageTimes?: number;
   /**
@@ -149,6 +158,7 @@ function between(text: string, open: string, close: string): string {
 }
 
 const judgeGarbageSeen = new Map<string, number>();
+const judgeContrarianSeen = new Map<string, number>();
 
 function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, counter: number): Reply {
   const messages = body.messages ?? [];
@@ -188,7 +198,14 @@ function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, coun
     const s1 = between(conversation, "<<<SUBMISSION_1>>>", "<<<END_SUBMISSION_1>>>");
     const s2 = between(conversation, "<<<SUBMISSION_2>>>", "<<<END_SUBMISSION_2>>>");
     const marker = profile.judgePrefers;
-    const winner = marker === undefined ? null : s1.includes(marker) ? 1 : s2.includes(marker) ? 2 : null;
+    const preferred = marker === undefined ? null : s1.includes(marker) ? 1 : s2.includes(marker) ? 2 : null;
+
+    const contrarianBudget = profile.judgeContrarianCalls ?? 0;
+    const contrarianSeen = judgeContrarianSeen.get(profile.id) ?? 0;
+    const contrarian = contrarianSeen < contrarianBudget;
+    if (contrarianBudget > 0) judgeContrarianSeen.set(profile.id, contrarianSeen + 1);
+
+    const winner = contrarian && preferred !== null ? (preferred === 1 ? 2 : 1) : preferred;
     return {
       content: JSON.stringify({
         winner,

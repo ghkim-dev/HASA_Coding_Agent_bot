@@ -59,6 +59,31 @@ export const JudgeConfigSchema = z.object({
   maxParseRetries: z.number().int().min(0).max(5).default(2),
   temperature: z.number().min(0).max(2).default(0),
   /**
+   * S2 — how many times a contested pair is re-judged by the same model at
+   * `selfConsistencyTemperature`. Zero disables the rung.
+   *
+   * The point is not to keep asking until the answer is convenient. It is that
+   * one disagreement between AB and BA does not distinguish "these two are
+   * genuinely hard to separate" from "the judge was noisy once", and those have
+   * different right answers. Repetition measures which one it was.
+   */
+  selfConsistencyRounds: z.number().int().min(0).max(9).default(3),
+  /** Zero would just reproduce the same disagreement; the rung needs variance. */
+  selfConsistencyTemperature: z.number().min(0).max(2).default(0.7),
+  /** Fraction of rounds that must agree before S2 is allowed to settle a pair. */
+  agreementThreshold: z.number().min(0.5).max(1).default(0.67),
+  /** S3 — other judge models consulted when the first one cannot settle it. */
+  ensemble: z.array(z.string().min(1)).max(4).default([]),
+  /**
+   * Ceiling on judge calls for the whole run.
+   *
+   * A ladder without one turns every ambiguous pair into an open-ended bill.
+   * Running out is reported as `budget_exhausted`, never as `undecidable` —
+   * the first is a money problem that more budget fixes and the second is a
+   * knowledge problem that it does not.
+   */
+  maxJudgeCalls: z.number().int().min(2).max(500).default(60),
+  /**
    * Starting output budget. Doubled on a retry whose response came back empty
    * or truncated: reasoning-style models spend tokens before emitting anything
    * visible, and a verdict cut off mid-JSON is indistinguishable from a model
@@ -148,19 +173,41 @@ export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
 export const ReviewReasonSchema = z.enum([
   /** One candidate cleared the gates, so no comparison actually happened. */
   "never_compared",
-  /** The judge changed its answer when the presentation order flipped. */
-  "unstable_judge",
-  /** Nothing separated the candidates. */
+  /** The ladder settled on "these are equal". A conclusion, not a failure. */
   "tie",
   /**
-   * The judge never produced a parseable verdict, so there is no judgment to be
-   * unstable. Kept apart from `unstable_judge` because the remedies are
-   * opposites: a broken judge is fixed with a larger budget or another model, a
-   * disagreeing one only with more evidence.
+   * No judge produced a parseable verdict, so there is nothing to be uncertain
+   * about — the instrument never took a reading. Separate from `undecidable`
+   * because a larger budget or another model fixes this and evidence does not.
    */
   "judge_unavailable",
+  /**
+   * Every rung of the ladder ran and the candidates are still not separated.
+   * `ladderTrace` records what was attempted, which is what makes handing this
+   * to a person a report rather than a shrug.
+   */
+  "undecidable",
+  /** The call ceiling was reached first. Undecided, but not shown to be hard. */
+  "budget_exhausted",
 ]);
 export type ReviewReason = z.infer<typeof ReviewReasonSchema>;
+
+/** Rungs of the decision ladder. See docs/redesign-plan.md §2.1. */
+export const LadderStageSchema = z.enum(["S0", "S1", "S2", "S3", "S4"]);
+export type LadderStage = z.infer<typeof LadderStageSchema>;
+
+export const LadderStepSchema = z.object({
+  stage: LadderStageSchema,
+  pair: z.string(),
+  winnerLabel: z.string().nullable(),
+  /** `unstable` = it contradicted itself; `unavailable` = it never answered. */
+  failure: z.enum(["unavailable", "unstable"]).nullable(),
+  /** How often the rung's repetitions agreed. Only S2 and S3 report this. */
+  agreement: z.number().nullable().default(null),
+  judgeCalls: z.number().int(),
+  detail: z.string(),
+});
+export type LadderStep = z.infer<typeof LadderStepSchema>;
 
 /**
  * Which kinds of evidence the run had available at all.
@@ -188,6 +235,11 @@ export const RunResultSchema = z.object({
   requiresHumanReview: z.boolean(),
   /** What could corroborate this verdict. See EvidenceAxisSchema. */
   evidenceAxes: z.array(EvidenceAxisSchema).default(["judge"]),
+  /** Which rung settled it, `null` when none did. */
+  decidedAt: LadderStageSchema.nullable().default(null),
+  /** Everything the ladder attempted, in order. The receipt for `reviewReason`. */
+  ladderTrace: z.array(LadderStepSchema).default([]),
+  judgeCallsSpent: z.number().int().default(0),
 });
 export type RunResult = z.infer<typeof RunResultSchema>;
 

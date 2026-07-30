@@ -1,15 +1,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { CandidateInput, JudgeConfig, Sampling, TaskSpec } from "../protocol/index.ts";
+import { JudgeConfigSchema, type CandidateInput, type JudgeConfig, type Sampling, type TaskSpec } from "../protocol/index.ts";
 import { FairnessError, assertFairness, labelFor, resolveCandidateSpecs, shuffled } from "./fairness.ts";
 
 const sampling: Sampling = { temperature: 0.2, topP: 1, maxOutputTokens: 2048 };
-const judge: JudgeConfig = {
-  modelId: "judge/model",
-  maxParseRetries: 2,
-  temperature: 0,
-  maxOutputTokens: 2048,
-};
+const judge: JudgeConfig = JudgeConfigSchema.parse({ modelId: "judge/model" });
 const taskSpec: TaskSpec = { prompt: "compare these", systemPromptVersion: "response-compare-v1" };
 
 function candidates(...ids: string[]): CandidateInput[] {

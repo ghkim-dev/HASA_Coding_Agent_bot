@@ -1,6 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { ArenaEvent, CandidateArtifacts, RunResult } from "../protocol/index.ts";
+import {
+  JudgeConfigSchema,
+  type ArenaEvent,
+  type CandidateArtifacts,
+  type JudgeConfig,
+  type RunResult,
+} from "../protocol/index.ts";
 import { clientFromEnv } from "../hasa-client/client.ts";
 import { createLogger, nullLogger } from "../hasa-client/logger.ts";
 import { CodeRunManager } from "../core/codeRunManager.ts";
@@ -40,6 +46,8 @@ Options
   --test "<cmd>"     acceptance 명령. 여러 번 지정 가능
   --accept           바로 앞의 --test 를 acceptance 로 표시 (기본은 regression)
   --scope <a,b>      쓰기 허용 경로
+  --ensemble <a,b>   판정이 갈렸을 때 의견을 물을 추가 judge 모델 (사다리 S3)
+  --max-judge-calls  judge 호출 상한 (기본 60). 소진되면 budget_exhausted
   --json             결과를 JSON 으로 출력
   -h, --help
 
@@ -58,8 +66,19 @@ interface Args {
   runtime: "agent" | "patch";
   commands: Array<{ cmd: string; args: string[]; kind: "regression" | "acceptance" }>;
   scope: string[];
+  ensemble: string[];
+  maxJudgeCalls: number;
   json: boolean;
   help: boolean;
+}
+
+/** Ladder settings other than these two stay at the schema's defaults. */
+function judgeConfig(args: Args): JudgeConfig {
+  return JudgeConfigSchema.parse({
+    modelId: args.judge,
+    ensemble: args.ensemble,
+    maxJudgeCalls: args.maxJudgeCalls,
+  });
 }
 
 function parseArgs(argv: string[]): Args {
@@ -74,6 +93,8 @@ function parseArgs(argv: string[]): Args {
     runtime: "agent",
     commands: [],
     scope: [],
+    ensemble: [],
+    maxJudgeCalls: 60,
     json: false,
     help: false,
   };
@@ -123,6 +144,12 @@ function parseArgs(argv: string[]): Args {
       }
       case "--scope":
         args.scope = next().split(",").map((s) => s.trim()).filter(Boolean);
+        break;
+      case "--ensemble":
+        args.ensemble = next().split(",").map((s) => s.trim()).filter(Boolean);
+        break;
+      case "--max-judge-calls":
+        args.maxJudgeCalls = Number.parseInt(next(), 10);
         break;
       case "--json":
         args.json = true;
@@ -255,7 +282,7 @@ export async function main(argv: string[]): Promise<number> {
         },
         candidates: args.models.map((modelId) => ({ modelId })),
         sampling: { temperature: 0.2, topP: 1, maxOutputTokens: 4096 },
-        judge: { modelId: args.judge, maxParseRetries: 2, temperature: 0, maxOutputTokens: 2048 },
+        judge: judgeConfig(args),
       });
       hub.forRun(runId).subscribe(onEvent);
       await codeRuns.waitFor(runId);
@@ -268,7 +295,7 @@ export async function main(argv: string[]): Promise<number> {
       taskSpec: { prompt: args.prompt, systemPromptVersion: "response-compare-v1" },
       candidates: args.models.map((modelId) => ({ modelId })),
       sampling: { temperature: 0.2, topP: 1, maxOutputTokens: 2048 },
-      judge: { modelId: args.judge, maxParseRetries: 2, temperature: 0, maxOutputTokens: 2048 },
+      judge: judgeConfig(args),
     });
     hub.forRun(runId).subscribe(onEvent);
     await runs.waitFor(runId);

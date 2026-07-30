@@ -1,6 +1,11 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_REASONS, MAX_REASON_CHARS, type JudgeConfig } from "../protocol/index.ts";
+import {
+  JudgeConfigSchema,
+  MAX_REASONS,
+  MAX_REASON_CHARS,
+  type JudgeConfig,
+} from "../protocol/index.ts";
 import { HasaClient } from "../hasa-client/client.ts";
 import { nullLogger } from "../hasa-client/logger.ts";
 import { clearSecrets } from "../hasa-client/redact.ts";
@@ -45,12 +50,8 @@ function client(): HasaClient {
   });
 }
 
-const config = (modelId: string, retries = 2, maxOutputTokens = 2048): JudgeConfig => ({
-  modelId,
-  maxParseRetries: retries,
-  temperature: 0,
-  maxOutputTokens,
-});
+const config = (modelId: string, retries = 2, maxOutputTokens = 2048): JudgeConfig =>
+  JudgeConfigSchema.parse({ modelId, maxParseRetries: retries, temperature: 0, maxOutputTokens });
 
 describe("buildJudgeMessages", () => {
   test("frames submissions as data with explicit markers", () => {

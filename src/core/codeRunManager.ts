@@ -43,6 +43,18 @@ import type { AgentRunner } from "../runtime/types.ts";
  */
 const CODE_EVIDENCE_AXES: RunResult["evidenceAxes"] = ["objective", "judge"];
 
+/**
+ * A verdict reached without the ladder — no candidate survived, only one did,
+ * or the objective score settled it outright. The trace is empty because
+ * nothing was judged.
+ */
+const NO_LADDER = (): Pick<RunResult, "decidedAt" | "ladderTrace" | "judgeCallsSpent"> => ({
+  decidedAt: null,
+  ladderTrace: [],
+  judgeCallsSpent: 0,
+});
+
+
 export interface CodeRunManagerOptions {
   client: HasaClient;
   scheduler: Scheduler;
@@ -559,6 +571,7 @@ export class CodeRunManager {
         reviewReason: null,
         requiresHumanReview: false,
         evidenceAxes: CODE_EVIDENCE_AXES,
+        ...NO_LADDER(),
       };
     }
 
@@ -608,6 +621,7 @@ export class CodeRunManager {
         reviewReason: "never_compared",
         requiresHumanReview: true,
         evidenceAxes: CODE_EVIDENCE_AXES,
+        ...NO_LADDER(),
       };
     }
 
@@ -627,6 +641,8 @@ export class CodeRunManager {
         reviewReason: null,
         requiresHumanReview: false,
         evidenceAxes: CODE_EVIDENCE_AXES,
+        // Gates and score settled this outright; the ladder was never entered.
+        ...NO_LADDER(),
       };
     }
 
@@ -671,7 +687,7 @@ export class CodeRunManager {
           this.store.insertVerdict({
             id: randomUUID(),
             runId,
-            judgeModel: ctx.request.judge.modelId,
+            judgeModel: record.judgeModel,
             pair: record.pair,
             presentationOrder: record.presentationOrder,
             winnerLabel: record.winnerLabel,
@@ -684,6 +700,12 @@ export class CodeRunManager {
       },
     );
 
+    const ladder = {
+      decidedAt: decision.decidedAt,
+      ladderTrace: decision.trace,
+      judgeCallsSpent: decision.judgeCallsSpent,
+    };
+
     if (decision.winnerLabel === null) {
       return {
         outcome: "no_winner",
@@ -694,6 +716,7 @@ export class CodeRunManager {
         reviewReason: decision.reviewReason,
         requiresHumanReview: decision.reviewReason !== null,
         evidenceAxes: CODE_EVIDENCE_AXES,
+        ...ladder,
       };
     }
 
@@ -702,13 +725,14 @@ export class CodeRunManager {
       winnerCandidateId: decision.winnerId,
       winnerLabel: decision.winnerLabel,
       confidence: "judge",
-      reason: `blind pairwise 판정 (후보 ${specs.length}개 중 ${survivors.length}개 생존)`,
+      reason: `blind pairwise 판정 (후보 ${specs.length}개 중 ${survivors.length}개 생존, ${decision.detail})`,
       // Every survivor cleared the hard gates and the judge agreed in both
       // presentation orders — the strongest evidence this system produces.
       // Saying "review required" here would say it everywhere.
       reviewReason: decision.reviewReason,
       requiresHumanReview: decision.reviewReason !== null,
       evidenceAxes: CODE_EVIDENCE_AXES,
+      ...ladder,
     };
   }
 

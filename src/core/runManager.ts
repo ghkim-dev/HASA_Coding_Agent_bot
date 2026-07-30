@@ -42,6 +42,17 @@ function textOf(content: unknown): string {
   return "";
 }
 
+/**
+ * A verdict reached without the ladder — no candidate survived, or only one
+ * did. The trace is empty because nothing was judged, which is different from
+ * a trace that is empty because judging was skipped.
+ */
+const NO_LADDER = (): Pick<RunResult, "decidedAt" | "ladderTrace" | "judgeCallsSpent"> => ({
+  decidedAt: null,
+  ladderTrace: [],
+  judgeCallsSpent: 0,
+});
+
 export class RunManager {
   private readonly client: HasaClient;
   private readonly scheduler: Scheduler;
@@ -139,6 +150,15 @@ export class RunManager {
   /** Test/CLI helper — resolves once the run reaches a terminal state. */
   async waitFor(runId: string): Promise<void> {
     await this.contexts.get(runId)?.done;
+  }
+
+  private readonly verdictCounters = new Map<string, number>();
+
+  /** Monotonic per run, so repeated judgements of one pair keep distinct files. */
+  private verdictSeq(runId: string): number {
+    const next = (this.verdictCounters.get(runId) ?? 0) + 1;
+    this.verdictCounters.set(runId, next);
+    return next;
   }
 
   private emit(runId: string, event: ArenaEvent): void {
@@ -292,6 +312,7 @@ export class RunManager {
         reviewReason: null,
         requiresHumanReview: false,
         evidenceAxes,
+        ...NO_LADDER(),
       };
     }
     if (survivors.length === 1) {
@@ -305,6 +326,7 @@ export class RunManager {
         reviewReason: "never_compared",
         requiresHumanReview: true,
         evidenceAxes,
+        ...NO_LADDER(),
       };
     }
 
@@ -334,15 +356,18 @@ export class RunManager {
         onProgress: (pair, order) =>
           this.emit(runId, { type: "judge.progress", runId, pair, order, attempt: 1, at: this.now() }),
         onVerdict: async (record) => {
+          // The rung is part of the filename: S2 revisits the same pair and
+          // order several times, and overwriting would erase the repetitions
+          // that are the whole evidence for the rung's conclusion.
           const rawPath = await this.store.writeArtifact(
             runId,
-            `verdicts/${record.pair.replace("|", "-")}-${record.presentationOrder}.json`,
+            `verdicts/${record.pair.replace("|", "-")}-${record.stage}-${record.presentationOrder}-${this.verdictSeq(runId)}.json`,
             `${JSON.stringify({ winnerLabel: record.winnerLabel, confidence: record.confidence, reasons: record.reasons, attempts: record.parseAttempts, raw: record.rawResponses }, null, 2)}\n`,
           );
           this.store.insertVerdict({
             id: randomUUID(),
             runId,
-            judgeModel: req.judge.modelId,
+            judgeModel: record.judgeModel,
             pair: record.pair,
             presentationOrder: record.presentationOrder,
             winnerLabel: record.winnerLabel,
@@ -355,6 +380,12 @@ export class RunManager {
       },
     );
 
+    const ladder = {
+      decidedAt: decision.decidedAt,
+      ladderTrace: decision.trace,
+      judgeCallsSpent: decision.judgeCallsSpent,
+    };
+
     if (decision.winnerLabel === null) {
       return {
         outcome: "no_winner",
@@ -365,6 +396,7 @@ export class RunManager {
         reviewReason: decision.reviewReason,
         requiresHumanReview: decision.reviewReason !== null,
         evidenceAxes,
+        ...ladder,
       };
     }
 
@@ -382,6 +414,7 @@ export class RunManager {
       reviewReason: decision.reviewReason,
       requiresHumanReview: decision.reviewReason !== null,
       evidenceAxes,
+      ...ladder,
     };
   }
 

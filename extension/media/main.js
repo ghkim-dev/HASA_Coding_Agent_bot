@@ -569,10 +569,36 @@
           " ",
           {
             never_compared: "게이트를 통과한 후보가 하나뿐이라 비교가 이루어지지 않았습니다.",
-            unstable_judge: "순서를 뒤집자 judge가 판정을 바꿨습니다. 이 판정은 근거로 쓸 수 없습니다.",
             tie: "후보를 가를 근거가 없습니다.",
             judge_unavailable: "judge가 판정 JSON을 내놓지 못했습니다. 판정이 갈린 것이 아니라 판정 자체가 없습니다.",
+            undecidable: "사다리를 모두 오르고도 판정이 갈렸습니다. 아래 기록이 무엇을 시도했는지 보여줍니다.",
+            budget_exhausted: "judge 호출 예산이 먼저 소진됐습니다. 어려운 판정이라고 확인된 것은 아닙니다 — 예산을 늘리면 결론이 날 수 있습니다.",
           }[result.reviewReason] || result.reviewReason,
+        ]),
+
+      // The trace is what turns "I could not decide" from a shrug into a
+      // report. It is shown whenever the ladder climbed past its first rung,
+      // including on a win, so an expensive verdict is visibly expensive.
+      Array.isArray(result.ladderTrace) &&
+        result.ladderTrace.some((s) => s.stage !== "S1") &&
+        el("details", {}, [
+          el("summary", {
+            text: `판정 사다리 ${result.ladderTrace.length}단계 · judge 호출 ${result.judgeCallsSpent ?? 0}회`,
+          }),
+          el(
+            "ul",
+            { class: "verdicts" },
+            result.ladderTrace.map((step) =>
+              el("li", {}, [
+                el("span", { class: "mono", text: `${step.stage} ${step.pair} ` }),
+                step.winnerLabel ? `→ ${step.winnerLabel}` : `→ ${step.failure || "무승부"}`,
+                el("span", {
+                  class: "muted",
+                  text: ` ${step.detail}${step.agreement === null ? "" : ` (일치율 ${step.agreement.toFixed(2)})`}`,
+                }),
+              ]),
+            ),
+          ),
         ]),
 
       // Separate from the note above: this says what evidence the mode had,

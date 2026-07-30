@@ -89,7 +89,24 @@ export interface CandidateView {
   gates?: GateView[];
 }
 
-export type ReviewReason = "never_compared" | "unstable_judge" | "tie" | "judge_unavailable";
+export type ReviewReason =
+  | "never_compared"
+  | "tie"
+  | "judge_unavailable"
+  | "undecidable"
+  | "budget_exhausted";
+
+export type LadderStage = "S0" | "S1" | "S2" | "S3" | "S4";
+
+export interface LadderStepView {
+  stage: LadderStage;
+  pair: string;
+  winnerLabel: string | null;
+  failure: "unavailable" | "unstable" | null;
+  agreement: number | null;
+  judgeCalls: number;
+  detail: string;
+}
 
 /** What could corroborate the verdict. A property of the mode, not of the run. */
 export type EvidenceAxis = "objective" | "judge";
@@ -104,6 +121,10 @@ export interface RunResultView {
   reviewReason: ReviewReason | null;
   requiresHumanReview: boolean;
   evidenceAxes?: EvidenceAxis[];
+  decidedAt?: LadderStage | null;
+  /** What the ladder attempted. The receipt behind `reviewReason`. */
+  ladderTrace?: LadderStepView[];
+  judgeCallsSpent?: number;
 }
 
 export interface VerdictView {
