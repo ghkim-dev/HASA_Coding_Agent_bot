@@ -36,6 +36,11 @@ before(async () => {
       // contradiction, S2 finds out it was one bad draw.
       { id: "judge/noisy", judgePrefers: "ALPHA", judgeContrarianCalls: 1 },
       { id: "judge/second-opinion", judgePrefers: "ALPHA" },
+      // Position-biased when asked to prefer, but able to name a checkable
+      // difference when asked for one instead.
+      { id: "judge/biased-but-honest", judgeAlwaysPicksSlot: 1, probeMarker: "ALPHA" },
+      // Names a difference and attributes it to the wrong submission.
+      { id: "judge/confabulating", judgeAlwaysPicksSlot: 1, probeMarker: "ALPHA", probeMarkerLies: true },
     ],
   });
 });
@@ -167,6 +172,41 @@ describe("RunManager — response compare", () => {
     const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/content");
     assert.equal(result.decidedAt, "S1");
     assert.equal(result.judgeCallsSpent, 2, "one pair, two presentation orders, nothing more");
+  });
+
+  test("a claim that can be checked outranks an opinion that cannot", async () => {
+    // S1 and S2 both fail here: the judge is position-biased, so repetition
+    // reproduces the bias rather than resolving it. Asked for a verifiable
+    // claim instead of a preference, it names one, and the run decides on the
+    // measurement rather than on the judge's say-so.
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased-but-honest");
+    assert.equal(result.outcome, "winner");
+    assert.equal(result.winnerLabel, "cand-a");
+    assert.equal(result.decidedAt, "S4");
+    assert.equal(result.reviewReason, null);
+    assert.match(result.ladderTrace.find((s) => s.stage === "S4")?.detail ?? "", /검증된 분별 주장/);
+  });
+
+  test("a judge whose stated reason is false of its own pick decides nothing", async () => {
+    // The failure the earlier rungs cannot see: a confident wrong rationale is
+    // indistinguishable from a confident right one under repetition and under a
+    // second opinion alike. Running the claim is what exposes it — and the
+    // right response is to report that nothing was settled, not to take the
+    // half of the answer that happened to be checkable.
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/confabulating");
+    assert.equal(result.outcome, "no_winner");
+    assert.equal(result.reviewReason, "undecidable");
+    assert.match(result.ladderTrace.find((s) => s.stage === "S4")?.detail ?? "", /반대쪽에서 참/);
+  });
+
+  test("undecidable now means the whole ladder ran", async () => {
+    const { result } = await runToCompletion(["cand/alpha", "cand/beta"], "judge/biased");
+    assert.equal(result.reviewReason, "undecidable");
+    assert.deepEqual(
+      [...new Set(result.ladderTrace.map((s) => s.stage))].sort(),
+      ["S1", "S2", "S4"],
+      "every rung available to this run must appear in the receipt",
+    );
   });
 
   test("the review flag names a specific weakness rather than always firing", async () => {

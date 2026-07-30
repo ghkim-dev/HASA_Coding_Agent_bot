@@ -115,6 +115,12 @@ export const JudgeConfigSchema = z.object({
   /** S3 — other judge models consulted when the first one cannot settle it. */
   ensemble: z.array(z.string().min(1)).max(4).default([]),
   /**
+   * S4 — ask the judge for a claim that can be checked instead of an opinion,
+   * then check it. Cheap (one call) and it is the last thing left to try, so it
+   * is on by default.
+   */
+  discriminatingProbe: z.boolean().default(true),
+  /**
    * Ceiling on judge calls for the whole run.
    *
    * A ladder without one turns every ambiguous pair into an open-ended bill.

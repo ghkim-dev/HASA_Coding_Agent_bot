@@ -87,6 +87,17 @@ export interface MockModelProfile {
    * revision is actually an improvement or merely a change.
    */
   refinedReply?: string;
+  /**
+   * S4 probe behaviour: claims the submission containing this marker is the
+   * better one, and backs the claim with a `must_include` check for it.
+   */
+  probeMarker?: string;
+  /**
+   * Same claim, but pointing at the submission that does *not* contain the
+   * marker — a judge whose stated reason is false of the answer it credited.
+   * S4 exists to catch this, so it has to be reproducible.
+   */
+  probeMarkerLies?: boolean;
   /** Emits unparseable output this many times before answering properly. */
   judgeGarbageTimes?: number;
   /**
@@ -203,6 +214,23 @@ function buildReply(profile: MockModelProfile, body: ChatCompletionRequest, coun
       profile.criticSatisfiedBy !== undefined && draft.includes(profile.criticSatisfiedBy);
     return {
       content: JSON.stringify({ defects: satisfied ? [] : profile.criticDefects }),
+      toolCalls: [],
+      reasoning: null,
+    };
+  }
+
+  // The S4 probe also carries submission markers, so it is matched first.
+  if (conversation.includes("기계로 확인 가능한 주장") && profile.probeMarker !== undefined) {
+    const marker = profile.probeMarker;
+    const s1 = between(conversation, "<<<SUBMISSION_1>>>", "<<<END_SUBMISSION_1>>>");
+    const holder = s1.includes(marker) ? 1 : 2;
+    const better = profile.probeMarkerLies ? (holder === 1 ? 2 : 1) : holder;
+    return {
+      content: JSON.stringify({
+        better,
+        why: `${marker} 를 다룬 쪽이 과제를 충족한다`,
+        check: { kind: "must_include", items: [marker] },
+      }),
       toolCalls: [],
       reasoning: null,
     };
