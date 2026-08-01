@@ -507,28 +507,88 @@ cacheKey = `${baseUrl}::${fingerprint(apiKey)}`      // fingerprint = sha256 앞
 
 추가로 `hasa/hasaCapabilityProbe.ts`(lazy + cache), `hasa/hasaTransport.ts`(기존 `HasaClient` 어댑터), `hasa/defaults.ts`를 구현했다.
 
-검증: `pnpm test` 415 pass (기존 277 + 신규 138) / `pnpm typecheck` OK / `pnpm build:extension` OK / `pnpm probe --mock` OK.
+검증: `pnpm test` 705 pass (기존 277 + 신규 428) / `pnpm typecheck` OK / `pnpm build:extension` OK / `pnpm probe --mock` OK.
 기존 Arena·서버·확장 코드는 한 줄도 수정하지 않았다. `src/hasa-client/client.ts`에 `listModelRecords()`가 **추가**됐을 뿐이며 `listModels()`의 동작은 동일하다.
 
-### 11.2 Z1 테스트 계획 (§31)
+### 11.2 Z1 테스트 (§31) — 3계층
 
-전부 `src/testing/mock-hasa.ts` 기반. **실제 키·네트워크 불필요.**
+전부 `src/testing/mock-hasa.ts` 또는 주입된 stub 기반. **실제 키·네트워크 불필요.**
 
-| 테스트 | 대상 |
+파일 이름이 곧 계층이다.
+
+| 계층 | 파일 | 무엇을 잡는가 |
+|---|---|---|
+| **`*.test.ts`** | 계약 | 명세된 동작. "이렇게 쓰면 이렇게 된다" |
+| **`*.edge.test.ts`** | 경계 | 게이트웨이가 실제로 하는 이상한 짓, 그리고 falsy·빈 값·손상된 상태 |
+| **`*.fuzz.test.ts`** | 속성 | 생성된 입력에 대한 불변식. **작성자가 고르지 않은 케이스** |
+| `*.integration.test.ts` | 실물 | `HASA_API_KEY` 있을 때만. CI는 키를 요구하지 않는다 |
+
+#### 필수 커버리지 (§31 요구 항목)
+
+| 테스트 | 위치 |
 |---|---|
-| SecretStorage save / get / delete | `hasaCredentialStore` |
-| 키 누출 방지 (캐시·로그·에러 본문) | 전 계층 |
-| model list 성공 | `hasaModelRegistry` |
-| **빈 model list** | 캐시로 덮어쓰지 않고 빈 목록을 정직하게 보고 |
-| **malformed model list** | `protocol` 오류로 매핑 |
-| network error / timeout | `ProviderError` 코드 |
-| **cache fallback** | 네트워크 실패 → 마지막 성공 목록 |
-| stream parsing (text / tool_call) | `wire.ts` |
-| 401 / 403 / 429 / 503 | `hasaErrorMapper` |
-| abort | `AbortSignal` 전파, 재시도 없음 |
-| **validation: 목록 공개 ≠ 키 유효** | `HasaProvider.validate()` |
+| SecretStorage save / get / delete | `credentials*.test.ts` |
+| 키 누출 방지 (캐시 파일 바이트·로그·에러·검증 결과) | 전 계층 + fuzz 불변식 |
+| model list 성공 / 빈 목록 / malformed | `hasaModelRegistry*.test.ts` |
+| network error / timeout / cache fallback | 〃 |
+| stream parsing (text / reasoning / tool_call) | `wire*.test.ts` |
+| 401 / 403 / 404 / 429 / 503 | `hasaErrorMapper*.test.ts` |
+| abort | `hasaProvider*.test.ts` |
+| **validation: 목록 공개 ≠ 키 유효** | `hasaProvider*.test.ts` |
 
-실제 HASA integration 테스트는 **opt-in**(`HASA_API_KEY` 존재 시에만)으로 분리한다. CI 기본 경로는 키를 요구하지 않는다.
+#### Fuzz / Soak
+
+시드 기반이라 실패는 항상 재현 가능하고, 기본 반복 횟수는 CI가 몇 초에 끝날 만큼 작다.
+
+```bash
+pnpm test                                  # 경계 + 속성 포함, 기본 반복
+pnpm test:fuzz                             # 속성 테스트만
+HASA_FUZZ_ITERATIONS=2000000 pnpm test:fuzz    # soak (수십 분~시간)
+HASA_FUZZ_SEED=13579246 pnpm test:fuzz         # 다른 영역 탐색
+HASA_FUZZ_SEED=24307 HASA_FUZZ_ITERATIONS=1 pnpm test:fuzz   # 실패 재현
+```
+
+실패 메시지에 재현 명령이 그대로 들어간다.
+
+검증되는 주요 불변식:
+
+```text
+streamEvents
+  done은 정확히 1회, 항상 마지막
+  text/reasoning delta를 이으면 원문과 바이트 단위로 동일
+  tool_call_end 앞에는 반드시 같은 index의 start가 있다
+  한 index의 delta를 모두 이으면 그 호출의 arguments와 정확히 같다
+  usage는 최대 1회, 바로 done 앞
+
+HasaProvider
+  chat  → 정상 응답 또는 분류된 ProviderError
+  stream→ done으로 끝나거나 분류된 ProviderError
+  validate → 항상 보고서를 반환. 취소 외에는 예외를 던지지 않는다
+  목록에 빈 ID·중복 ID가 없다
+  어떤 표면에도 API Key가 없다
+```
+
+#### 이 3계층이 실제로 찾아낸 결함 (13건)
+
+계약 테스트만으로는 전부 통과했던 것들이다.
+
+| # | 결함 | 증상 |
+|---|---|---|
+| 1 | `arguments`가 JSON 스칼라(`5`, `null`, `[1,2]`)여도 valid 처리 | `arguments.path`가 조용히 `undefined` |
+| 2 | 게이트웨이가 `"model": ""`을 echo하면 요청 모델 ID가 지워짐 | 라벨이 빈칸 |
+| 3 | 이름보다 먼저 온 tool argument 조각이 delta로 방출되지 않음 | UI는 잘린 인자, 에이전트는 전체 |
+| 4 | **동시 캐시 쓰기가 여러 writer의 내용이 섞인 파일을 게시** | 40회 중 16회 손상, 1회 파싱 불가 |
+| 5 | 고유 임시 파일명 도입 후 Windows에서 rename 실패분이 영구 잔류 | 1회 실행에 265개 잔해 |
+| 6 | 시계 역행 시 캐시가 TTL을 넘겨 계속 fresh | 최대 역행 폭만큼 stale 목록 고정 |
+| 7 | 빈 ID·중복 ID가 모델 선택기까지 도달 | 빈 행, 중복 행 |
+| 8 | 캐시 쓰기 실패가 목록 조회 전체를 실패시킴 | 디스크가 꽉 차면 모델 목록이 안 보임 |
+| 9 | 동일 모델에 대한 동시 `ensure`가 중복 추론 요청 | 패널 하나 열면 10회 요청 |
+| 10 | 로드 중 `invalidate`가 무시되어 폐기한 matrix가 부활 | 잘못된 capability 재적용 |
+| 11 | `save`의 동기 예외가 측정 결과를 유실 | 실제 요청 비용을 낭비 |
+| 12 | `retryable`과 `terminal`이 동시에 참일 수 있음 | 에이전트가 403을 재시도하며 예산 소진 |
+| 13 | **캐시된 목록을 "연결됨"으로 보고** | 장애 진단 중인 사용자에게 정반대를 알림 |
+
+부수적으로 `Object.create(null)`이 에러 매퍼를 크래시시키던 것, `allowed_models: null`이 `"null"`이라는 모델로 표시되던 것, 403의 allowed_models가 이중 매핑에서 유실되던 것도 함께 고쳤다.
 
 ---
 

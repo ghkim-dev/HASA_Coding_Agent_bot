@@ -23,6 +23,7 @@ Arena 위에 **일반 개발자용 Coding Agent**를 올린다. Arena는 그대�
 |---|---|---|
 | Z0 | 구조 분석 + 목표 아키텍처 | 완료 |
 | Z1 | HASA Provider (`src/provider/`) | 완료 — 키 보관, 동적 모델 조회, 스트리밍 정규화, 에러/검증 |
+| — | Z1 테스트 강화 | 완료 — 경계·속성 테스트 428개. 결함 13건 발견·수정 |
 | Z2 | Coding Agent Core (AgentSession / AgentLoop / Approval / Checkpoint) | 예정 |
 | Z3 | VS Code Chat UX (Mode, Diff, 승인) | 예정 |
 | Z4~ | Harness (라우팅 → single / generate_review / best_of_n) | 예정 |
@@ -77,9 +78,23 @@ pnpm arena compare --models "a,b" --judge "c" --prompt "..."   # 한 번에 실�
 pnpm arena --help
 
 pnpm serve          # 오케스트레이터 HTTP 서버 (127.0.0.1 전용)
-pnpm test           # 전체 테스트
+pnpm test           # 전체 테스트 (계약 + 경계 + 속성)
+pnpm test:fuzz      # 속성 테스트만
 pnpm typecheck      # src + extension 타입 검사
 pnpm build:extension # VS Code 확장 컴파일 → extension/out
+```
+
+속성 테스트는 시드 기반이라 실패가 항상 재현됩니다. 기본 반복 횟수는 CI가 몇 초에 끝나도록 작게 잡혀 있고, 필요하면 얼마든지 늘릴 수 있습니다.
+
+```bash
+HASA_FUZZ_ITERATIONS=2000000 pnpm test:fuzz    # soak
+HASA_FUZZ_SEED=24307 HASA_FUZZ_ITERATIONS=1 pnpm test:fuzz   # 보고된 실패 재현
+```
+
+실제 HASA 게이트웨이를 대상으로 한 검사는 opt-in입니다. `HASA_API_KEY`가 없으면 건너뛰므로 CI는 키를 요구하지 않습니다.
+
+```bash
+HASA_API_KEY=… node --test "src/**/*.integration.test.ts"
 ```
 
 VS Code 확장은 [extension/](extension/) 에 있습니다. 신뢰 경계와 화면 구성은 [extension/README.md](extension/README.md) 참조.

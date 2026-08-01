@@ -13,6 +13,7 @@
     "arena": "node --env-file-if-exists=.env src/cli/main.ts",
     "serve": "node --env-file-if-exists=.env src/server/main.ts",
     "test": "node --test \"src/**/*.test.ts\"",
+    "test:fuzz": "node --test \"src/**/*.fuzz.test.ts\"",
     "typecheck": "tsc --noEmit && tsc -p extension --noEmit",
     "build:extension": "tsc -p extension"
   },
