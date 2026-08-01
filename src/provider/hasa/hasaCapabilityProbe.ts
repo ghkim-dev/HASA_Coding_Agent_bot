@@ -95,6 +95,10 @@ export class HasaCapabilityProbe {
   private matrix: CapabilityMatrix | null = null;
   private loaded = false;
   private loading: Promise<CapabilityMatrix | null> | null = null;
+  /** Bumped by `invalidate`, so a load in flight cannot land on top of it. */
+  private generation = 0;
+  /** One live probe per model, however many callers are waiting on it. */
+  private readonly probing = new Map<string, Promise<ModelCapabilities>>();
 
   constructor(opts: HasaCapabilityProbeOptions) {
     this.opts = opts;
@@ -103,10 +107,15 @@ export class HasaCapabilityProbe {
   private async matrixOnce(): Promise<CapabilityMatrix | null> {
     if (this.loaded) return this.matrix;
     if (this.loading === null) {
+      const generation = this.generation;
       this.loading = this.opts
         .load()
         .catch(() => null)
         .then((matrix) => {
+          // `invalidate` ran while this load was outstanding. Storing the
+          // result now would resurrect the matrix the caller just discarded —
+          // and the caller discarded it because they knew it was wrong.
+          if (generation !== this.generation) return matrix;
           this.matrix = matrix;
           this.loaded = true;
           this.loading = null;
@@ -147,15 +156,39 @@ export class HasaCapabilityProbe {
   async ensure(modelId: string, signal?: AbortSignal): Promise<ModelCapabilities> {
     const existing = this.reportOf(await this.matrixOnce(), modelId);
     if (existing !== null) return capabilitiesFromReport(existing);
-    if (this.opts.probe === undefined) return unknownCapabilities();
 
-    const probed = await this.opts.probe([modelId], signal);
-    this.merge(probed);
-    // Persisting is a convenience; failing to persist must not lose the result
-    // we just paid a live request for.
-    await this.opts.save?.(probed).catch(() => {});
-    const report = this.reportOf(this.matrix, modelId);
-    return report === null ? unknownCapabilities() : capabilitiesFromReport(report);
+    const probe = this.opts.probe;
+    if (probe === undefined) return unknownCapabilities();
+
+    // Every probe is a live inference request against a shared GPU backend. Ten
+    // components asking about the same model as a panel opens must not become
+    // ten requests.
+    const inFlight = this.probing.get(modelId);
+    if (inFlight !== undefined) return inFlight;
+
+    const run = (async (): Promise<ModelCapabilities> => {
+      const probed = await probe([modelId], signal);
+      this.merge(probed);
+      try {
+        // Persisting is a convenience; failing to persist must not lose the
+        // result we just paid a live request for. The try covers a synchronous
+        // throw as well as a rejection — a `.catch` alone would miss the former.
+        await this.opts.save?.(probed);
+      } catch {
+        /* the measurement is already merged in memory */
+      }
+      const report = this.reportOf(this.matrix, modelId);
+      return report === null ? unknownCapabilities() : capabilitiesFromReport(report);
+    })();
+
+    this.probing.set(modelId, run);
+    try {
+      return await run;
+    } finally {
+      // Removed on failure too: an outage during one probe must not mark the
+      // model permanently unmeasurable.
+      this.probing.delete(modelId);
+    }
   }
 
   /** Replaces reports for the probed models, keeping everything else. */
@@ -172,6 +205,7 @@ export class HasaCapabilityProbe {
   }
 
   invalidate(): void {
+    this.generation += 1;
     this.matrix = null;
     this.loaded = false;
     this.loading = null;
