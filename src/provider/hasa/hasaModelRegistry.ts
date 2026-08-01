@@ -44,6 +44,25 @@ interface MemoryEntry {
   fetchedAt: string;
 }
 
+/**
+ * What a picker is allowed to be shown.
+ *
+ * A blank id addresses nothing and would render as an empty row; a duplicate is
+ * a gateway misconfiguration, but a list showing the same model twice is our
+ * bug rather than theirs. Ids are filtered, never rewritten — trimming one
+ * would produce an id that does not resolve.
+ */
+function usable(records: readonly TransportModelRecord[]): TransportModelRecord[] {
+  const seen = new Set<string>();
+  const out: TransportModelRecord[] = [];
+  for (const record of records) {
+    if (record.id.trim().length === 0 || seen.has(record.id)) continue;
+    seen.add(record.id);
+    out.push(record);
+  }
+  return out;
+}
+
 export class HasaModelRegistry {
   private readonly transport: ChatTransport;
   private readonly scope: string;
@@ -77,12 +96,15 @@ export class HasaModelRegistry {
   }
 
   private fromCache(entry: CachedModelList): ProviderModel[] {
-    return entry.models.map((m) => this.toModel({ id: m.id, ownedBy: m.ownedBy }));
+    return usable(entry.models).map((m) => this.toModel(m));
   }
 
   async list(opts: ModelListOptions = {}): Promise<ModelListing> {
-    const fresh =
-      this.memory !== null && this.now() - this.memory.fetchedAtMs < this.ttlMs && !opts.refresh;
+    // A negative age means the clock moved backwards — an NTP correction, or a
+    // laptop waking up. Reading that as "very fresh" would pin a stale
+    // catalogue for as long as the skew lasts, so it counts as expired.
+    const age = this.memory === null ? Number.NaN : this.now() - this.memory.fetchedAtMs;
+    const fresh = this.memory !== null && age >= 0 && age < this.ttlMs && !opts.refresh;
     if (fresh && this.memory !== null) {
       return {
         models: this.memory.models,
@@ -133,7 +155,7 @@ export class HasaModelRegistry {
       if (opts.timeoutMs !== undefined) transportOpts.timeoutMs = opts.timeoutMs;
       if (opts.maxRetries !== undefined) transportOpts.maxRetries = opts.maxRetries;
 
-      const records = await this.transport.listModelRecords(transportOpts);
+      const records = usable(await this.transport.listModelRecords(transportOpts));
       const models = records.map((r) => this.toModel(r));
       const nowMs = this.now();
       const fetchedAt = new Date(nowMs).toISOString();
@@ -150,7 +172,14 @@ export class HasaModelRegistry {
           // Ids and owners only. There is no field here that could hold a key.
           models: records.map((r) => ({ id: r.id, ownedBy: r.ownedBy })),
         };
-        await this.cache.write(entry);
+        // The cache is an optimisation and a fallback. A store that cannot
+        // write — a full disk, a read-only volume — must not turn a successful
+        // model list into a failed one.
+        try {
+          await this.cache.write(entry);
+        } catch {
+          this.log.warn("could not persist the model list", { count: models.length });
+        }
       }
       return models;
     })();
