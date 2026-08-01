@@ -12,3 +12,4 @@ export * from "./hasa/hasaModelRegistry.ts";
 export * from "./hasa/hasaCapabilityProbe.ts";
 export * from "./hasa/hasaLiveProbe.ts";
 export * from "./hasa/hasaProvider.ts";
+export * from "./hasa/createProvider.ts";

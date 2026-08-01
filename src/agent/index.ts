@@ -1,5 +1,7 @@
 export * from "./types.ts";
 export * from "./modes.ts";
+export * from "./autoModel.ts";
+export * from "./discoverCommands.ts";
 export * from "./approval.ts";
 export * from "./checkpoint.ts";
 export * from "./tools/registry.ts";
