@@ -4,6 +4,7 @@ import {
   type ChatCompletionRequest,
   type ChatCompletionResponse,
   type AssembledStream,
+  type ModelsResponse,
 } from "../protocol/index.ts";
 import {
   HasaError,
@@ -192,10 +193,13 @@ export class HasaClient {
   }
 
   /**
-   * Model ids come from here or from the environment — never from source.
-   * See docs/compatibility-matrix.md §1.
+   * Full catalogue entries, as the gateway reports them.
+   *
+   * `owned_by` is kept here rather than discarded in `listModels` because a
+   * model picker wants it; nothing in the probe does, which is why the id-only
+   * view stayed the default.
    */
-  async listModels(opts: RequestOptions = {}): Promise<string[]> {
+  async listModelRecords(opts: RequestOptions = {}): Promise<ModelsResponse["data"]> {
     const res = await this.withRetry(
       "GET /models",
       () => this.send("/models", { method: "GET" }, opts),
@@ -213,9 +217,17 @@ export class HasaClient {
         bodySnippet: evidence(parsed.error.message, 200),
       });
     }
-    const ids = parsed.data.data.map((m) => m.id).filter((id) => id.length > 0);
-    this.log.info("listed models", { count: ids.length });
-    return ids;
+    const records = parsed.data.data.filter((m) => m.id.length > 0);
+    this.log.info("listed models", { count: records.length });
+    return records;
+  }
+
+  /**
+   * Model ids come from here or from the environment — never from source.
+   * See docs/compatibility-matrix.md §1.
+   */
+  async listModels(opts: RequestOptions = {}): Promise<string[]> {
+    return (await this.listModelRecords(opts)).map((m) => m.id);
   }
 
   async chat(
