@@ -2,12 +2,14 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
-    // VS Code loads extensions as CommonJS, so this half of the repository is
-    // compiled rather than run through Node's type stripping like src/.
-    "module": "Node16",
-    "moduleResolution": "Node16",
-    "outDir": "out",
-    "rootDir": "src",
+    // esbuild produces the CommonJS bundle VS Code loads; tsc's only job here
+    // is type checking. "Preserve" is the setting that says so — it stops the
+    // compiler reasoning about emit, which is what made importing the ESM
+    // `src/` half an error rather than a bundler's problem.
+    "module": "Preserve",
+    "noEmit": true,
+    // `src/` import specifiers carry `.ts`; esbuild resolves them natively.
+    "allowImportingTsExtensions": true,
     "sourceMap": true,
     "strict": true,
     "noImplicitOverride": true,

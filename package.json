@@ -2,7 +2,7 @@
   "name": "hasa-agent-arena",
   "version": "0.1.0",
   "private": true,
-  "description": "HASA Agent Arena — model runner, isolated workspaces, verifiable evaluator",
+  "description": "HASA Agent Arena \u2014 model runner, isolated workspaces, verifiable evaluator",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -15,7 +15,8 @@
     "test": "node --test \"src/**/*.test.ts\"",
     "test:fuzz": "node --test \"src/**/*.fuzz.test.ts\"",
     "typecheck": "tsc --noEmit && tsc -p extension --noEmit",
-    "build:extension": "tsc -p extension"
+    "build:extension": "node extension/build.mjs",
+    "watch:extension": "node extension/build.mjs --watch"
   },
   "dependencies": {
     "fastify": "^5.2.1",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.125.0",
+    "esbuild": "^0.24.2",
     "typescript": "^5.8.3"
   }
 }
