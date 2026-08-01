@@ -74,6 +74,34 @@ function dedupe(names: string[]): string[] | null {
   return unique.length > 0 ? unique : null;
 }
 
+/**
+ * HASA answers an invalid key with 403, not 401.
+ *
+ * Measured against the live gateway on 2026-08-01:
+ *
+ *   403 {"error":"security_policy_blocked",
+ *        "message":"[경고 1/10] 유효하지 않거나 만료된 API Key를 사용했습니다…",
+ *        "violation_code":"invalid_api_key","strike_count":1,…}
+ *
+ * Every mock in this repository, and the documented error table, said 401. The
+ * consequence of believing them is the exact failure the provider was built to
+ * prevent: 403 means "the key works, this model does not", so a dead key was
+ * about to be reported as connected.
+ *
+ * The gateway also counts strikes — ten of these escalate to timed blocks of
+ * 1, 2, 4, 16 and 32 minutes. Classifying this correctly is what stops
+ * validation from spending three of them per attempt.
+ */
+function isInvalidKey(bodySnippet: string | null): boolean {
+  if (!bodySnippet) return false;
+  return /["']?violation_code["']?\s*:\s*["']invalid_api_key["']/i.test(bodySnippet);
+}
+
+/** A policy block that is not about the key: rate abuse, banned content, … */
+function isPolicyBlock(bodySnippet: string | null): boolean {
+  return bodySnippet !== null && /security_policy_blocked/i.test(bodySnippet);
+}
+
 function forbiddenMessage(allowed: string[] | null): string {
   if (allowed === null || allowed.length === 0) {
     return "이 API Key로는 해당 모델을 사용할 수 없습니다. 다른 모델을 선택해 주세요.";
@@ -105,8 +133,12 @@ export function mapHasaErrorDetailed(err: unknown): MappedHasaError {
       };
     }
 
-    const code = BY_KIND[err.kind];
-    const allowedModels = err.kind === "forbidden" ? parseAllowedModels(err.bodySnippet) : null;
+    // A 403 that names the key rather than the model is an auth failure
+    // wearing a permission failure's status code.
+    const keyRejected = err.kind === "forbidden" && isInvalidKey(err.bodySnippet);
+    const code = keyRejected ? "unauthorized" : BY_KIND[err.kind];
+    const allowedModels =
+      err.kind === "forbidden" && !keyRejected ? parseAllowedModels(err.bodySnippet) : null;
     const init = {
       code,
       // Redacted again on the way through. The transport already masks body
@@ -121,10 +153,27 @@ export function mapHasaErrorDetailed(err: unknown): MappedHasaError {
       allowedModels,
       cause: err,
     };
-    const error =
-      code === "forbidden"
-        ? new ProviderError({ ...init, userMessage: forbiddenMessage(allowedModels) })
-        : new ProviderError(init);
+    let error: ProviderError;
+    if (keyRejected) {
+      error = new ProviderError({
+        ...init,
+        // The gateway escalates: ten rejected keys buy a timed block. Saying so
+        // is the difference between the user fixing the key and the user
+        // retrying until they are locked out.
+        userMessage:
+          "API Key가 유효하지 않거나 만료되었습니다. 키를 다시 확인해 주세요. " +
+          "잘못된 키로 반복 요청하면 일정 시간 차단됩니다.",
+      });
+    } else if (code === "forbidden") {
+      error = new ProviderError({
+        ...init,
+        userMessage: isPolicyBlock(err.bodySnippet)
+          ? "요청이 정책에 의해 차단되었습니다. 잠시 후 다시 시도해 주세요."
+          : forbiddenMessage(allowedModels),
+      });
+    } else {
+      error = new ProviderError(init);
+    }
     return { error, allowedModels };
   }
 

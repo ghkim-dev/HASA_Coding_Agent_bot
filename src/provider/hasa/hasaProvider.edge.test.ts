@@ -395,6 +395,39 @@ describe("validate — reachability is measured, not assumed", () => {
     assert.equal(result.credentialValid, "unknown");
   });
 
+  test("an invalid key is caught even though HASA reports it as 403", async () => {
+    // The live gateway answers a bad key with 403, not 401. Read as a
+    // permission problem it means "the key works, this model does not" — so
+    // without this the provider reports a dead key as connected.
+    const body =
+      '{"error":"security_policy_blocked","message":"[경고 1/10] 유효하지 않거나 만료된 API Key를 사용했습니다.",' +
+      '"violation_code":"invalid_api_key","strike_count":1}';
+    let attempts = 0;
+    const provider = stubProvider({
+      models: async () => [record("a"), record("b"), record("c")],
+      chat: async () => {
+        attempts += 1;
+        throw new HasaError({
+          message: "HASA 403 forbidden",
+          kind: "forbidden",
+          status: 403,
+          retryable: false,
+          terminal: true,
+          bodySnippet: body,
+        });
+      },
+    });
+
+    const result = await provider.validate();
+    assert.equal(result.credentialValid, false);
+    assert.equal(result.error?.code, "unauthorized");
+    assert.match(result.detail, /API Key/);
+
+    // The gateway counts strikes and blocks after ten. Walking the catalogue
+    // would spend three of them to learn what the first request already said.
+    assert.equal(attempts, 1, "a rejected key must stop the probe, not continue it");
+  });
+
   test("all models unrouted leaves the credential unknown", async () => {
     const provider = stubProvider({
       models: async () => [record("a"), record("b")],

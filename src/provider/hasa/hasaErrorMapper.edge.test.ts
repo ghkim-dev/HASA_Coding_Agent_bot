@@ -164,6 +164,85 @@ describe("403 bodies as they actually arrive", () => {
   });
 });
 
+describe("a 403 that is really a 401", () => {
+  // Captured verbatim from open.hasa.re.kr on 2026-08-01, truncated at 200
+  // characters the way body snippets arrive.
+  const INVALID_KEY_BODY =
+    '{"error":"security_policy_blocked","message":"[경고 1/10] 유효하지 않거나 만료된 API Key를 사용했습니다. ' +
+    '10회 초과부터 차단 시간이 1→2→4→16→32분 으로 늘어납니다.","violation_code":"invalid_api_key",' +
+    '"strike_count":1,"offense_count":1,"es…';
+
+  test("the live gateway's invalid-key response is an auth failure", () => {
+    // Every mock here, and the documented error table, said 401. The live
+    // gateway says 403 — and believing the documentation would have reported a
+    // dead key as connected, which is the one thing validate() exists to catch.
+    const { error } = mapHasaErrorDetailed(
+      hasa("forbidden", { status: 403, terminal: true, bodySnippet: INVALID_KEY_BODY }),
+    );
+    assert.equal(error.code, "unauthorized");
+    assert.equal(error.terminal, true);
+    assert.equal(error.retryable, false);
+  });
+
+  test("it tells the user to fix the key, not to pick another model", () => {
+    const { error } = mapHasaErrorDetailed(
+      hasa("forbidden", { status: 403, bodySnippet: INVALID_KEY_BODY }),
+    );
+    assert.match(error.userMessage, /API Key/);
+    assert.doesNotMatch(error.userMessage, /다른 모델을 선택/);
+  });
+
+  test("it warns that retrying gets you blocked", () => {
+    // The gateway counts strikes: ten buy an escalating timed block. A message
+    // that omits this invites the user to retry into a lockout.
+    const { error } = mapHasaErrorDetailed(
+      hasa("forbidden", { status: 403, bodySnippet: INVALID_KEY_BODY }),
+    );
+    assert.match(error.userMessage, /차단/);
+  });
+
+  test("no allow-list is invented from a key rejection", () => {
+    const { allowedModels } = mapHasaErrorDetailed(
+      hasa("forbidden", { status: 403, bodySnippet: INVALID_KEY_BODY }),
+    );
+    assert.equal(allowedModels, null);
+  });
+
+  test("a genuine model-permission 403 is still a model problem", () => {
+    for (const body of [
+      "model access denied for this key",
+      '{"error":"model_not_on_key","allowed_models":["exaone-4.0-32b"]}',
+    ]) {
+      const { error } = mapHasaErrorDetailed(hasa("forbidden", { status: 403, bodySnippet: body }));
+      assert.equal(error.code, "forbidden", body);
+      assert.match(error.userMessage, /모델/);
+    }
+  });
+
+  test("a policy block that is not about the key stays a 403", () => {
+    const { error } = mapHasaErrorDetailed(
+      hasa("forbidden", {
+        status: 403,
+        bodySnippet: '{"error":"security_policy_blocked","violation_code":"rate_abuse"}',
+      }),
+    );
+    assert.equal(error.code, "forbidden");
+    assert.match(error.userMessage, /차단/);
+  });
+
+  test("the marker is matched on the field, not on the word appearing anywhere", () => {
+    // A model-permission 403 whose message happens to discuss invalid keys must
+    // not be reclassified.
+    const { error } = mapHasaErrorDetailed(
+      hasa("forbidden", {
+        status: 403,
+        bodySnippet: '{"error":"model_not_on_key","hint":"this is not an invalid_api_key problem"}',
+      }),
+    );
+    assert.equal(error.code, "forbidden");
+  });
+});
+
 describe("the 403 user message", () => {
   test("lists the usable models when the gateway named them", () => {
     const { error } = mapHasaErrorDetailed(
