@@ -253,7 +253,9 @@ describe("loop detection", () => {
     assert.equal(result.reason, "finished");
   });
 
-  test("a different tool resets the count", async () => {
+  test("a couple of repeats are ordinary work, not a loop", async () => {
+    // Reading a file again after editing it repeats the request and not the
+    // answer.
     const h = harness({
       model: scripted([
         turn({ toolCalls: [call("a", {})] }),
@@ -262,9 +264,57 @@ describe("loop detection", () => {
         turn({ text: "ok" }),
       ]),
       tools: [fakeTool({ name: "a" }), fakeTool({ name: "b" })],
-      budget: { maxRepeatedCalls: 2 },
+      budget: { maxRepeatedCalls: 3 },
     });
     assert.equal((await h.loop.run(h.messages, never)).reason, "finished");
+  });
+
+  test("an A-B-A-B cycle is caught, though no call repeats consecutively", async () => {
+    // The loop that actually happened. A model wrote a file, asked for a diff,
+    // wrote the same file, asked again — each call different from the one
+    // before it — until the step budget ran out. A consecutive counter resets
+    // on every alternation and never fires.
+    const h = harness({
+      model: scripted([
+        turn({ toolCalls: [call("write", {})] }),
+        turn({ toolCalls: [call("diff", {})] }),
+        turn({ toolCalls: [call("write", {})] }),
+        turn({ toolCalls: [call("diff", {})] }),
+        turn({ toolCalls: [call("write", {})] }),
+        turn({ toolCalls: [call("diff", {})] }),
+        turn({ toolCalls: [call("write", {})] }),
+        turn({ toolCalls: [call("diff", {})] }),
+      ]),
+      tools: [fakeTool({ name: "write", risk: "write" }), fakeTool({ name: "diff", result: { ok: false, content: "not a repository" } })],
+      budget: { maxRepeatedCalls: 2, maxSteps: 40 },
+    });
+    const result = await h.loop.run(h.messages, never);
+
+    assert.equal(result.reason, "loop_detected");
+    assert.ok(result.steps < 8, `stopped after ${result.steps} steps, not at the budget`);
+  });
+
+  test("the user is not asked to approve the same write over and over", async () => {
+    // What the cycle looked like from the outside: the same approval modal,
+    // again and again, for a file whose contents had not changed.
+    const { port, requests } = recordingApprovalPort(() => true);
+    const h = harness({
+      model: scripted([
+        turn({ toolCalls: [call("write", { path: "a.ts" })] }),
+        turn({ toolCalls: [call("diff", {})] }),
+        turn({ toolCalls: [call("write", { path: "a.ts" })] }),
+        turn({ toolCalls: [call("diff", {})] }),
+        turn({ toolCalls: [call("write", { path: "a.ts" })] }),
+        turn({ toolCalls: [call("diff", {})] }),
+        turn({ toolCalls: [call("write", { path: "a.ts" })] }),
+      ]),
+      tools: [fakeTool({ name: "write", risk: "write" }), fakeTool({ name: "diff" })],
+      approvalMode: "safe",
+      port,
+      budget: { maxRepeatedCalls: 2, maxSteps: 40 },
+    });
+    await h.loop.run(h.messages, never);
+    assert.ok(requests.length <= 3, `the user was asked ${requests.length} times`);
   });
 
   test("the model is told why it was stopped", async () => {

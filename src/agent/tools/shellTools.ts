@@ -28,14 +28,22 @@ export interface ShellToolOptions {
   workspaceRoot: string;
   /** Commands this workspace permits, keyed by the name the model uses. */
   allowlist: CommandSpec[];
+  /** Whether the workspace is a git repository. Decided once, by the caller. */
+  isGitRepo?: boolean;
   openRepo?: (dir: string) => Promise<GitRepo>;
 }
 
+/**
+ * Only the tools that can actually work here.
+ *
+ * A tool that always fails is worse than an absent one: the model tries it,
+ * reads the refusal, and tries again. Observed in use — `get_git_diff` was
+ * offered in a folder that is not a repository, and the turn became
+ * `create_file` → `get_git_diff` → `create_file` → … until the budget ran out.
+ */
 export function createShellTools(opts: ShellToolOptions): AgentTool[] {
-  const tools: AgentTool[] = [gitDiff(opts)];
-  // A workspace with no declared commands gets no command tool at all, rather
-  // than one that refuses everything. An offered tool that never works costs a
-  // turn every time the model tries it.
+  const tools: AgentTool[] = [];
+  if (opts.isGitRepo !== false) tools.push(gitDiff(opts));
   if (opts.allowlist.length > 0) tools.push(executeCommand(opts));
   return tools;
 }

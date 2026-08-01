@@ -1,5 +1,8 @@
 import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { nullLogger } from "../hasa-client/logger.ts";
 import type { NormalizedToolCall } from "../provider/types.ts";
 import { createRepoFixture, type RepoFixture } from "../testing/repo-fixture.ts";
@@ -19,9 +22,11 @@ import { AGENT_MODES, atMost, type AgentCompletion, type AgentEvent, type AgentM
  */
 
 const fixtures: RepoFixture[] = [];
+const plainDirs: string[] = [];
 
 after(async () => {
   for (const fixture of fixtures) await fixture.dispose();
+  for (const dir of plainDirs) await rm(dir, { recursive: true, force: true });
 });
 
 async function repo(files: Record<string, string> = { "src/a.ts": "export const a = 1;\n" }): Promise<RepoFixture> {
@@ -283,7 +288,10 @@ describe("history", () => {
 
     const systems = session.history().filter((m) => m.role === "system");
     assert.equal(systems.length, 1);
-    assert.equal(systems[0]?.content, MODE_DEFINITIONS.code.systemPrompt);
+    assert.ok(
+      String(systems[0]?.content).startsWith(MODE_DEFINITIONS.code.systemPrompt),
+      "the new mode's prompt leads; what follows is what this workspace cannot do",
+    );
   });
 
   test("clearHistory forgets the conversation and nothing else", async () => {
@@ -297,6 +305,88 @@ describe("history", () => {
     await session.send("one", never);
     session.clearHistory();
     assert.deepEqual(session.history(), []);
+  });
+});
+
+describe("what the workspace cannot do is said out loud", () => {
+  test("a project with no runnable scripts says so, and says what to do instead", async () => {
+    // Observed in use: asked to run the file it had just written, the model
+    // answered "I will run it and show you the result" seven times. It had no
+    // tool that runs anything, and no way to notice that.
+    const fixture = await repo();
+    const model = scripted([turn({ text: "ok" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      mode: "code",
+      logger: nullLogger,
+    });
+    await session.send("실행해줘", never);
+
+    const system = String(session.history().find((m) => m.role === "system")?.content);
+    assert.match(system, /cannot run programs/i);
+    assert.match(system, /command they can run themselves/i);
+  });
+
+  test("a project with scripts gets the command tool and no such warning", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "ok" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      mode: "code",
+      commands: [{ gate: "test", kind: "acceptance", cmd: "pnpm", args: ["run", "test"], timeoutMs: 1000 }],
+      logger: nullLogger,
+    });
+    await session.send("테스트 돌려줘", never);
+
+    const system = String(session.history().find((m) => m.role === "system")?.content);
+    assert.doesNotMatch(system, /cannot run programs/i);
+    const offered = (model.seen[0] as { tools?: Array<{ name: string }> }).tools ?? [];
+    assert.ok(offered.some((t) => t.name === "execute_command"));
+  });
+
+  test("a git repository is offered a diff tool and no warning about undo", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "ok" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    await session.send("확인해줘", never);
+
+    const offered = ((model.seen[0] as { tools?: Array<{ name: string }> }).tools ?? []).map((t) => t.name);
+    assert.ok(offered.includes("get_git_diff"));
+    assert.doesNotMatch(
+      String(session.history().find((m) => m.role === "system")?.content),
+      /not a git repository/i,
+    );
+  });
+
+  test("a plain folder is offered no diff tool, and told undo is unavailable", async () => {
+    // A tool that always fails is worse than an absent one: the model tries it,
+    // reads the refusal, and tries again.
+    const dir = await mkdtemp(join(tmpdir(), "hasa-plain-"));
+    plainDirs.push(dir);
+    const model = scripted([turn({ text: "ok" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: dir,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    await session.send("확인해줘", never);
+
+    const offered = ((model.seen[0] as { tools?: Array<{ name: string }> }).tools ?? []).map((t) => t.name);
+    assert.ok(!offered.includes("get_git_diff"), "it could only ever fail here");
+    assert.match(
+      String(session.history().find((m) => m.role === "system")?.content),
+      /not a git repository/i,
+    );
   });
 });
 

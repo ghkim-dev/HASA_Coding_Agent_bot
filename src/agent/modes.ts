@@ -86,6 +86,39 @@ export function modeDefinition(mode: AgentMode): ModeDefinition {
   return MODE_DEFINITIONS[mode];
 }
 
+/**
+ * What this particular workspace cannot do.
+ *
+ * Written into the prompt because the alternative is what happened in use: a
+ * folder with no runnable scripts, a user asking the agent to run the file it
+ * had just written, and the model answering "I will run it and show you the
+ * result" seven times over. It had no tool that runs anything and no way to
+ * know that — the absence of a tool is not something a model can see and
+ * reason about, only something it can fail to find.
+ *
+ * So the limits are stated, along with what to do instead. A model that can say
+ * "I cannot run this here, but you can with `python calculator.py`" has given
+ * the user something; one that keeps promising has not.
+ */
+export function workspaceNote(available: { canRunCommands: boolean; isGitRepo: boolean }): string {
+  const limits: string[] = [];
+  if (!available.canRunCommands) {
+    limits.push(
+      "- You cannot run programs, tests or any command in this workspace: it declares no runnable\n" +
+        "  scripts, so no such tool exists. If asked to run something, say plainly that you cannot,\n" +
+        "  and tell the user the exact command they can run themselves.",
+    );
+  }
+  if (!available.isGitRepo) {
+    limits.push(
+      "- This workspace is not a git repository. There is no diff to show, and your changes cannot\n" +
+        "  be undone automatically. Be correspondingly careful and say so if it matters.",
+    );
+  }
+  if (limits.length === 0) return "";
+  return `\n\nWhat is not possible here:\n${limits.join("\n")}\n`;
+}
+
 /** Modes that can change the workspace. Used to decide whether to checkpoint. */
 export function modeCanWrite(mode: AgentMode): boolean {
   return MODE_DEFINITIONS[mode].maxRisk !== "read";

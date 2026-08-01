@@ -6,7 +6,7 @@ import type { ProviderMessage } from "../provider/types.ts";
 import { ApprovalManager } from "./approval.ts";
 import { CheckpointManager } from "./checkpoint.ts";
 import { AgentLoop } from "./loop.ts";
-import { modeCanWrite, modeDefinition } from "./modes.ts";
+import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
@@ -56,6 +56,8 @@ export class AgentSession {
   private readonly sandbox: Sandbox;
   private mode: AgentMode;
   private messages: ProviderMessage[] = [];
+  /** Decided once at open: whether undo and diffs are possible at all. */
+  private isGitRepo = false;
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -85,7 +87,12 @@ export class AgentSession {
    */
   static async open(opts: AgentSessionOptions): Promise<AgentSession> {
     const root = await realpath(opts.workspaceRoot);
-    return new AgentSession(root, opts);
+    const session = new AgentSession(root, opts);
+    // Asked once rather than per turn: it decides which tools exist and what
+    // the prompt says is impossible, and both have to be settled before the
+    // model is shown anything.
+    session.isGitRepo = await session.checkpoints.available();
+    return session;
   }
 
   get currentMode(): AgentMode {
@@ -122,6 +129,7 @@ export class AgentSession {
       ...createShellTools({
         workspaceRoot: this.workspaceRoot,
         allowlist: this.opts.commands ?? [],
+        isGitRepo: this.isGitRepo,
       }),
     ]);
     return all.withCeiling(definition.maxRisk);
@@ -136,7 +144,15 @@ export class AgentSession {
    */
   async send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<AgentTurnResult> {
     const definition = modeDefinition(this.mode);
-    const system: ProviderMessage = { role: "system", content: definition.systemPrompt };
+    const system: ProviderMessage = {
+      role: "system",
+      content:
+        definition.systemPrompt +
+        workspaceNote({
+          canRunCommands: (this.opts.commands ?? []).length > 0,
+          isGitRepo: this.isGitRepo,
+        }),
+    };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];
     this.messages.push({ role: "user", content: prompt });
 
