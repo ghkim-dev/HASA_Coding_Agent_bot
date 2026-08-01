@@ -37,7 +37,14 @@ export interface HasaCapabilityProbeOptions {
   /** Reads the stored matrix. Returning null simply means "nothing measured". */
   load: () => Promise<CapabilityMatrix | null>;
   probe?: CapabilityProbeFn;
-  /** Persists a freshly probed matrix. Absent means probe results are in-memory. */
+  /**
+   * Persists everything known after a probe. Absent means results stay in memory.
+   *
+   * Receives the *merged* matrix, not the one model that was just measured. A
+   * file-backed store handed only the delta would overwrite the catalogue's
+   * measurements with a single entry — and the caller cannot merge it back,
+   * because merging is what this class already did.
+   */
   save?: (matrix: CapabilityMatrix) => Promise<void>;
 }
 
@@ -205,7 +212,7 @@ export class HasaCapabilityProbe {
         // Persisting is a convenience; failing to persist must not lose the
         // result we just paid a live request for. The try covers a synchronous
         // throw as well as a rejection — a `.catch` alone would miss the former.
-        await this.opts.save?.(probed);
+        if (this.matrix !== null) await this.opts.save?.(this.matrix);
       } catch {
         /* the measurement is already merged in memory */
       }

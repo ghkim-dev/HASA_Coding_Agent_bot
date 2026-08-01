@@ -195,6 +195,23 @@ bge-reranker     404  (리랭커)
 exaone-4.0-32b   200 → usableModelId
 ```
 
+### 3.2.2 라이브 capability 측정 (2026-08-01)
+
+`HasaCapabilityProbe`에 실제 probe를 연결하고 이 키의 6개 모델을 측정했다. 2026-07-29에 503으로 `unknown`이 남아 있던 `granite-guardian-3.1-8b`가 해소됐다.
+
+| model | chat | stream | tools | coding | maxOutput |
+|---|---|---|---|---|---|
+| `exaone-4.0-32b` | ✅ | ✅ | ✅ | **✅** | 32768 |
+| `gpt-oss-20b` | ✅ | ✅ | ✅ | **✅** | 32768 |
+| `qwen2.5-coder-32b` | ✅ | ✅ | ❌¹ | ❌ | 32768 |
+| `granite-guardian-3.1-8b` | ✅ | ✅ | ❌ | ❌ | 4096 |
+| `bge-m3` | ❌ | — | — | ❌ | — |
+| `bge-reranker-v2-m3` | ❌ | — | — | ❌ | — |
+
+¹ 모델 무능력이 아니라 게이트웨이 설정 (compatibility-matrix.md §8.3).
+
+**agent 루프를 돌릴 수 있는 모델이 2개다.** Z2의 전제가 충족된다.
+
 ### 3.3 이것이 설계에 강제하는 것
 
 1. **모델 목록 성공 ≠ 키 유효.** `/v1/models`가 공개이므로 Provider Validation은 **인증이 필요한 호출을 따로 해야 한다** (Z1 §8).
