@@ -492,18 +492,23 @@ cacheKey = `${baseUrl}::${fingerprint(apiKey)}`      // fingerprint = sha256 앞
 | Z5 | Arena Adapter | `best_of_n` 전략으로 기존 Arena 호출 | Arena 재작성 |
 | Z6 | Adaptive Escalation | LEVEL 0~3 (`decide.ts` S0~S4 재사용) + Synthesis | — |
 
-### 11.1 Z1 상세 (이번 구현)
+### 11.1 Z1 상세 — **완료**
 
-| # | 항목 | 파일 | 완료 기준 |
-|---|---|---|---|
-| 1 | Provider 추상화 | `types.ts`, `openai-compatible/**` | Agent Core가 OpenAI 타입을 보지 않는다 (타입 레벨) |
-| 2 | Credential Store | `credentials.ts`, `hasa/hasaCredentialStore.ts` | save/get/delete + 지문. vscode import 없음 |
-| 3 | Model Registry | `hasa/hasaModelRegistry.ts` | 하드코딩 모델 ID 0개. `GET /v1/models` 동적 조회 |
-| 4 | Model Cache | `modelCache.ts` | 네트워크 실패 시 마지막 성공 목록 반환. 캐시에 키 없음 |
-| 5 | Chat Completion | `hasa/hasaProvider.ts` | 선택 모델로 요청 성공 |
-| 6 | Streaming | `openai-compatible/wire.ts` | `AsyncGenerator<ProviderStreamEvent>` |
-| 7 | Error Mapper | `hasa/hasaErrorMapper.ts` | 401/403/404/429/503/timeout/network 구조화 |
-| 8 | Provider Validation | `hasa/hasaProvider.ts` | **모델 목록 성공 ≠ 키 유효**를 구분 |
+| # | 항목 | 파일 | 완료 기준 | 상태 |
+|---|---|---|---|---|
+| 1 | Provider 추상화 | `types.ts`, `openai-compatible/**` | Agent Core가 OpenAI 타입을 보지 않는다 (타입 레벨) | ✅ |
+| 2 | Credential Store | `credentials.ts`, `hasa/hasaCredentialStore.ts` | save/get/delete + 지문. vscode import 없음 | ✅ |
+| 3 | Model Registry | `hasa/hasaModelRegistry.ts` | 하드코딩 모델 ID 0개. `GET /v1/models` 동적 조회 | ✅ |
+| 4 | Model Cache | `modelCache.ts` | 네트워크 실패 시 마지막 성공 목록 반환. 캐시에 키 없음 | ✅ |
+| 5 | Chat Completion | `hasa/hasaProvider.ts` | 선택 모델로 요청 성공 | ✅ |
+| 6 | Streaming | `openai-compatible/wire.ts` | `AsyncGenerator<ProviderStreamEvent>` | ✅ |
+| 7 | Error Mapper | `hasa/hasaErrorMapper.ts` | 401/403/404/429/503/timeout/network 구조화 | ✅ |
+| 8 | Provider Validation | `hasa/hasaProvider.ts` | **모델 목록 성공 ≠ 키 유효**를 구분 | ✅ |
+
+추가로 `hasa/hasaCapabilityProbe.ts`(lazy + cache), `hasa/hasaTransport.ts`(기존 `HasaClient` 어댑터), `hasa/defaults.ts`를 구현했다.
+
+검증: `pnpm test` 415 pass (기존 277 + 신규 138) / `pnpm typecheck` OK / `pnpm build:extension` OK / `pnpm probe --mock` OK.
+기존 Arena·서버·확장 코드는 한 줄도 수정하지 않았다. `src/hasa-client/client.ts`에 `listModelRecords()`가 **추가**됐을 뿐이며 `listModels()`의 동작은 동일하다.
 
 ### 11.2 Z1 테스트 계획 (§31)
 

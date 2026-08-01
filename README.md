@@ -15,6 +15,18 @@
 | 3 | VS Code Extension | 완료 (타입검사·빌드 검증. UI 동작은 수동 확인 필요) |
 | 4 | 판정 사다리 (S0~S4) + 개선 루프 | 완료 — [docs/redesign-plan.md](docs/redesign-plan.md) |
 
+### HASA Coding Agent (확장 중)
+
+Arena 위에 **일반 개발자용 Coding Agent**를 올린다. Arena는 그대로 유지되며, 어려운 작업에서만 호출되는 Harness 내부의 evaluation engine이 된다. 설계 전체는 [docs/hasa-coding-agent-architecture.md](docs/hasa-coding-agent-architecture.md).
+
+| Phase | 범위 | 상태 |
+|---|---|---|
+| Z0 | 구조 분석 + 목표 아키텍처 | 완료 |
+| Z1 | HASA Provider (`src/provider/`) | 완료 — 키 보관, 동적 모델 조회, 스트리밍 정규화, 에러/검증 |
+| Z2 | Coding Agent Core (AgentSession / AgentLoop / Approval / Checkpoint) | 예정 |
+| Z3 | VS Code Chat UX (Mode, Diff, 승인) | 예정 |
+| Z4~ | Harness (라우팅 → single / generate_review / best_of_n) | 예정 |
+
 ## 요구 사항
 
 - **Node 24 이상** — 빌드 단계 없이 `.ts`를 직접 실행한다 (네이티브 타입 스트리핑)
