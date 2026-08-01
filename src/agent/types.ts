@@ -1,0 +1,245 @@
+import type { NormalizedToolCall, ProviderChatRequest } from "../provider/types.ts";
+
+/**
+ * The Coding Agent's contract.
+ *
+ * The Arena already runs a tool-calling loop (`src/runtime/agentRunner.ts`), and
+ * this is not a rewrite of it. The difference is one thing, and it changes
+ * everything downstream: an Arena candidate works inside a throwaway worktree
+ * nobody is watching, so it may act freely. This agent works in the user's own
+ * repository, so every action that writes or executes has to be something the
+ * user agreed to.
+ *
+ * That is why `ToolRisk` exists, why `ApprovalPort` is a required dependency
+ * rather than an option, and why the loop takes a checkpoint before the first
+ * write instead of after the last one.
+ */
+
+// ---------------------------------------------------------------------------
+// Modes
+// ---------------------------------------------------------------------------
+
+/**
+ * What the user asked for, expressed as what the agent is allowed to do.
+ *
+ * A mode is not a prompt preset. It decides which tools exist at all, which is
+ * the only form of restriction a model cannot talk its way past: ARCHITECT
+ * cannot accidentally edit a file because no writing tool was ever offered to
+ * it. Cline's Plan/Act split works the same way, and for the same reason.
+ */
+export type AgentMode = "code" | "architect" | "debug" | "ask";
+
+export const AGENT_MODES: readonly AgentMode[] = ["code", "architect", "debug", "ask"];
+
+export interface ModeDefinition {
+  mode: AgentMode;
+  /** Shown in the mode picker. */
+  label: string;
+  /** One line, in the user's language. */
+  description: string;
+  /** Highest risk this mode may reach. Tools above it are not registered. */
+  maxRisk: ToolRisk;
+  systemPrompt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+/**
+ * How much trust a call needs.
+ *
+ * Ordered, and the order is load-bearing: a mode's ceiling and an approval
+ * policy are both expressed as "up to this level".
+ */
+export type ToolRisk = "read" | "write" | "execute" | "dangerous";
+
+export const RISK_ORDER: Record<ToolRisk, number> = {
+  read: 0,
+  write: 1,
+  execute: 2,
+  dangerous: 3,
+};
+
+export function atMost(risk: ToolRisk, ceiling: ToolRisk): boolean {
+  return RISK_ORDER[risk] <= RISK_ORDER[ceiling];
+}
+
+export interface ToolResult {
+  /** False means the call was refused or failed; the agent sees why and retries. */
+  ok: boolean;
+  /** What the model is told. Truncated by the tool, not by the loop. */
+  content: string;
+  /** Workspace-relative paths this call changed. */
+  changedFiles?: string[];
+}
+
+export interface ToolContext {
+  /** Absolute, realpath-resolved workspace root. */
+  workspaceRoot: string;
+  signal: AbortSignal;
+}
+
+export interface AgentTool {
+  name: string;
+  /** Given to the model. Says what the tool does and when to reach for it. */
+  description: string;
+  risk: ToolRisk;
+  /** JSON Schema for the arguments. Passed to the provider untouched. */
+  parameters: Record<string, unknown>;
+  /**
+   * One sentence a person can approve or refuse, in their language.
+   *
+   * Not the raw arguments. "Run `pnpm test`" is a decision; a JSON blob is a
+   * puzzle, and a user who cannot read the request quickly will either approve
+   * everything or stop using the agent.
+   */
+  summarize(args: Record<string, unknown>): string;
+  /** A diff or excerpt shown before approving a write. Absent when there is nothing to show. */
+  preview?(args: Record<string, unknown>, ctx: ToolContext): Promise<string | null>;
+  execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Approval
+// ---------------------------------------------------------------------------
+
+/**
+ * How much the user wants to be asked.
+ *
+ * `safe` is the default and stays the default. The product is aimed at people
+ * whose repository this actually is, and the failure modes are asymmetric: an
+ * agent that asks too often is annoying, and one that asks too rarely is the
+ * reason they stop trusting it.
+ */
+export type ApprovalMode = "safe" | "balanced" | "auto";
+
+export type ApprovalOutcome =
+  /** The policy allowed it without asking. */
+  | "auto"
+  /** The user said yes. */
+  | "granted"
+  /** The user said no. */
+  | "denied"
+  /** No policy permits this, so nobody was asked. */
+  | "blocked";
+
+export interface ApprovalRequest {
+  toolName: string;
+  risk: ToolRisk;
+  /** The tool's own one-sentence summary. */
+  summary: string;
+  /** A diff or excerpt, when the tool can produce one. */
+  preview: string | null;
+}
+
+/**
+ * Whoever answers approval requests.
+ *
+ * A port rather than a class: in the extension it is a modal, in the CLI a
+ * prompt, in a test a function. The loop must not know which.
+ */
+export interface ApprovalPort {
+  request(req: ApprovalRequest): Promise<boolean>;
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+export type AgentStopReason =
+  /** The model produced an answer and stopped. */
+  | "finished"
+  | "max_steps"
+  | "max_model_calls"
+  | "max_tool_calls"
+  | "timeout"
+  | "aborted"
+  /** The user refused something the agent needed. */
+  | "denied"
+  /** The model asked for the same thing repeatedly and was getting nowhere. */
+  | "loop_detected"
+  | "error";
+
+export type AgentEvent =
+  | { type: "step"; step: number }
+  | { type: "text"; delta: string }
+  | { type: "reasoning"; delta: string }
+  | { type: "tool_start"; callId: string; name: string; risk: ToolRisk; summary: string }
+  | { type: "tool_approval"; callId: string; name: string; outcome: ApprovalOutcome }
+  | { type: "tool_end"; callId: string; name: string; ok: boolean; detail: string }
+  | { type: "checkpoint"; ref: string | null; detail: string }
+  | { type: "changed"; files: string[] }
+  | { type: "done"; reason: AgentStopReason; summary: string }
+  | { type: "error"; code: string; message: string };
+
+// ---------------------------------------------------------------------------
+// Budgets
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything that stops the loop running forever.
+ *
+ * Four separate limits because they fail differently. A model that calls tools
+ * productively for 200 steps has not misbehaved but has stopped being
+ * affordable; one that calls the same tool with the same arguments five times
+ * has. `timeoutMs` catches a gateway that never answers, and `signal` is the
+ * user changing their mind — the only one of the four that is not a failure.
+ */
+export interface AgentBudget {
+  maxSteps: number;
+  maxModelCalls: number;
+  maxToolCalls: number;
+  timeoutMs: number;
+  /** Identical tool + identical arguments this many times in a row ends the run. */
+  maxRepeatedCalls: number;
+}
+
+export const DEFAULT_BUDGET: AgentBudget = {
+  maxSteps: 40,
+  maxModelCalls: 40,
+  maxToolCalls: 120,
+  timeoutMs: 10 * 60_000,
+  maxRepeatedCalls: 3,
+};
+
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
+
+export interface AgentTurnResult {
+  reason: AgentStopReason;
+  /** What the agent says it did, in the user's language. */
+  summary: string;
+  changedFiles: string[];
+  /** Restores the workspace to its state before this turn, when one was taken. */
+  checkpointRef: string | null;
+  steps: number;
+  modelCalls: number;
+  toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * What the loop needs from a model.
+ *
+ * Narrower than `LlmProvider` on purpose. The loop needs one thing — turn a
+ * conversation into either text or tool calls — and depending on the whole
+ * provider would let a gateway concern leak into it.
+ */
+export interface AgentModel {
+  readonly modelId: string;
+  complete(
+    request: Omit<ProviderChatRequest, "modelId">,
+    signal: AbortSignal,
+  ): Promise<AgentCompletion>;
+}
+
+export interface AgentCompletion {
+  text: string;
+  reasoning: string;
+  toolCalls: NormalizedToolCall[];
+  inputTokens: number;
+  outputTokens: number;
+}
