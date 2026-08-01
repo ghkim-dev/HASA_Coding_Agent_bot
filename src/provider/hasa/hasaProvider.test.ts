@@ -320,6 +320,7 @@ describe("HasaProvider — errors", () => {
   test("the JSON form is safe to hand to a webview", () => {
     const json = new ProviderError({ code: "forbidden", detail: "some detail" }).toJSON();
     assert.deepEqual(Object.keys(json).sort(), [
+      "allowedModels",
       "code",
       "detail",
       "httpStatus",

@@ -158,6 +158,23 @@ export class HasaProvider extends OpenAiCompatibleProvider {
       };
     }
 
+    // A list can come back from cache even when the refresh failed — that is
+    // the whole point of the cache. It is not evidence that the gateway
+    // answered, and reporting "connected" on the strength of it would tell the
+    // user the opposite of the truth at the moment they are diagnosing an
+    // outage.
+    if (listing.source !== "network") {
+      return {
+        endpointReachable: false,
+        credentialValid: "unknown",
+        modelCount: listing.models.length,
+        probedModelId: null,
+        allowedModels: null,
+        detail: listing.warning ?? "HASA에 연결하지 못했습니다. 이전에 조회한 모델 목록을 표시합니다.",
+        error: null,
+      };
+    }
+
     if (listing.models.length === 0) {
       return {
         endpointReachable: true,
