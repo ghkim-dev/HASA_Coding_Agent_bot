@@ -208,7 +208,31 @@ exaone-4.0-32b   200 → usableModelId
 | `bge-m3` | ❌ | — | — | ❌ | — |
 | `bge-reranker-v2-m3` | ❌ | — | — | ❌ | — |
 
-¹ 모델 무능력이 아니라 게이트웨이 설정 (compatibility-matrix.md §8.3).
+¹ 모델 무능력이 아니라 게이트웨이 설정 (compatibility-matrix.md §8.3). **텍스트 프로토콜로 사용 가능** — §3.2.3.
+
+### 3.2.3 tool calling이 막힌 모델 (텍스트 프로토콜)
+
+`qwen2.5-coder-32b`는 이 키에서 가장 강한 코딩 모델이고, 그 배포가 `--tool-call-parser` 없이 떠서 모든 `tool_choice`를 거부한다. 모델은 할 수 있는데 우리가 설정할 수 없는 플래그가 막는다 — 제외는 틀린 답이다.
+
+그래서 도구를 **프롬프트에 기술하고 응답 텍스트에서 호출을 읽는다.** Cline이 native tool call을 못 쓸 때 하는 방식이고, XML을 쓰는 이유는 코딩 에이전트에 특유하다: 도구 인자가 대개 소스 코드인데 **JSON 이스케이프(따옴표·백슬래시·개행)가 모델이 가장 자주 틀리는 것**이다. 태그로 구분하면 코드가 그대로 실린다.
+
+```
+<apply_patch>
+<path>src/a.ts</path>
+<find>
+  const x = 1;
+</find>
+<replace>
+  const x = 2;
+</replace>
+</apply_patch>
+```
+
+`tool_calls`를 거부하는 게이트웨이는 assistant 메시지의 `tool_calls`와 `role:"tool"`도 같은 이유로 거부하므로, **대화 자체를 원래의 평문으로 되돌려서** 보낸다.
+
+**루프 위쪽은 아무것도 달라지지 않는다.** 동일한 `NormalizedToolCall`이 나오므로 승인·체크포인트·도구 레지스트리는 두 경로를 구분하지 못한다. 그것이 서버 설정 문제를 기능 부재로 번지지 않게 하는 속성이다.
+
+실측: 막힌 모델이 실제 수정을 완료한다 (4 step, 실패 0회).
 
 **agent 루프를 돌릴 수 있는 모델이 2개다.** Z2의 전제가 충족된다.
 

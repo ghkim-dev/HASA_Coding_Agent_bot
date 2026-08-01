@@ -34,6 +34,8 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 
 되돌리기는 언제든 가능하다 — 에이전트는 첫 수정 **전에** 작업 상태를 보관한다.
 
+게이트웨이가 tool calling을 막아 둔 모델도 쓸 수 있다. 그런 모델에는 도구를 프롬프트로 설명하고 응답 텍스트에서 호출을 읽어낸다(Cline과 같은 방식). 에이전트 루프는 두 경로를 구분하지 못하므로, 서버 설정 문제가 기능 부재로 번지지 않는다.
+
 ## 현재 상태
 
 | Phase | 범위 | 상태 |
@@ -110,6 +112,7 @@ pnpm arena --help
 pnpm serve          # 오케스트레이터 HTTP 서버 (127.0.0.1 전용)
 pnpm test           # 전체 테스트 (계약 + 경계 + 속성)
 pnpm test:fuzz      # 속성 테스트만
+pnpm test:extension # 실제 VS Code를 띄워 확장을 검증 (F5를 자동화한 것)
 pnpm typecheck      # src + extension 타입 검사
 pnpm build:extension # VS Code 확장 컴파일 → extension/out
 ```
