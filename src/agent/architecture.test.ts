@@ -111,15 +111,26 @@ describe("safety cannot be edited away by accident", () => {
     // `readdir` and `stat` are used to walk; reading a file's *contents* is the
     // sandbox's job, because that is where the symlink and credential checks
     // live.
-    // The lookbehind is the point: `sandbox.readFile` is the approved route and
-    // a bare `readFile` is the one that skips the symlink and credential
-    // checks. Matching the bare call only is what makes the rule mean anything.
-    const bareRead = /(?<!sandbox\.)\breadFile\s*\(/;
-    const bareWrite = /(?<!sandbox\.)\bwriteFile\s*\(/;
+    // Checked at the import, not at the call site. An identifier named
+    // `readFile` may be an injected port — `discoverCommands` takes one so it
+    // can be tested without a filesystem — and matching those would push the
+    // rule towards being switched off. What must not appear is the real thing:
+    // `readFile`/`writeFile` out of `node:fs`, which skip the symlink and
+    // credential checks that are the sandbox's whole purpose.
+    //
+    // `readdir`, `stat` and `realpath` stay allowed: walking a directory and
+    // resolving a root are not reading a file's contents.
+    const fsImport = /import\s*\{([^}]*)\}\s*from\s*["']node:fs(?:\/promises)?["']/g;
     for (const file of production) {
-      if (file.name === "checkpoint.ts") continue; // git only
-      assert.doesNotMatch(file.text, bareRead, `${file.name} reads a file without the sandbox`);
-      assert.doesNotMatch(file.text, bareWrite, `${file.name} writes a file without the sandbox`);
+      for (const match of file.text.matchAll(fsImport)) {
+        const imported = (match[1] ?? "").split(",").map((s) => s.trim().split(/\s+as\s+/)[0]?.trim() ?? "");
+        for (const name of ["readFile", "writeFile", "appendFile", "rm", "unlink"]) {
+          assert.ok(
+            !imported.includes(name),
+            `${file.name} imports ${name} from node:fs; file access belongs to the sandbox`,
+          );
+        }
+      }
     }
   });
 
