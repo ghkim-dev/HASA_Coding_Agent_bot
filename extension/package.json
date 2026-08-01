@@ -1,7 +1,7 @@
 {
   "name": "hasa-agent-arena",
-  "displayName": "HASA Agent Arena",
-  "description": "Compare HASA models on the same task in isolated git worktrees, and apply the winner only after you have reviewed it.",
+  "displayName": "HASA Coding Agent",
+  "description": "HASA API Key 하나로 코드를 읽고, 수정하고, 검증하는 VS Code 코딩 에이전트. 모델 비교(Arena)도 함께 제공합니다.",
   "version": "0.1.0",
   "private": true,
   "publisher": "hasa-arena",
@@ -9,11 +9,29 @@
     "vscode": "^1.90.0",
     "node": ">=20"
   },
-  "categories": ["AI", "Other"],
+  "categories": [
+    "AI",
+    "Other"
+  ],
   "main": "./out/extension.js",
   "activationEvents": [],
   "contributes": {
     "commands": [
+      {
+        "command": "hasa.chat",
+        "title": "HASA: Coding Agent 열기",
+        "category": "HASA"
+      },
+      {
+        "command": "hasa.setApiKey",
+        "title": "HASA: API Key 설정",
+        "category": "HASA"
+      },
+      {
+        "command": "hasa.clearApiKey",
+        "title": "HASA: 저장된 API Key 삭제",
+        "category": "HASA"
+      },
       {
         "command": "hasaArena.compare",
         "title": "HASA: Compare Models",
@@ -36,7 +54,7 @@
       }
     ],
     "configuration": {
-      "title": "HASA Agent Arena",
+      "title": "HASA",
       "properties": {
         "hasaArena.orchestratorPath": {
           "type": "string",
@@ -59,13 +77,28 @@
           "type": "number",
           "default": 30,
           "description": "Timeout for orchestrator HTTP requests made by the extension."
+        },
+        "hasaAgent.approvalMode": {
+          "type": "string",
+          "enum": [
+            "safe",
+            "balanced",
+            "auto"
+          ],
+          "default": "safe",
+          "markdownDescription": "에이전트가 언제 물어볼지 정합니다.\n\n- `safe` — 읽기는 자동, 파일 수정과 명령 실행은 매번 확인 (권장)\n- `balanced` — 파일 수정도 자동, 명령 실행만 확인\n- `auto` — 확인하지 않음\n\n어떤 값에서도 위험한 작업은 실행되지 않습니다."
+        },
+        "hasaAgent.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "HASA 게이트웨이 주소. 비워 두면 `https://open.hasa.re.kr/v1` 를 사용합니다. 일반적으로 변경할 필요가 없습니다."
         }
       }
     }
   },
   "scripts": {
-    "build": "tsc -p .",
-    "watch": "tsc -p . --watch"
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

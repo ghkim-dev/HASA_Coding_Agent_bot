@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import * as vscode from "vscode";
+import { AgentController } from "./agent/controller.js";
 import { Orchestrator, OrchestratorError } from "./orchestrator.js";
 import { ArenaPanel } from "./panel.js";
 import type { Problem, RunSnapshot, StartRunRequest, WebviewMessage, WebviewState } from "./types.js";
@@ -8,17 +9,38 @@ import type { Problem, RunSnapshot, StartRunRequest, WebviewMessage, WebviewStat
 const SECRET_KEY = "hasaArena.apiKey";
 
 let orchestrator: Orchestrator | null = null;
+let agent: AgentController | null = null;
 let log: vscode.OutputChannel;
 let currentRunId: string | null = null;
 let currentBaseCommit: string | null = null;
 let unsubscribe: (() => void) | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 
+/**
+ * Two surfaces, one key.
+ *
+ * `hasa.chat` is the Coding Agent and is what a developer opens. `hasaArena.*`
+ * is the model comparison, unchanged, and becomes the Harness's evaluation
+ * engine later — §3 of the brief is explicit that it is kept, not replaced.
+ *
+ * They share `SECRET_KEY`, so a user who connected once has connected for both.
+ */
 export function activate(context: vscode.ExtensionContext): void {
-  log = vscode.window.createOutputChannel("HASA Agent Arena");
+  log = vscode.window.createOutputChannel("HASA Coding Agent");
   context.subscriptions.push(log);
+  agent = new AgentController(context, log);
 
   context.subscriptions.push(
+    // The Coding Agent.
+    vscode.commands.registerCommand("hasa.chat", () => agent?.open()),
+    vscode.commands.registerCommand("hasa.setApiKey", () => agent?.setApiKey()),
+    vscode.commands.registerCommand("hasa.clearApiKey", async () => {
+      await agent?.clearApiKey();
+      vscode.window.showInformationMessage("HASA API Key를 삭제했습니다.");
+      await pushState(context);
+    }),
+
+    // The Arena, unchanged.
     vscode.commands.registerCommand("hasaArena.compare", () => openPanel(context)),
     vscode.commands.registerCommand("hasaArena.setApiKey", () => promptForApiKey(context)),
     vscode.commands.registerCommand("hasaArena.clearApiKey", async () => {
@@ -33,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
       unsubscribe?.();
       if (refreshTimer) clearInterval(refreshTimer);
       orchestrator?.dispose();
+      agent?.dispose();
     }),
   );
 }
@@ -41,6 +64,7 @@ export function deactivate(): void {
   unsubscribe?.();
   if (refreshTimer) clearInterval(refreshTimer);
   orchestrator?.dispose();
+  agent?.dispose();
 }
 
 /**
