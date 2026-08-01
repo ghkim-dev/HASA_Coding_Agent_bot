@@ -1,8 +1,38 @@
-# HASA Agent Arena
+# HASA Coding Agent
 
-여러 HASA 모델에게 **같은 작업을 독립적으로** 시키고, 객관 지표와 blind pairwise judge로 비교한 뒤, **사용자가 승인한 경우에만** 결과를 적용하는 시스템.
+**HASA API Key 하나로** 코드를 읽고, 수정하고, 검증하는 VS Code 코딩 에이전트.
 
-핵심은 "모델 여러 개를 연결하는 기능"이 아니라 **공정한 후보 생성과 검증 가능한 평가**다.
+```
+HASA Coding Agent
+├─ CODE       기능 구현, 수정, 리팩터링
+├─ ARCHITECT  분석과 변경 계획 (코드는 건드리지 않음)
+├─ DEBUG      원인 탐색과 수정
+└─ ASK        코드 설명과 질문
+```
+
+사용자가 아는 것은 세 가지뿐이다 — **API Key 입력, Mode 선택, 자연어로 요청.** 모델은 `✨ Auto`가 고르고, 파일이 바뀌기 전에는 반드시 물어본다.
+
+그 아래에 **HASA Agent Arena**가 있다. 여러 모델에게 같은 작업을 독립적으로 시키고 객관 지표와 blind pairwise judge로 비교하는 엔진으로, 앞으로 어려운 작업에서만 Harness가 호출한다. 지금도 별도 명령으로 그대로 쓸 수 있다.
+
+## 빠르게 써보기 (VS Code)
+
+```bash
+pnpm install
+pnpm build:extension
+```
+
+VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA: Coding Agent 열기** → API Key 입력.
+
+기본값은 안전한 쪽이다.
+
+| | Safe (기본) | Balanced | Auto |
+|---|---|---|---|
+| 파일 읽기 | 자동 | 자동 | 자동 |
+| 파일 수정 | **확인** | 자동 | 자동 |
+| 명령 실행 | **확인** | **확인** | 자동 |
+| 위험한 작업 | 차단 | 차단 | 차단 |
+
+되돌리기는 언제든 가능하다 — 에이전트는 첫 수정 **전에** 작업 상태를 보관한다.
 
 ## 현재 상태
 
@@ -25,7 +55,7 @@ Arena 위에 **일반 개발자용 Coding Agent**를 올린다. Arena는 그대�
 | Z1 | HASA Provider (`src/provider/`) | 완료 — 키 보관, 동적 모델 조회, 스트리밍 정규화, 에러/검증 |
 | — | Z1 테스트 강화 | 완료 — 경계·속성·구조 테스트 565개. 결함 16건 + 성능 1건 발견·수정 |
 | Z2 | Coding Agent Core (AgentSession / AgentLoop / Approval / Checkpoint) | 완료 — CODE·ARCHITECT·DEBUG·ASK 4개 Mode, 승인·되돌리기 동작 |
-| Z3 | VS Code Chat UX (Mode, Diff, 승인) | 예정 |
+| Z3 | VS Code Chat UX (Mode, Diff, 승인) | 완료 — 확장이 `src/`를 in-process로 사용 |
 | Z4~ | Harness (라우팅 → single / generate_review / best_of_n) | 예정 |
 
 ## 요구 사항
@@ -192,4 +222,4 @@ critic은 judge와도, 후보와도 달라야 한다. 같으면 개선이 채점
 - judge는 도구도 파일 접근도 없고, **모델명·후보 라벨을 보지 못한다**.
 - **`no_winner`는 정상 결과다.** 억지 승자를 만들지 않는다.
 - **사람 검토 요청은 시도 기록과 함께 온다.** 모든 분기에서 켜지는 플래그는 신호가 아니라 책임 전가다.
-- API Key는 오케스트레이터 프로세스 밖으로 나가지 않는다. 로그·SSE·HTTP 응답 어디에도 실리지 않는다.
+- API Key는 **VS Code SecretStorage와 그것을 읽는 프로세스 밖으로 나가지 않는다.** Coding Agent는 확장 호스트에서, Arena는 오케스트레이터 프로세스에서 키를 쥔다. 어느 쪽도 webview·로그·SSE·HTTP 응답에 키를 싣지 않으며, webview가 받는 것은 `hasApiKey: true` 뿐이다. 빌드·테스트 자식 프로세스에는 allowlist로 만든 환경변수만 전달되므로 키를 상속하지 않는다.
