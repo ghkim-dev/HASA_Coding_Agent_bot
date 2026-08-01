@@ -24,7 +24,7 @@ Arena 위에 **일반 개발자용 Coding Agent**를 올린다. Arena는 그대�
 | Z0 | 구조 분석 + 목표 아키텍처 | 완료 |
 | Z1 | HASA Provider (`src/provider/`) | 완료 — 키 보관, 동적 모델 조회, 스트리밍 정규화, 에러/검증 |
 | — | Z1 테스트 강화 | 완료 — 경계·속성·구조 테스트 565개. 결함 16건 + 성능 1건 발견·수정 |
-| Z2 | Coding Agent Core (AgentSession / AgentLoop / Approval / Checkpoint) | 예정 |
+| Z2 | Coding Agent Core (AgentSession / AgentLoop / Approval / Checkpoint) | 완료 — CODE·ARCHITECT·DEBUG·ASK 4개 Mode, 승인·되돌리기 동작 |
 | Z3 | VS Code Chat UX (Mode, Diff, 승인) | 예정 |
 | Z4~ | Harness (라우팅 → single / generate_review / best_of_n) | 예정 |
 

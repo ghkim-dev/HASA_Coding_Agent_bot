@@ -551,11 +551,40 @@ cacheKey = `${baseUrl}::${fingerprint(apiKey)}`      // fingerprint = sha256 앞
 |---|---|---|---|
 | **Z0** | 분석 + 설계 | 이 문서 | 대규모 리팩터링 |
 | **Z1** | **HASA Provider** | `src/provider/**` + 단위 테스트 | AgentLoop, Harness, Arena 수정, Webview 재설계 |
-| Z2 | Coding Agent Core | `src/agent/**`. Single Agent가 CODE/ASK Mode로 동작 | Harness 라우팅, 다중 모델 |
+| **Z2** | **Coding Agent Core — 완료** | `src/agent/**`. Mode 4개, 승인, 체크포인트/되돌리기 | Harness 라우팅, 다중 모델 |
 | Z3 | VS Code Chat UX | Mode 선택, Approval/Diff, 설정 화면, ✨Auto 표시 | Arena UI 제거(병존시킨다) |
 | Z4 | Harness | TaskAnalyzer/Router/Strategy + `single` / `generate_review` | Adaptive escalation |
 | Z5 | Arena Adapter | `best_of_n` 전략으로 기존 Arena 호출 | Arena 재작성 |
 | Z6 | Adaptive Escalation | LEVEL 0~3 (`decide.ts` S0~S4 재사용) + Synthesis | — |
+
+### 11.0 Z2 상세 — **완료**
+
+```
+src/agent/
+  types.ts            계약 — Mode, ToolRisk, 승인, 이벤트, 예산
+  modes.ts            CODE / ARCHITECT / DEBUG / ASK
+  approval.ts         Safe / Balanced / Auto 정책
+  checkpoint.ts       git stash 기반 스냅샷·되돌리기
+  tools/registry.ts   Mode 상한으로 필터링되는 도구 목록
+  tools/fileTools.ts  list_files, read_file, search_files, create_file, apply_patch
+  tools/shellTools.ts execute_command (allowlist), get_git_diff
+  loop.ts             AgentLoop
+  session.ts          AgentSession (대화 + 체크포인트 소유)
+  hasaModel.ts        Provider ↔ Loop 결합
+```
+
+핵심 설계 결정 4가지.
+
+1. **Mode는 프롬프트 이전에 능력 경계다.** ARCHITECT는 쓰기 도구를 승인 단계에서 막는 게 아니라 **애초에 받지 않는다**. 모델이 볼 수 있는 제약은 언젠가 협상 대상이 된다.
+2. **`dangerous`는 어떤 Mode도 허용하지 않고, 묻지도 않는다.** 사용자가 예라고 답할 수 있는 질문은 언젠가 잘못된 순간에 예라고 답하게 된다.
+3. **체크포인트는 첫 쓰기 *전*에 잡는다.** 마지막 쓰기 후가 아니라 — 그 사이에 크래시가 나는 순간이 정확히 스냅샷이 필요한 때다.
+4. **거부는 예외가 아니라 결과다.** sandbox 위반, 명령 거부, 없는 도구, 사용자의 "아니오" — 전부 모델이 읽고 다르게 시도할 수 있는 텍스트로 돌아간다.
+
+예산 4개(`maxSteps`/`maxModelCalls`/`maxToolCalls`/`timeoutMs`)와 **동일 도구·동일 인자 반복 감지**를 분리한 이유는 실패 양상이 다르기 때문이다 — 앞의 넷은 비용 문제이고, 반복은 진전이 없다는 신호다.
+
+Arena의 `sandbox.ts`(realpath 감금)·`commands.ts`(allowlist)·`git.ts`(stash)를 **수정 없이 재사용**했다. 새로 만든 것은 *언제* 부르는지와 *누구에게 먼저 묻는지*다.
+
+`git.ts`에는 사용자 저장소용 연산 3개를 추가했다: `changedPaths`(인덱스 미변경 목록), `diffAgainst`(인덱스 미변경 diff), `discardTo`/`restore`(되돌리기). 되돌리기는 **HEAD가 움직였으면 거부**하고, **stash를 top이 아니라 identity로 찾는다** — 사용자가 그 사이에 stash를 만들었다면 top을 pop하는 순간 남의 작업을 잃는다.
 
 ### 11.1 Z1 상세 — **완료**
 
