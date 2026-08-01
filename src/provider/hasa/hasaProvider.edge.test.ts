@@ -177,6 +177,59 @@ describe("listModels", () => {
   });
 });
 
+describe("listModels — scaling", () => {
+  test("a large catalogue does not cost quadratic time", async () => {
+    // Looking a model up by scanning the matrix made this n² — the picker does
+    // two lookups per entry, against a matrix of the same size. Measured before
+    // the fix: 9 ms at 1 000 models, 112 ms at 4 000. HASA lists 19 today, so
+    // the bound below is loose on purpose; what it catches is the shape of the
+    // curve, not a few milliseconds.
+    const COUNT = 20_000;
+    const ids = Array.from({ length: COUNT }, (_, i) => `vendor/model-${i}`);
+    const capabilities = new HasaCapabilityProbe({
+      load: async () => ({
+        schemaVersion: 1,
+        probeVersion: "probe-v1",
+        probedAt: "2026-07-29T00:00:00.000Z",
+        baseUrl: "https://open.hasa.re.kr/v1",
+        keyFingerprint: "sha256:000000000000",
+        models: ids.map((id) => ({
+          modelId: id,
+          capabilities: { chat: { status: "pass" as const } },
+          limits: { observedContextWindow: null, observedMaxOutputTokens: 4096, latencyMs: null },
+          eligibility: { responseCompare: true, codingAgent: false, patchMode: false, judge: false, reasons: [] },
+        })),
+      }),
+    });
+
+    const provider = new HasaProvider({
+      apiKey: "hasa-live-key-0123456789abcdef",
+      transport: {
+        baseUrl: "https://open.hasa.re.kr/v1",
+        listModelRecords: async () => ids.map((id) => record(id)),
+        chat: async () => {
+          throw new Error("not used");
+        },
+        streamChunks: async function* () {
+          throw new Error("not used");
+        },
+      },
+      cache: new MemoryModelCache(),
+      modelCacheTtlMs: 0,
+      capabilities,
+      logger: nullLogger,
+    });
+
+    const started = performance.now();
+    const listing = await provider.listModels();
+    const elapsed = performance.now() - started;
+
+    assert.equal(listing.models.length, COUNT);
+    assert.equal(listing.models[COUNT - 1]?.capabilities.chat, true, "the last entry is annotated too");
+    assert.ok(elapsed < 2_000, `listing ${COUNT} models took ${Math.round(elapsed)}ms`);
+  });
+});
+
 describe("chat — degenerate requests", () => {
   test("an empty conversation is sent as such, not rejected locally", async () => {
     // Whether an empty message list is legal is the gateway's call, not ours;
