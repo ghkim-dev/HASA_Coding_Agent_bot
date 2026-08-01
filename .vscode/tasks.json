@@ -10,17 +10,21 @@
       "command": "pnpm",
       "args": ["build:extension"],
       "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": ["$tsc"],
+      // esbuild's output is not tsc's, so there is nothing for $tsc to parse.
+      // Type errors are reported by the separate "typecheck" task.
+      "problemMatcher": [],
       "group": "build",
       "presentation": { "reveal": "silent", "panel": "shared" }
     },
     {
+      // esbuild, not tsc: the extension is bundled now, and `tsc -p extension`
+      // is type-check only (noEmit) so watching it would produce nothing.
       "label": "watch extension",
       "type": "shell",
       "command": "pnpm",
-      "args": ["exec", "tsc", "-p", "extension", "--watch"],
+      "args": ["run", "watch:extension"],
       "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": ["$tsc-watch"],
+      "problemMatcher": [],
       "isBackground": true,
       "presentation": { "reveal": "never", "panel": "dedicated" }
     },
