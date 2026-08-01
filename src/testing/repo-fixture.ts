@@ -19,6 +19,8 @@ export interface RepoFixture {
   read(path: string): Promise<string>;
   commit(message: string): Promise<string>;
   status(): Promise<string[]>;
+  /** Raw git, for a test that needs to act as the user rather than the agent. */
+  git(args: string[]): Promise<string>;
   dispose(): Promise<void>;
 }
 
@@ -77,6 +79,7 @@ export async function createRepoFixture(
     },
     status: async () =>
       (await git(dir, ["status", "--porcelain"])).split("\n").map((l) => l.trim()).filter(Boolean),
+    git: (args) => git(dir, args),
     dispose: async () => {
       await rm(dir, { recursive: true, force: true, maxRetries: 5 }).catch(() => {});
     },

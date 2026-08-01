@@ -233,6 +233,113 @@ export class GitRepo {
     const { stdout } = await git(this.root, ["rev-parse", ref]);
     return stdout.trim();
   }
+
+  /**
+   * Paths that differ from HEAD, including untracked ones.
+   *
+   * Unlike `changedFiles`, this touches nothing. That matters when the
+   * repository is the user's own: `changedFiles` stages intent-to-add first,
+   * which is harmless in a throwaway worktree and an unasked-for mutation of
+   * someone's index anywhere else.
+   */
+  async changedPaths(): Promise<string[]> {
+    const { stdout } = await git(this.root, ["status", "--porcelain", "-z", "--untracked-files=all"]);
+    const out: string[] = [];
+    // NUL-separated so a path with a space or a newline in it stays one entry.
+    // A rename emits the new path, then the old one as its own record.
+    const records = stdout.split("\0").filter((r) => r.length > 0);
+    for (let i = 0; i < records.length; i += 1) {
+      const record = records[i] ?? "";
+      if (record.length < 4) continue;
+      const status = record.slice(0, 2);
+      out.push(record.slice(3));
+      // `R` and `C` carry a second path (the source) in the following record.
+      if (status.startsWith("R") || status.startsWith("C")) i += 1;
+    }
+    return out;
+  }
+
+  /**
+   * Diff against a ref without touching the index.
+   *
+   * `diffWorktree` stages intent-to-add first so that new files appear in the
+   * patch. That is right for a throwaway worktree and wrong for a repository
+   * the user is working in — showing them a diff should not modify their index.
+   * Untracked files are therefore absent from this patch; the caller lists them
+   * separately from `changedPaths`.
+   */
+  async diffAgainst(ref = "HEAD"): Promise<string> {
+    const { stdout } = await git(this.root, ["diff", "--no-color", "--no-ext-diff", ref]);
+    return stdout;
+  }
+
+  /**
+   * Returns the working tree to `baseCommit`, discarding everything since.
+   *
+   * The most destructive thing in this codebase, so it is also the most
+   * suspicious. It refuses outright when HEAD has moved: a commit made since
+   * the checkpoint is somebody's deliberate work, and no undo is worth
+   * throwing that away silently.
+   *
+   * `clean -fd` without `-x` on purpose — ignored files (`node_modules`, build
+   * output, `.env`) are not this operation's business and re-creating them can
+   * cost minutes.
+   */
+  async discardTo(baseCommit: string): Promise<void> {
+    const head = await this.headSha();
+    if (head !== baseCommit) {
+      throw new GitError(
+        `HEAD moved from ${baseCommit} to ${head} since the checkpoint; refusing to discard`,
+        "",
+        null,
+      );
+    }
+    await git(this.root, ["checkout", "--", "."]);
+    await git(this.root, ["clean", "-fd"]);
+  }
+
+  /**
+   * Where a stash commit currently sits in the stash list, or null.
+   *
+   * The list is a stack: anything stashed afterwards shifts our entry down. So
+   * the position has to be looked up by identity every time, never assumed.
+   */
+  async findStash(sha: string): Promise<number | null> {
+    const { stdout } = await git(this.root, ["stash", "list", "--format=%H"]);
+    const index = stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .indexOf(sha);
+    return index === -1 ? null : index;
+  }
+
+  /**
+   * Discards work done since the checkpoint and brings back what was stashed.
+   *
+   * Two details, both learned the hard way.
+   *
+   * `git stash pop` will not take a commit id — it wants a `stash@{n}` entry,
+   * because it has to drop the entry afterwards. `snapshot` returns an id, so
+   * the entry has to be found first.
+   *
+   * And it must be found by identity rather than assumed to be `stash@{0}`. The
+   * stash is a stack shared with the user: if they stashed something of their
+   * own while the agent was working, popping the top would hand them our undo
+   * and lose their work.
+   */
+  async restore(stashRef: string, baseCommit: string): Promise<void> {
+    const index = await this.findStash(stashRef);
+    if (index === null) {
+      throw new GitError(
+        `the checkpoint ${stashRef} is no longer in the stash list; refusing to restore something else`,
+        "",
+        null,
+      );
+    }
+    await this.discardTo(baseCommit);
+    await git(this.root, ["stash", "pop", `stash@{${index}}`]);
+  }
 }
 
 /** Path of a candidate's worktree. Kept short — Windows has a 260-char limit. */
