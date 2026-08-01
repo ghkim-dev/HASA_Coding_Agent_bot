@@ -53,18 +53,31 @@ describe("what each mode needs", () => {
 });
 
 describe("ranking", () => {
-  test("a model measured as unable is dropped, not ranked last", () => {
-    // Offering it would mean offering something known not to work.
+  test("a model that cannot chat is dropped — there is nothing to talk to", () => {
     const ranked = rankModels(REAL_CATALOGUE, "code").map((m) => m.id);
-    assert.ok(!ranked.includes("qwen2.5-coder-32b"), "measured tools:false must not be offered for CODE");
     assert.ok(!ranked.includes("bge-m3"));
+    assert.ok(!ranked.includes("bge-reranker-v2-m3"));
+  });
+
+  test("a model whose gateway blocks tool calls is still offered, but ranked below", () => {
+    // It is the deployment that refuses, not the model, and the text protocol
+    // works. Dropping it would make the best coding model on the key unusable
+    // because of a flag nobody here can set.
+    const ranked = rankModels(REAL_CATALOGUE, "code").map((m) => m.id);
+    assert.deepEqual(ranked, [
+      "exaone-4.0-32b",
+      "gpt-oss-20b",
+      "qwen2.5-coder-32b",
+      "granite-guardian-3.1-8b",
+    ]);
   });
 
   test("the name is never the evidence", () => {
-    // `qwen2.5-coder-32b` is the most coder-sounding id in the catalogue and is
-    // excluded, because the gateway was measured to refuse its tool calls.
+    // `qwen2.5-coder-32b` is the most coder-sounding id in the catalogue and
+    // still ranks below two models with measured native tool calling.
     const ranked = rankModels(REAL_CATALOGUE, "code").map((m) => m.id);
-    assert.deepEqual(ranked, ["exaone-4.0-32b", "gpt-oss-20b"]);
+    assert.ok(ranked.indexOf("qwen2.5-coder-32b") > ranked.indexOf("exaone-4.0-32b"));
+    assert.ok(ranked.indexOf("qwen2.5-coder-32b") > ranked.indexOf("gpt-oss-20b"));
   });
 
   test("a chat-only mode keeps the chat models the coding mode dropped", () => {
@@ -107,6 +120,7 @@ describe("choosing without measuring", () => {
     const choice = await chooseModel({ models: REAL_CATALOGUE, mode: "code" });
     assert.equal(choice?.modelId, "exaone-4.0-32b");
     assert.equal(choice?.confidence, "measured");
+    assert.equal(choice?.toolProtocol, "native");
     assert.match(choice?.reason ?? "", /확인된/);
   });
 
@@ -114,6 +128,37 @@ describe("choosing without measuring", () => {
     // Better than silently selecting a reranker.
     const embeddingsOnly = REAL_CATALOGUE.slice(0, 2);
     assert.equal(await chooseModel({ models: embeddingsOnly, mode: "code" }), null);
+  });
+
+  test("falls back to the text protocol when no model calls tools natively", async () => {
+    // The whole reason the fallback exists: this key's strongest coding model
+    // sits behind a gateway started without --tool-call-parser.
+    const blocked = REAL_CATALOGUE.filter((m) => m.capabilities.coding !== true);
+    const choice = await chooseModel({ models: blocked, mode: "code" });
+
+    assert.equal(choice?.modelId, "qwen2.5-coder-32b");
+    assert.equal(choice?.toolProtocol, "text");
+    assert.equal(choice?.confidence, "measured", "the gateway's refusal is a measurement, not a gap");
+    assert.match(choice?.reason ?? "", /호환 방식/);
+  });
+
+  test("the text fallback costs no probes — the answer is already known", async () => {
+    let probes = 0;
+    const blocked = REAL_CATALOGUE.filter((m) => m.capabilities.coding !== true);
+    await chooseModel({
+      models: blocked,
+      mode: "code",
+      measure: async () => {
+        probes += 1;
+        return unknownCapabilities();
+      },
+    });
+    assert.equal(probes, 0);
+  });
+
+  test("native is always preferred when both are available", async () => {
+    const choice = await chooseModel({ models: REAL_CATALOGUE, mode: "code" });
+    assert.equal(choice?.toolProtocol, "native");
   });
 
   test("an empty catalogue yields nothing", async () => {

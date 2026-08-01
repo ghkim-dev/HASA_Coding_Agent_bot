@@ -1,4 +1,5 @@
 import type { LlmProvider, ProviderChatRequest } from "../provider/types.ts";
+import { createTextToolModel } from "./textToolModel.ts";
 import type { AgentCompletion, AgentModel } from "./types.ts";
 
 /**
@@ -40,4 +41,27 @@ export function createAgentModel(opts: HasaAgentModelOptions): AgentModel {
       };
     },
   };
+}
+
+/**
+ * Builds the model a choice calls for.
+ *
+ * The two paths differ only in how a tool call is expressed, and the loop
+ * cannot tell them apart — which is the property that makes a blocked gateway
+ * a configuration detail rather than a missing feature.
+ */
+export function createModelFor(opts: {
+  provider: LlmProvider;
+  modelId: string;
+  toolProtocol: "native" | "text";
+  temperature?: number;
+  maxOutputTokens?: number;
+}): AgentModel {
+  const shared = {
+    provider: opts.provider,
+    modelId: opts.modelId,
+    ...(opts.temperature === undefined ? {} : { temperature: opts.temperature }),
+    ...(opts.maxOutputTokens === undefined ? {} : { maxOutputTokens: opts.maxOutputTokens }),
+  };
+  return opts.toolProtocol === "text" ? createTextToolModel(shared) : createAgentModel(shared);
 }

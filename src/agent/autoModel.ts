@@ -28,6 +28,14 @@ export type ModelConfidence =
 export interface AutoModelChoice {
   modelId: string;
   confidence: ModelConfidence;
+  /**
+   * How this model will be asked to call tools.
+   *
+   * `text` is not a lesser model — it is a model whose *deployment* refuses
+   * tool calls. `qwen2.5-coder-32b` is the strongest coding model on the
+   * measured key and its gateway was started without `--tool-call-parser`.
+   */
+  toolProtocol: "native" | "text";
   /** One sentence, in the user's language, for the model picker's subtitle. */
   reason: string;
 }
@@ -41,6 +49,20 @@ export function requirementFor(mode: AgentMode): "coding" | "chat" {
 
 function stateFor(capabilities: ModelCapabilities, requirement: "coding" | "chat"): Tristate {
   return requirement === "coding" ? capabilities.coding : capabilities.chat;
+}
+
+/**
+ * Whether a model can drive the loop at all, and how.
+ *
+ * A model that chats can be given tools in the prompt and have its calls read
+ * back out of the text, so "cannot call tools" stops meaning "cannot code".
+ * What still rules a model out is being unable to hold a conversation — an
+ * embedding model has nothing to talk to.
+ */
+export function protocolFor(capabilities: ModelCapabilities): "native" | "text" | null {
+  if (capabilities.coding === true) return "native";
+  if (capabilities.chat === false) return null;
+  return "text";
 }
 
 /**
@@ -59,7 +81,14 @@ export function rankModels(models: readonly ProviderModel[], mode: AgentMode): P
   const position = new Map(models.map((m, i) => [m.id, i]));
 
   return models
-    .filter((model) => stateFor(model.capabilities, requirement) !== false)
+    .filter((model) =>
+      // Native tool calling is preferred, never required: a model whose
+      // deployment blocks it is still driven through the text protocol. Only a
+      // model that cannot chat is out, because there is nothing to talk to.
+      requirement === "chat"
+        ? model.capabilities.chat !== false
+        : protocolFor(model.capabilities) !== null,
+    )
     .sort((a, b) => {
       const rank = (m: ProviderModel): number => (stateFor(m.capabilities, requirement) === true ? 0 : 1);
       if (rank(a) !== rank(b)) return rank(a) - rank(b);
@@ -104,11 +133,17 @@ export async function chooseModel(opts: ChooseModelOptions): Promise<AutoModelCh
 
   const alreadyFits = ranked.find((m) => stateFor(m.capabilities, requirement) === true);
   if (alreadyFits !== undefined) {
-    return {
-      modelId: alreadyFits.id,
-      confidence: "measured",
-      reason: reasonFor(requirement, "measured"),
-    };
+    return decided(alreadyFits.id, "measured", requirement, "native");
+  }
+
+  // A model measured as chatting but not calling tools is a settled answer, not
+  // an open question: the text protocol works and there is nothing left to
+  // probe. Reaching for it before spending requests is the point.
+  if (requirement === "coding") {
+    const viaText = ranked.find(
+      (m) => m.capabilities.chat === true && m.capabilities.toolCalling === false,
+    );
+    if (viaText !== undefined) return decided(viaText.id, "measured", requirement, "text");
   }
 
   if (opts.measure !== undefined) {
@@ -132,7 +167,10 @@ export async function chooseModel(opts: ChooseModelOptions): Promise<AutoModelCh
         continue;
       }
       if (stateFor(capabilities, requirement) === true) {
-        return { modelId: model.id, confidence: "measured", reason: reasonFor(requirement, "measured") };
+        return decided(model.id, "measured", requirement, "native");
+      }
+      if (requirement === "coding" && capabilities.chat === true && capabilities.toolCalling === false) {
+        return decided(model.id, "measured", requirement, "text");
       }
     }
   }
@@ -141,20 +179,38 @@ export async function chooseModel(opts: ChooseModelOptions): Promise<AutoModelCh
   // saying so is more useful than refusing to start.
   const fallback = ranked[0];
   if (fallback === undefined) return null;
-  return {
-    modelId: fallback.id,
-    confidence: "unverified",
-    reason: reasonFor(requirement, "unverified"),
-  };
+  return decided(
+    fallback.id,
+    "unverified",
+    requirement,
+    protocolFor(fallback.capabilities) ?? "text",
+  );
 }
 
-function reasonFor(requirement: "coding" | "chat", confidence: ModelConfidence): string {
-  if (confidence === "measured") {
+function decided(
+  modelId: string,
+  confidence: ModelConfidence,
+  requirement: "coding" | "chat",
+  toolProtocol: "native" | "text",
+): AutoModelChoice {
+  return { modelId, confidence, toolProtocol, reason: reasonFor(requirement, confidence, toolProtocol) };
+}
+
+function reasonFor(
+  requirement: "coding" | "chat",
+  confidence: ModelConfidence,
+  toolProtocol: "native" | "text",
+): string {
+  if (confidence === "unverified") {
     return requirement === "coding"
-      ? "코드를 직접 수정할 수 있는 것으로 확인된 모델입니다."
-      : "질문에 답할 수 있는 것으로 확인된 모델입니다.";
+      ? "아직 확인되지 않은 모델입니다. 코드 수정이 예상대로 되지 않으면 다른 모델을 선택해 주세요."
+      : "아직 확인되지 않은 모델입니다.";
   }
-  return requirement === "coding"
-    ? "아직 확인되지 않은 모델입니다. 코드 수정이 예상대로 되지 않으면 다른 모델을 선택해 주세요."
-    : "아직 확인되지 않은 모델입니다.";
+  if (requirement !== "coding") return "질문에 답할 수 있는 것으로 확인된 모델입니다.";
+  // The distinction is worth surfacing: the text path is slightly slower and
+  // occasionally needs a second attempt, and a user who sees that once
+  // understands it rather than wondering.
+  return toolProtocol === "native"
+    ? "코드를 직접 수정할 수 있는 것으로 확인된 모델입니다."
+    : "코드를 수정할 수 있습니다. 이 모델은 서버 설정상 도구 호출이 막혀 있어 호환 방식으로 동작합니다.";
 }

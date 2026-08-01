@@ -9,4 +9,6 @@ export * from "./tools/fileTools.ts";
 export * from "./tools/shellTools.ts";
 export * from "./loop.ts";
 export * from "./session.ts";
+export * from "./textTools.ts";
+export * from "./textToolModel.ts";
 export * from "./hasaModel.ts";
