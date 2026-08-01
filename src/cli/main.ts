@@ -205,7 +205,9 @@ function bar(label: string, status: string): string {
 }
 
 async function listModels(): Promise<number> {
-  const registry = await ModelRegistry.load();
+  // Scoped to the configured gateway: a matrix measured elsewhere describes
+  // other software, and listing its models here would be a lie.
+  const registry = await ModelRegistry.load(undefined, { baseUrl: clientFromEnv().baseUrl });
   const entries = registry.list();
   if (entries.length === 0) {
     process.stdout.write("capability matrix가 없습니다. 먼저 `pnpm probe`를 실행하세요.\n");
@@ -289,7 +291,7 @@ export async function main(argv: string[]): Promise<number> {
         scheduler,
         store,
         hub,
-        registry: await ModelRegistry.load(),
+        registry: await ModelRegistry.load(undefined, { baseUrl: client.baseUrl }),
         logger: log,
       });
       runId = await codeRuns.create({

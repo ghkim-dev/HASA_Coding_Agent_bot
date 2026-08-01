@@ -24,7 +24,9 @@ async function main(): Promise<void> {
   const scheduler = getScheduler();
   const runs = new RunManager({ client, scheduler, store, hub, logger: log.child("run") });
 
-  const registry = await ModelRegistry.load();
+  // Scoped to the gateway this process actually talks to, so a matrix left
+  // behind by `probe --mock` cannot put phantom models in the picker.
+  const registry = await ModelRegistry.load(undefined, { baseUrl: client.baseUrl });
   const staleness = registry.staleness(Date.now());
   if (staleness.length > 0) {
     log.warn("capability matrix is missing or stale — code runs cannot verify model eligibility", {

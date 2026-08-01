@@ -28,10 +28,30 @@ export class ModelRegistry {
     return new ModelRegistry(null);
   }
 
-  static async load(path = ".arena/capability-matrix.json"): Promise<ModelRegistry> {
+  /**
+   * Loads a matrix, and refuses one that measured a different gateway.
+   *
+   * Without the check, a `--mock` run leaves `mock/full` and friends in the
+   * default path and the model picker offers them against the live gateway.
+   * Every candidate then 403s and the run ends `no_winner` for a reason that
+   * has nothing to do with any model — which is exactly what happened, and
+   * cost an afternoon to recognise.
+   *
+   * `baseUrl` is the discriminator rather than the key fingerprint: a user may
+   * legitimately rotate keys against the same gateway and keep the
+   * measurements, but a matrix from another host measured other software.
+   */
+  static async load(
+    path = ".arena/capability-matrix.json",
+    expect: { baseUrl?: string } = {},
+  ): Promise<ModelRegistry> {
     try {
       const parsed = CapabilityMatrixSchema.safeParse(JSON.parse(await readFile(path, "utf8")));
-      return new ModelRegistry(parsed.success ? parsed.data : null);
+      if (!parsed.success) return new ModelRegistry(null);
+      if (expect.baseUrl !== undefined && parsed.data.baseUrl !== expect.baseUrl) {
+        return new ModelRegistry(null);
+      }
+      return new ModelRegistry(parsed.data);
     } catch {
       return new ModelRegistry(null);
     }

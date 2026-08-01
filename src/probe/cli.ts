@@ -43,18 +43,30 @@ Model ids are never hardcoded: they come from --models, HASA_MODELS, or the
 live GET /v1/models response.
 `.trim();
 
+export const REAL_MATRIX_PATH = ".arena/capability-matrix.json";
+/**
+ * Mock results go somewhere else, and that is not tidiness.
+ *
+ * A synthetic run writes model ids that exist only in `testing/mock-hasa.ts`.
+ * Landing them on the real path means the Arena's model picker offers
+ * `mock/full` against the live gateway, every candidate 403s, and the run ends
+ * `no_winner` for a reason that has nothing to do with any model. It happened.
+ */
+export const MOCK_MATRIX_PATH = ".arena/capability-matrix.mock.json";
+
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     models: null,
     deep: false,
     vision: false,
     mock: false,
-    out: ".arena/capability-matrix.json",
+    out: REAL_MATRIX_PATH,
     baseUrl: null,
     concurrency: 2,
     timeoutMs: 120_000,
     help: false,
   };
+  let outWasGiven = false;
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const next = (): string => {
@@ -78,6 +90,7 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--json":
         args.out = next();
+        outWasGiven = true;
         break;
       case "--base-url":
         args.baseUrl = next();
@@ -96,6 +109,9 @@ function parseArgs(argv: string[]): Args {
         throw new Error(`unknown flag: ${flag}`);
     }
   }
+  // A synthetic run must not land on the path everything else reads. An
+  // explicit `--json` still wins: someone who names a file has said where.
+  if (args.mock && !outWasGiven) args.out = MOCK_MATRIX_PATH;
   return args;
 }
 
