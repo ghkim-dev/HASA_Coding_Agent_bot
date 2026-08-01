@@ -22,3 +22,6 @@ extension/out/
 # editor / OS
 .DS_Store
 Thumbs.db
+
+# downloaded VS Code for extension host tests
+.vscode-test/

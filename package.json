@@ -16,7 +16,8 @@
     "test:fuzz": "node --test \"src/**/*.fuzz.test.ts\"",
     "typecheck": "tsc --noEmit && tsc -p extension --noEmit",
     "build:extension": "node extension/build.mjs",
-    "watch:extension": "node extension/build.mjs --watch"
+    "watch:extension": "node extension/build.mjs --watch",
+    "test:extension": "node extension/build.mjs && node extension/test/runTest.js"
   },
   "dependencies": {
     "fastify": "^5.2.1",
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.125.0",
+    "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.24.2",
     "typescript": "^5.8.3"
   }
