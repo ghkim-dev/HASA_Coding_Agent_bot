@@ -507,7 +507,7 @@ cacheKey = `${baseUrl}::${fingerprint(apiKey)}`      // fingerprint = sha256 앞
 
 추가로 `hasa/hasaCapabilityProbe.ts`(lazy + cache), `hasa/hasaTransport.ts`(기존 `HasaClient` 어댑터), `hasa/defaults.ts`를 구현했다.
 
-검증: `pnpm test` 705 pass (기존 277 + 신규 428) / `pnpm typecheck` OK / `pnpm build:extension` OK / `pnpm probe --mock` OK.
+검증: `pnpm test` 842 pass (기존 277 + 신규 565) / `pnpm typecheck` OK / `pnpm build:extension` OK / `pnpm probe --mock` OK.
 기존 Arena·서버·확장 코드는 한 줄도 수정하지 않았다. `src/hasa-client/client.ts`에 `listModelRecords()`가 **추가**됐을 뿐이며 `listModels()`의 동작은 동일하다.
 
 ### 11.2 Z1 테스트 (§31) — 3계층
@@ -568,27 +568,33 @@ HasaProvider
   어떤 표면에도 API Key가 없다
 ```
 
-#### 이 3계층이 실제로 찾아낸 결함 (13건)
+#### 이 3계층이 실제로 찾아낸 결함 (16건 + 성능 1건)
 
-계약 테스트만으로는 전부 통과했던 것들이다.
+**전부 계약 테스트를 통과하던 것들이다.** 어느 것도 예외를 던지지 않았고, 그럴듯한 결과를 반환했다.
 
-| # | 결함 | 증상 |
-|---|---|---|
-| 1 | `arguments`가 JSON 스칼라(`5`, `null`, `[1,2]`)여도 valid 처리 | `arguments.path`가 조용히 `undefined` |
-| 2 | 게이트웨이가 `"model": ""`을 echo하면 요청 모델 ID가 지워짐 | 라벨이 빈칸 |
-| 3 | 이름보다 먼저 온 tool argument 조각이 delta로 방출되지 않음 | UI는 잘린 인자, 에이전트는 전체 |
-| 4 | **동시 캐시 쓰기가 여러 writer의 내용이 섞인 파일을 게시** | 40회 중 16회 손상, 1회 파싱 불가 |
-| 5 | 고유 임시 파일명 도입 후 Windows에서 rename 실패분이 영구 잔류 | 1회 실행에 265개 잔해 |
-| 6 | 시계 역행 시 캐시가 TTL을 넘겨 계속 fresh | 최대 역행 폭만큼 stale 목록 고정 |
-| 7 | 빈 ID·중복 ID가 모델 선택기까지 도달 | 빈 행, 중복 행 |
-| 8 | 캐시 쓰기 실패가 목록 조회 전체를 실패시킴 | 디스크가 꽉 차면 모델 목록이 안 보임 |
-| 9 | 동일 모델에 대한 동시 `ensure`가 중복 추론 요청 | 패널 하나 열면 10회 요청 |
-| 10 | 로드 중 `invalidate`가 무시되어 폐기한 matrix가 부활 | 잘못된 capability 재적용 |
-| 11 | `save`의 동기 예외가 측정 결과를 유실 | 실제 요청 비용을 낭비 |
-| 12 | `retryable`과 `terminal`이 동시에 참일 수 있음 | 에이전트가 403을 재시도하며 예산 소진 |
-| 13 | **캐시된 목록을 "연결됨"으로 보고** | 장애 진단 중인 사용자에게 정반대를 알림 |
+| # | 결함 | 증상 | 발견 |
+|---|---|---|---|
+| 1 | `arguments`가 JSON 스칼라(`5`, `null`, `[1,2]`)여도 valid 처리 | `arguments.path`가 조용히 `undefined` | edge |
+| 2 | 게이트웨이가 `"model": ""`을 echo하면 요청 모델 ID가 지워짐 | 라벨이 빈칸 | edge |
+| 3 | 이름보다 먼저 온 tool argument 조각이 delta로 방출 안 됨 | UI는 잘린 인자, 에이전트는 전체 | **fuzz** |
+| 4 | **동시 캐시 쓰기가 여러 writer의 내용이 섞인 파일을 게시** | 40회 중 16회 손상, 1회 파싱 불가 | edge |
+| 5 | 고유 임시 파일명 도입 후 Windows에서 rename 실패분이 영구 잔류 | 1회 실행에 265개 잔해 | edge |
+| 6 | 시계 역행 시 캐시가 TTL을 넘겨 계속 fresh | 역행 폭만큼 stale 목록 고정 | edge |
+| 7 | 빈 ID·중복 ID가 모델 선택기까지 도달 | 빈 행, 중복 행 | edge |
+| 8 | 캐시 쓰기 실패가 목록 조회 전체를 실패시킴 | 디스크가 차면 모델 목록이 안 보임 | edge |
+| 9 | 동일 모델에 대한 동시 `ensure`가 중복 추론 요청 | 패널 하나 열면 10회 요청 | edge |
+| 10 | 로드 중 `invalidate`가 무시되어 폐기한 matrix가 부활 | 잘못된 capability 재적용 | edge |
+| 11 | `save`의 동기 예외가 측정 결과를 유실 | 실제 요청 비용을 낭비 | edge |
+| 12 | `retryable`과 `terminal`이 동시에 참일 수 있음 | 에이전트가 403을 재시도하며 예산 소진 | **fuzz** |
+| 13 | **캐시된 목록을 "연결됨"으로 보고** | 장애 진단 중인 사용자에게 정반대를 알림 | edge |
+| 14 | `Object.create(null)`이 에러 매퍼를 크래시 | 예외를 막는 경로가 예외를 발생 | edge |
+| 15 | `allowed_models: null`이 `"null"` 모델로 표시 | 없는 모델을 안내 | edge |
+| 16 | 403의 `allowed_models`가 이중 매핑에서 유실 | 유일한 실행 가능 정보가 사라짐 | edge |
+| P1 | 모델 조회가 카탈로그 크기에 대해 제곱 | 1000개 9ms → 4000개 112ms (수정 후 6ms) | scaling |
 
-부수적으로 `Object.create(null)`이 에러 매퍼를 크래시시키던 것, `allowed_models: null`이 `"null"`이라는 모델로 표시되던 것, 403의 allowed_models가 이중 매핑에서 유실되던 것도 함께 고쳤다.
+세 번째 결함은 특히 fuzz가 아니면 나오기 어려웠다. 불변식 하나 —
+**"한 index의 delta를 모두 이으면 그 호출의 arguments와 정확히 같다"** — 이 잡아냈고,
+그 불변식은 손으로 케이스를 고르는 방식으로는 떠올리기 어려운 종류다.
 
 ---
 
