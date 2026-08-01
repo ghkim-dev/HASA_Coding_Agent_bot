@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { AgentSession } from "../../../src/agent/session.ts";
-import { createAgentModel } from "../../../src/agent/hasaModel.ts";
-import { chooseModel, type AutoModelChoice } from "../../../src/agent/autoModel.ts";
+import { createModelFor } from "../../../src/agent/hasaModel.ts";
+import { chooseModel, protocolFor, type AutoModelChoice } from "../../../src/agent/autoModel.ts";
 import type { AgentEvent, AgentMode, AgentTurnResult, ApprovalRequest } from "../../../src/agent/types.ts";
 import type { HasaProvider } from "../../../src/provider/hasa/hasaProvider.ts";
 import { createHasaProvider } from "../../../src/provider/hasa/createProvider.ts";
@@ -191,17 +191,28 @@ export class AgentHost {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (folder === undefined) return null;
 
-    const modelId = await this.resolveModelId(provider);
-    if (modelId === null) return null;
+    const choice = await this.resolveModel(provider);
+    if (choice === null) return null;
 
     if (this.session !== null) {
       this.session.setMode(this.mode);
       return this.session;
     }
 
+    // The measured output ceiling, when there is one. Without it the gateway
+    // applies its own default, and for a model with a small context that
+    // default is larger than the model can accept — a 400 before any work
+    // begins, observed on granite-guardian-3.1-8b.
+    const limits = await provider.capabilities.limitsOf(choice.modelId);
+
     this.session = await AgentSession.open({
       workspaceRoot: folder.uri.fsPath,
-      model: createAgentModel({ provider, modelId }),
+      model: createModelFor({
+        provider,
+        modelId: choice.modelId,
+        toolProtocol: choice.toolProtocol,
+        ...(limits.maxOutputTokens === null ? {} : { maxOutputTokens: limits.maxOutputTokens }),
+      }),
       approvalPort: { request: (request) => askUser(request) },
       mode: this.mode,
       approvalMode: vscode.workspace
@@ -213,10 +224,20 @@ export class AgentHost {
     return this.session;
   }
 
-  /** The model to use: the user's choice, or Auto's. */
-  private async resolveModelId(provider: HasaProvider): Promise<string | null> {
-    if (this.selectedModelId !== null) return this.selectedModelId;
-    if (this.autoChoice !== null) return this.autoChoice.modelId;
+  /** The model to use, and how it will be asked to call tools. */
+  private async resolveModel(provider: HasaProvider): Promise<AutoModelChoice | null> {
+    if (this.selectedModelId !== null) {
+      // A hand-picked model still needs the right protocol, and the capability
+      // cache usually already knows — asking it costs nothing.
+      const capabilities = await provider.capabilities.capabilitiesOf(this.selectedModelId);
+      return {
+        modelId: this.selectedModelId,
+        confidence: "unverified",
+        toolProtocol: protocolFor(capabilities) ?? "text",
+        reason: "",
+      };
+    }
+    if (this.autoChoice !== null) return this.autoChoice;
 
     const listing = await provider.listModels();
     const choice = await chooseModel({
@@ -227,8 +248,10 @@ export class AgentHost {
     });
     if (choice === null) return null;
     this.autoChoice = choice;
-    this.log.appendLine(`[hasa] auto model: ${choice.modelId} (${choice.confidence})`);
-    return choice.modelId;
+    this.log.appendLine(
+      `[hasa] auto model: ${choice.modelId} (${choice.confidence}, ${choice.toolProtocol} tools)`,
+    );
+    return choice;
   }
 
   async send(prompt: string, onEvent: (event: AgentEvent) => void): Promise<AgentTurnResult | null> {

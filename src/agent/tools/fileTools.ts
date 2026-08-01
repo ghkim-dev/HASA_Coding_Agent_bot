@@ -256,7 +256,9 @@ function applyPatch(sandbox: Sandbox): AgentTool {
     risk: "write",
     description:
       "Replace an exact block of text in a file. `find` must match the file's current contents " +
-      "exactly once, including indentation. Read the file first.",
+      "exactly once, including indentation. Read the file first. " +
+      "read_file prefixes each line with its number and a tab for reference — those prefixes are " +
+      "not part of the file, so do not copy them into `find`.",
     parameters: {
       type: "object",
       properties: {
@@ -277,15 +279,24 @@ function applyPatch(sandbox: Sandbox): AgentTool {
     },
     async execute(args): Promise<ToolResult> {
       const path = str(args, "path");
-      const find = str(args, "find");
       const previous = await sandbox.readFile(path, MAX_READ_BYTES);
+      // Measured against the live gateway: a model reads a file, sees
+      // `2\t  return x;`, and puts that in `find`. The prefix is ours, added by
+      // read_file, so the mismatch is our doing and stripping it back off is
+      // not guessing — it is undoing something we did.
+      const find = withoutLineNumbers(str(args, "find"), previous);
       const occurrences = countOccurrences(previous, find);
 
       // Both failures are handed back as results, not thrown: the model can fix
       // either one, and it needs to know which it is. "Not found" means read the
       // file again; "found twice" means include more context.
       if (occurrences === 0) {
-        return { ok: false, content: `the text to replace was not found in ${path}. Read the file and try again.` };
+        return {
+          ok: false,
+          content:
+            `the text to replace was not found in ${path}. Read the file again and copy the lines exactly. ` +
+            "Do not include the line numbers read_file adds, and keep the original indentation.",
+        };
       }
       if (occurrences > 1) {
         return {
@@ -303,6 +314,26 @@ function applyPatch(sandbox: Sandbox): AgentTool {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Removes the `12\t` prefixes `read_file` adds, when that is what they are.
+ *
+ * Guarded twice, because stripping a real leading number would corrupt an edit
+ * to a data file. It only applies when *every* non-empty line carries the
+ * prefix, when the text does not already match the file, and when the stripped
+ * version does. Anything less certain is left alone and reported as a miss.
+ */
+function withoutLineNumbers(find: string, contents: string): string {
+  if (find.length === 0 || contents.includes(find)) return find;
+
+  const lines = find.split("\n");
+  const meaningful = lines.filter((line) => line.trim().length > 0);
+  if (meaningful.length === 0) return find;
+  if (!meaningful.every((line) => /^\d+\t/.test(line))) return find;
+
+  const stripped = lines.map((line) => line.replace(/^\d+\t/, "")).join("\n");
+  return contents.includes(stripped) ? stripped : find;
+}
 
 function countOccurrences(haystack: string, needle: string): number {
   if (needle.length === 0) return 0;

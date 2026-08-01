@@ -241,6 +241,54 @@ describe("apply_patch", () => {
     assert.match(after.content, /b = 1;/);
   });
 
+  test("line numbers copied out of read_file are stripped back off", async () => {
+    // Measured against the live gateway: the model reads a file, sees
+    // "2<tab>  return x;", and puts that in `find`. The prefix is ours, added
+    // by read_file, so removing it again is undoing our own doing.
+    const w = await workspace({ "a.ts": "export function greet(name: string) {\n  return name;\n}\n" });
+    const result = await w.tools.get("apply_patch")!.execute(
+      { path: "a.ts", find: "2\t  return name;", replace: "  return name.trim();" },
+      w.ctx,
+    );
+
+    assert.equal(result.ok, true);
+    const after = await w.tools.get("read_file")!.execute({ path: "a.ts" }, w.ctx);
+    assert.match(after.content, /return name\.trim\(\);/);
+  });
+
+  test("a genuine leading number is not mistaken for a line prefix", async () => {
+    // Stripping one would corrupt an edit to a data file.
+    const w = await workspace({ "data.tsv": "1\tapple\n2\tbanana\n" });
+    const result = await w.tools.get("apply_patch")!.execute(
+      { path: "data.tsv", find: "2\tbanana", replace: "2\tcherry" },
+      w.ctx,
+    );
+
+    assert.equal(result.ok, true, "the text is present verbatim, so it is replaced verbatim");
+    const after = await w.tools.get("read_file")!.execute({ path: "data.tsv" }, w.ctx);
+    assert.match(after.content, /cherry/);
+    assert.match(after.content, /1\tapple/, "the other row is untouched");
+  });
+
+  test("stripping is not attempted when only some lines carry a prefix", async () => {
+    const w = await workspace({ "a.ts": "alpha\nbeta\n" });
+    const result = await w.tools.get("apply_patch")!.execute(
+      { path: "a.ts", find: "1\talpha\nbeta", replace: "x" },
+      w.ctx,
+    );
+    assert.equal(result.ok, false, "half a prefix is not a prefix");
+  });
+
+  test("the failure tells the model what to do about it", async () => {
+    const w = await workspace({ "a.ts": "hello\n" });
+    const result = await w.tools.get("apply_patch")!.execute(
+      { path: "a.ts", find: "goodbye", replace: "x" },
+      w.ctx,
+    );
+    assert.match(result.content, /line numbers/);
+    assert.match(result.content, /indentation/);
+  });
+
   test("the preview shows the change before it happens", async () => {
     const w = await workspace({ "a.ts": "keep\nold\nkeep\n" });
     const preview = await w.tools.get("apply_patch")!.preview!({ path: "a.ts", find: "old", replace: "new" }, w.ctx);
