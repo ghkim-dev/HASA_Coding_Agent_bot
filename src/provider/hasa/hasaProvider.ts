@@ -152,6 +152,7 @@ export class HasaProvider extends OpenAiCompatibleProvider {
         credentialValid: error.code === "unauthorized" ? false : "unknown",
         modelCount: 0,
         probedModelId: null,
+        usableModelId: null,
         allowedModels: null,
         detail: error.userMessage,
         error: error.toJSON(),
@@ -169,6 +170,7 @@ export class HasaProvider extends OpenAiCompatibleProvider {
         credentialValid: "unknown",
         modelCount: listing.models.length,
         probedModelId: null,
+        usableModelId: null,
         allowedModels: null,
         detail: listing.warning ?? "HASA에 연결하지 못했습니다. 이전에 조회한 모델 목록을 표시합니다.",
         error: null,
@@ -181,6 +183,7 @@ export class HasaProvider extends OpenAiCompatibleProvider {
         credentialValid: "unknown",
         modelCount: 0,
         probedModelId: null,
+        usableModelId: null,
         allowedModels: null,
         detail: "모델 목록이 비어 있어 API Key를 확인하지 못했습니다.",
         error: null,
@@ -190,28 +193,41 @@ export class HasaProvider extends OpenAiCompatibleProvider {
     return this.probeCredential(listing, requestOpts);
   }
 
+  /**
+   * Finds out whether the key works, and — where it can — which model it works
+   * with.
+   *
+   * The second half is not a bonus. The catalogue is ordered by the gateway,
+   * and its first entry is routinely one this key cannot touch: probing it
+   * returns 403, which proves the credential and leaves the caller holding a
+   * model id that will fail on first use. Following the allow-list the 403
+   * carries turns that dead end into an answer, usually in one extra request.
+   */
   private async probeCredential(
     listing: ModelListing,
     opts: ProviderRequestOptions,
   ): Promise<ProviderValidation> {
-    const candidates = orderValidationCandidates(listing.models).slice(
-      0,
-      HASA_VALIDATION_MODEL_ATTEMPTS,
-    );
-    const base = {
-      endpointReachable: true,
-      modelCount: listing.models.length,
-    };
+    const catalogue = new Map(listing.models.map((m) => [m.id, m]));
+    const queue = orderValidationCandidates(listing.models).map((m) => m.id);
+    const tried = new Set<string>();
+    const base = { endpointReachable: true, modelCount: listing.models.length };
 
+    let attempts = 0;
     let lastError: ProviderError | null = null;
     let lastModelId: string | null = null;
+    let allowed: string[] | null = null;
 
-    for (const model of candidates) {
-      lastModelId = model.id;
+    while (queue.length > 0 && attempts < HASA_VALIDATION_MODEL_ATTEMPTS) {
+      const modelId = queue.shift();
+      if (modelId === undefined || tried.has(modelId)) continue;
+      tried.add(modelId);
+      attempts += 1;
+      lastModelId = modelId;
+
       try {
         await this.chat(
           {
-            modelId: model.id,
+            modelId,
             messages: [{ role: "user", content: "ping" }],
             maxOutputTokens: 1,
             temperature: 0,
@@ -221,9 +237,10 @@ export class HasaProvider extends OpenAiCompatibleProvider {
         return {
           ...base,
           credentialValid: true,
-          probedModelId: model.id,
-          allowedModels: null,
-          detail: `연결되었습니다. 모델 ${listing.models.length}개를 사용할 수 있습니다.`,
+          probedModelId: modelId,
+          usableModelId: modelId,
+          allowedModels: allowed,
+          detail: `연결되었습니다. ${modelId} 모델을 사용할 수 있습니다.`,
           error: null,
         };
       } catch (err) {
@@ -233,39 +250,45 @@ export class HasaProvider extends OpenAiCompatibleProvider {
         if (error.code === "aborted") throw error;
 
         if (error.code === "unauthorized") {
+          // The gateway counts these and blocks after ten. Walking the
+          // catalogue would spend more of them to learn what this already said.
           return {
             ...base,
             credentialValid: false,
-            probedModelId: model.id,
+            probedModelId: modelId,
+            usableModelId: null,
             allowedModels: null,
             detail: error.userMessage,
             error: error.toJSON(),
           };
         }
 
-        // Authenticated, just not for this model — which is a *pass* for the
-        // credential, and the most informative outcome we get: the gateway
-        // tells us which models this key may actually call.
         if (error.code === "forbidden") {
-          return {
-            ...base,
-            credentialValid: true,
-            probedModelId: model.id,
-            allowedModels,
-            detail:
-              allowedModels === null
-                ? "연결되었습니다. 일부 모델은 이 키로 사용할 수 없습니다."
-                : `연결되었습니다. 사용 가능한 모델: ${allowedModels.join(", ")}`,
-            error: null,
-          };
+          // Authenticated, just not for this model — a pass for the credential,
+          // and the gateway usually names the models it would accept. Those go
+          // to the front, because one of them is the answer.
+          if (allowedModels !== null) {
+            allowed = allowedModels;
+            // Ordered by what has been *measured*, not by the gateway's order
+            // and not by what the names look like: a real allow-list began with
+            // an embedding and a reranker, both of which 404 on chat.
+            const promoted = orderValidationCandidates(
+              allowedModels
+                .map((id) => catalogue.get(id))
+                .filter((m): m is ProviderModel => m !== undefined && !tried.has(m.id)),
+            ).map((m) => m.id);
+            for (const id of [...promoted].reverse()) queue.unshift(id);
+          }
+          continue;
         }
 
         if (error.code === "rate_limited" || error.code === "bad_request") {
           return {
             ...base,
             credentialValid: true,
-            probedModelId: model.id,
-            allowedModels: null,
+            probedModelId: modelId,
+            usableModelId: null,
+            allowedModels: allowed,
             detail: "연결되었습니다.",
             error: null,
           };
@@ -274,14 +297,41 @@ export class HasaProvider extends OpenAiCompatibleProvider {
         // 404 means this model is not routed; another one may be. Anything else
         // (503, network, timeout) taught us nothing, and trying the next model
         // is the cheapest way to find out whether it was model-specific.
-        this.log.warn("credential probe inconclusive", { model: model.id, code: error.code });
+        this.log.warn("credential probe inconclusive", { model: modelId, code: error.code });
       }
+    }
+
+    // Every attempt was refused for the model rather than for the key, so the
+    // key works even though nothing has answered yet.
+    if (allowed !== null) {
+      return {
+        ...base,
+        credentialValid: true,
+        probedModelId: lastModelId,
+        usableModelId: null,
+        allowedModels: allowed,
+        detail: `연결되었습니다. 사용 가능한 모델: ${allowed.join(", ")}`,
+        error: null,
+      };
+    }
+
+    if (lastError !== null && lastError.code === "forbidden") {
+      return {
+        ...base,
+        credentialValid: true,
+        probedModelId: lastModelId,
+        usableModelId: null,
+        allowedModels: null,
+        detail: "연결되었습니다. 일부 모델은 이 키로 사용할 수 없습니다.",
+        error: null,
+      };
     }
 
     return {
       ...base,
       credentialValid: "unknown",
       probedModelId: lastModelId,
+      usableModelId: null,
       allowedModels: null,
       detail:
         lastError === null

@@ -38,5 +38,13 @@ export const HASA_VALIDATION_TIMEOUT_MS = 15_000;
  * More than one because a key that lacks access to the first-listed model gets
  * a 403, and a model that is listed but unrouted gets a 404; neither says
  * anything about the key. Bounded because each attempt is a real request.
+ *
+ * Six rather than three, measured against the live gateway: a real key's
+ * allow-list was `bge-m3, bge-reranker-v2-m3, exaone-4.0-32b, gpt-oss-20b,
+ * granite-guardian-3.1-8b, qwen2.5-coder-32b` — and the two that come first are
+ * an embedding and a reranker, which answer `/chat/completions` with 404. A
+ * budget of three was spent before reaching the first model that can hold a
+ * conversation. The allow-list is the right length for the budget because it is
+ * what the gateway itself considers this key's world.
  */
-export const HASA_VALIDATION_MODEL_ATTEMPTS = 3;
+export const HASA_VALIDATION_MODEL_ATTEMPTS = 6;

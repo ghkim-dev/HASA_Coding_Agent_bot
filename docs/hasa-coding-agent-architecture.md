@@ -167,6 +167,34 @@ Arena는 "비교 제품"이 아니라 **Coding Agent가 필요로 하는 인프�
   * 그 외 / 없음 → 키는 유효, 이 모델 권한 없음
 * **strike 제도가 있다.** 잘못된 키로 10회 초과 시 1→2→4→16→32분 차단. 따라서 **검증은 첫 거절에서 멈춰야 한다.** 카탈로그를 순회하면 검증 1회에 strike를 3개 소모한다.
 
+모델 권한 403은 형태가 다르다 (`detail` 아래 중첩).
+
+```json
+403 {"detail":{"error":"model_not_on_key",
+                "message":"이 Key에 「qwen3-coder」 모델 권한이 없습니다.",
+                "hint":"관리 콘솔 한도 정책(키 허용 모델) …",
+                "allowed_models":["bge-m3","bge-reranker-v2-m3","exaone-4.0-32b",
+                                  "gpt-oss-20b","granite-guardian-3.1-8b","qwen2.5-coder-32b"]}}
+```
+
+여기서 두 가지가 더 나왔다.
+
+* **body가 200자에서 잘리면 allow-list 6개 중 2개만 남는다.** 잘린 목록은 "짧은 허용 목록"처럼 읽히므로, 403에 한해 스니펫 예산을 800자로 늘렸다. 마스킹은 그대로다.
+* **allow-list의 앞쪽이 chat 모델이 아니다.** 실제 키의 목록은 임베딩(`bge-m3`)과 리랭커(`bge-reranker-v2-m3`)로 시작하고, 둘 다 `/chat/completions`에 404를 반환한다. 시도 예산 3회로는 대화 가능한 첫 모델에 도달하지 못했다 → 예산 6회 + **측정된 capability 순으로 정렬**(이름 추측 금지 §11 유지).
+
+### 3.2.1 `probedModelId` ≠ 쓸 수 있는 모델
+
+검증이 "키는 유효"까지만 답하면, 호출자는 **첫 사용에서 실패하는 모델 ID를 들고 있게 된다.** 게이트웨이 카탈로그의 첫 항목이 이 키로 못 쓰는 모델인 경우가 흔하기 때문이다.
+
+그래서 `ProviderValidation`에 `usableModelId`를 두었다 — 200으로 **실제 응답이 확인된** 모델. 403이 실려 온 allow-list를 따라가면 보통 요청 한 번 더로 찾아진다.
+
+```
+qwen3-coder      403 → allow-list 획득
+bge-m3           404  (임베딩)
+bge-reranker     404  (리랭커)
+exaone-4.0-32b   200 → usableModelId
+```
+
 ### 3.3 이것이 설계에 강제하는 것
 
 1. **모델 목록 성공 ≠ 키 유효.** `/v1/models`가 공개이므로 Provider Validation은 **인증이 필요한 호출을 따로 해야 한다** (Z1 §8).

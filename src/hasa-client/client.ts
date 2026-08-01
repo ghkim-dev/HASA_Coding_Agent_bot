@@ -142,7 +142,12 @@ export class HasaClient {
     const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"), Date.now());
     let snippet: string | null = null;
     try {
-      snippet = evidence(await res.text(), 200);
+      // A 403 gets a longer budget because its body is the only place the
+      // gateway says which models the key *can* reach, and 200 characters cut
+      // that list off after two of six — which reads as a shorter allow-list
+      // rather than as a truncated one. Redaction is unchanged; this is length,
+      // not exposure.
+      snippet = evidence(await res.text(), cls.kind === "forbidden" ? 800 : 200);
     } catch {
       snippet = null;
     }

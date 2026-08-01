@@ -43,23 +43,36 @@ describe("HasaProvider against open.hasa.re.kr", { skip }, () => {
     assert.equal(result.credentialValid, true, result.detail);
   });
 
-  test("rejects a wrong key even though the model list is public", async () => {
-    const wrong = new HasaProvider({
-      apiKey: `${apiKey}-definitely-not-valid`,
-      cache: new MemoryModelCache(),
-      logger: nullLogger,
-    });
-    const result = await wrong.validate();
+  test("a 403 names the models the key can reach", async () => {
+    // The most useful thing a rejection can carry. Verified live because the
+    // body is truncated on the way through, and a list cut off after two of
+    // six entries reads as a shorter allow-list rather than a clipped one.
+    const p = provider();
+    const listing = await p.listModels();
+    const denied = listing.models.find((m) => m.id === "qwen3-coder") ?? listing.models[0];
+    assert.ok(denied !== undefined);
 
-    assert.equal(result.endpointReachable, true, "the model list is public and should still answer");
-    assert.notEqual(result.credentialValid, true);
+    try {
+      await p.chat(
+        { modelId: denied.id, messages: [{ role: "user", content: "ping" }], maxOutputTokens: 1 },
+        { maxRetries: 0 },
+      );
+    } catch (err) {
+      const error = err as { code?: string; allowedModels?: string[] | null };
+      if (error.code !== "forbidden") return; // the key can reach this one; nothing to check
+      assert.ok(error.allowedModels !== null && error.allowedModels !== undefined);
+      assert.ok(error.allowedModels.length >= 3, `only ${error.allowedModels.length} models survived truncation`);
+    }
   });
 
   test("streams from a model the key can actually reach", async () => {
     const p = provider();
     const validation = await p.validate();
-    const modelId = validation.probedModelId;
-    assert.ok(modelId !== null, "no reachable model to stream from");
+    // `usableModelId`, not `probedModelId`: the latter is only what validation
+    // tried, and against this gateway that is routinely a model the key cannot
+    // call — or an embedding model that answers /chat/completions with a 404.
+    const modelId = validation.usableModelId;
+    assert.ok(modelId !== null, `no usable model found: ${validation.detail}`);
 
     let text = "";
     let done = 0;

@@ -266,6 +266,15 @@ export interface ProviderValidation {
   modelCount: number;
   /** Which model the authenticated probe used, if it got that far. */
   probedModelId: string | null;
+  /**
+   * A model this key was *proven* able to call, or null.
+   *
+   * Distinct from `probedModelId`, which is only what we tried. The gateway
+   * orders its catalogue, and its first entry is routinely one the key cannot
+   * touch — probing it returns 403, which proves the credential and leaves the
+   * caller holding an id that fails on first use.
+   */
+  usableModelId: string | null;
   /** Models the gateway says this key may call, when it volunteers them. */
   allowedModels: string[] | null;
   /** Short, user-facing Korean summary. Never contains key material. */

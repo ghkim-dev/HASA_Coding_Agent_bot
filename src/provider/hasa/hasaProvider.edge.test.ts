@@ -494,6 +494,79 @@ describe("validate — reachability is measured, not assumed", () => {
     assert.equal((await provider.validate()).credentialValid, true);
   });
 
+  test("a 403 is followed to a model the key can actually use", async () => {
+    // The gateway orders the catalogue and its first entry is routinely one
+    // the key cannot touch. Stopping at the 403 proves the credential and hands
+    // back a model id that fails on first use — which is what broke the live
+    // streaming check.
+    let attempts = 0;
+    const provider = stubProvider({
+      models: async () => [record("qwen3-coder"), record("llama-3.3-70b"), record("exaone-4.0-32b")],
+      chat: async (req) => {
+        attempts += 1;
+        if (req.model === "exaone-4.0-32b") return reply("ok");
+        throw new HasaError({
+          message: "HASA 403",
+          kind: "forbidden",
+          status: 403,
+          retryable: false,
+          terminal: true,
+          bodySnippet: '{"detail":{"error":"model_not_on_key","allowed_models":["bge-m3","exaone-4.0-32b"]}}',
+        });
+      },
+    });
+
+    const result = await provider.validate();
+    assert.equal(result.credentialValid, true);
+    assert.equal(result.probedModelId, "exaone-4.0-32b");
+    assert.equal(result.usableModelId, "exaone-4.0-32b", "validation must end holding a usable model");
+    assert.match(result.detail, /exaone-4\.0-32b/);
+    assert.equal(attempts, 2, "the allow-list should be followed, not the catalogue order");
+  });
+
+  test("an allowed model that is not in the catalogue is not chased", async () => {
+    const provider = stubProvider({
+      models: async () => [record("a")],
+      chat: async () => {
+        throw new HasaError({
+          message: "HASA 403",
+          kind: "forbidden",
+          status: 403,
+          retryable: false,
+          terminal: true,
+          bodySnippet: '{"allowed_models":["not-in-this-catalogue"]}',
+        });
+      },
+    });
+
+    const result = await provider.validate();
+    assert.equal(result.credentialValid, true);
+    assert.equal(result.usableModelId, null, "nothing was proven callable");
+    assert.deepEqual(result.allowedModels, ["not-in-this-catalogue"]);
+  });
+
+  test("a first-try success reports that model as usable", async () => {
+    const provider = stubProvider({
+      models: async () => [record("a"), record("b")],
+      chat: async () => reply("ok"),
+    });
+    const result = await provider.validate();
+    assert.equal(result.usableModelId, "a");
+    assert.equal(result.probedModelId, "a");
+  });
+
+  test("nothing is reported usable when nothing answered", async () => {
+    for (const kind of ["not_found", "unavailable"] as const) {
+      const provider = stubProvider({
+        models: async () => [record("a")],
+        chat: async () => {
+          throw hasa(kind, kind === "not_found" ? 404 : 503);
+        },
+      });
+      assert.equal((await provider.validate()).usableModelId, null, kind);
+    }
+  });
+
   test("a 403 reports the models the key can reach", async () => {
     const provider = stubProvider({
       models: async () => [record("a")],

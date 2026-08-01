@@ -74,6 +74,7 @@ class NotHasaProvider extends OpenAiCompatibleProvider {
       credentialValid: "unknown",
       modelCount: 0,
       probedModelId: null,
+      usableModelId: null,
       allowedModels: null,
       detail: "확인하지 않았습니다.",
       error: null,
