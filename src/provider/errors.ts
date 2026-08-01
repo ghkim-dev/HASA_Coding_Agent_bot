@@ -56,6 +56,15 @@ export interface ProviderErrorInit {
   retryAfterMs?: number | null;
   /** Overrides the default Korean message for this code. */
   userMessage?: string;
+  /**
+   * Models the gateway says this key may call. Only ever set on a 403.
+   *
+   * It lives on the error rather than beside it because the error is what
+   * travels: a 403 raised in the transport is mapped once, then caught,
+   * inspected and re-raised several layers up. Anything carried alongside is
+   * lost at the first hop.
+   */
+  allowedModels?: string[] | null;
   cause?: unknown;
 }
 
@@ -85,6 +94,7 @@ export class ProviderError extends Error implements ProviderErrorLike {
   readonly retryAfterMs: number | null;
   readonly detail: string;
   readonly userMessage: string;
+  readonly allowedModels: string[] | null;
 
   constructor(init: ProviderErrorInit) {
     const detail = init.detail ?? "";
@@ -93,15 +103,25 @@ export class ProviderError extends Error implements ProviderErrorLike {
     this.name = "ProviderError";
     this.code = init.code;
     this.httpStatus = init.httpStatus ?? null;
-    this.retryable = init.retryable ?? RETRYABLE.has(init.code);
     this.terminal = init.terminal ?? TERMINAL.has(init.code);
+    // "Retrying will never help" and "it is safe to retry" cannot both hold.
+    // An upstream that claims both — a transport with a bug, or one we did not
+    // write — would otherwise hand an agent loop permission to retry something
+    // it has been told is hopeless, which is how a loop burns its whole budget
+    // on a 403. Terminal wins: failing fast is the recoverable mistake.
+    this.retryable = (init.retryable ?? RETRYABLE.has(init.code)) && !this.terminal;
     this.retryAfterMs = init.retryAfterMs ?? null;
     this.detail = detail;
     this.userMessage = init.userMessage ?? MESSAGES[init.code];
+    this.allowedModels = init.allowedModels ?? null;
   }
 
   /** The shape safe to send to a webview: no cause, no stack, no key material. */
-  toJSON(): ProviderErrorLike & { detail: string; retryAfterMs: number | null } {
+  toJSON(): ProviderErrorLike & {
+    detail: string;
+    retryAfterMs: number | null;
+    allowedModels: string[] | null;
+  } {
     return {
       code: this.code,
       httpStatus: this.httpStatus,
@@ -110,6 +130,7 @@ export class ProviderError extends Error implements ProviderErrorLike {
       userMessage: this.userMessage,
       detail: this.detail,
       retryAfterMs: this.retryAfterMs,
+      allowedModels: this.allowedModels,
     };
   }
 }
@@ -127,6 +148,24 @@ export function isAbortLike(err: unknown): boolean {
 }
 
 /**
+ * Describes an unknown throwable without trusting it to describe itself.
+ *
+ * `String(value)` throws on a null-prototype object and on anything with a
+ * hostile `toString` — and this runs on the path that exists to stop unexpected
+ * values from escaping, so a crash here replaces one confusing failure with a
+ * worse one.
+ */
+function describeThrowable(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  try {
+    return String(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+/**
  * Last-resort mapping for anything that reaches the provider layer unclassified.
  *
  * Kept separate from `mapHasaError` so that a non-HASA transport (a future
@@ -138,9 +177,5 @@ export function toProviderError(err: unknown): ProviderError {
   if (isAbortLike(err)) {
     return new ProviderError({ code: "aborted", detail: "request aborted", cause: err });
   }
-  return new ProviderError({
-    code: "network",
-    detail: err instanceof Error ? err.message : String(err),
-    cause: err,
-  });
+  return new ProviderError({ code: "network", detail: describeThrowable(err), cause: err });
 }

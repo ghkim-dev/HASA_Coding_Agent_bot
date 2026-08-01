@@ -1,4 +1,5 @@
 import { HasaError, type ErrorKind } from "../../hasa-client/errors.ts";
+import { redactString } from "../../hasa-client/redact.ts";
 import { ProviderError, type ProviderErrorCode, isAbortLike, toProviderError } from "../errors.ts";
 
 /**
@@ -53,10 +54,14 @@ export function parseAllowedModels(bodySnippet: string | null): string[] | null 
   const quoted = [...body.matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? "");
   if (quoted.length > 0) return dedupe(quoted);
 
+  // JSON literals are what a body says when it has *no* list to give —
+  // `"allowed_models": null`. Reading `null` as a model name would put it in
+  // front of the user as something they could switch to.
+  const LITERALS = new Set(["null", "true", "false", "undefined", "none"]);
   const bare = body
     .split(",")
     .map((s) => s.trim())
-    .filter((s) => /^[\w.\-/]+$/.test(s));
+    .filter((s) => /^[\w.\-/]+$/.test(s) && !LITERALS.has(s.toLowerCase()) && !/^\d+$/.test(s));
   // Without quotes there is no such signal. `end === -1` means the closing
   // bracket was cut off, so the final entry may be half a model name — and a
   // half name shown as fact sends the user looking for something that does not
@@ -83,7 +88,11 @@ export interface MappedHasaError {
 }
 
 export function mapHasaErrorDetailed(err: unknown): MappedHasaError {
-  if (err instanceof ProviderError) return { error: err, allowedModels: null };
+  // Reading the list back off the error rather than returning null: a 403 is
+  // mapped where it is raised and inspected several layers up, and treating an
+  // already-mapped error as having no allow-list silently disabled the only
+  // actionable thing a 403 tells us.
+  if (err instanceof ProviderError) return { error: err, allowedModels: err.allowedModels };
 
   if (err instanceof HasaError) {
     // The transport reports a caller-initiated abort as a terminal network or
@@ -100,11 +109,16 @@ export function mapHasaErrorDetailed(err: unknown): MappedHasaError {
     const allowedModels = err.kind === "forbidden" ? parseAllowedModels(err.bodySnippet) : null;
     const init = {
       code,
-      detail: err.bodySnippet ? `${err.message} — ${err.bodySnippet}` : err.message,
+      // Redacted again on the way through. The transport already masks body
+      // snippets, but this is the boundary the detail crosses on its way to a
+      // log or a webview, and a second pass over 200 characters is cheaper than
+      // trusting every present and future transport to have done it.
+      detail: redactString(err.bodySnippet ? `${err.message} — ${err.bodySnippet}` : err.message),
       httpStatus: err.status,
       retryable: err.retryable,
       terminal: err.terminal,
       retryAfterMs: err.retryAfterMs,
+      allowedModels,
       cause: err,
     };
     const error =

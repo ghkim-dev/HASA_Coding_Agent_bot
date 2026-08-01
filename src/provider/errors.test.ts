@@ -164,6 +164,7 @@ describe("toJSON — the webview surface", () => {
   test("carries exactly the fields the UI needs and nothing else", () => {
     const json = new ProviderError({ code: "forbidden", detail: "d", cause: new Error("secret root") }).toJSON();
     assert.deepEqual(Object.keys(json).sort(), [
+      "allowedModels",
       "code",
       "detail",
       "httpStatus",
@@ -172,6 +173,14 @@ describe("toJSON — the webview surface", () => {
       "terminal",
       "userMessage",
     ]);
+  });
+
+  test("the allow-list travels with the error, so a later layer can still read it", () => {
+    // A 403 is mapped where it is raised and inspected several layers up.
+    const error = new ProviderError({ code: "forbidden", allowedModels: ["a", "b"] });
+    assert.deepEqual(error.allowedModels, ["a", "b"]);
+    assert.deepEqual(error.toJSON().allowedModels, ["a", "b"]);
+    assert.equal(new ProviderError({ code: "network" }).allowedModels, null);
   });
 
   test("no stack, no cause, no prototype chain crosses the boundary", () => {
@@ -235,13 +244,17 @@ describe("toProviderError", () => {
       [1, 2, 3],
       Symbol("s"),
       new TypeError("wrong type"),
+      // A null-prototype object cannot be converted to a string at all. This is
+      // the last-resort path, so it must not be the one that crashes.
+      Object.create(null),
+      { toString: () => { throw new Error("hostile"); } },
     ];
-    for (const value of cases) {
+    cases.forEach((value, i) => {
       const error = toProviderError(value);
-      assert.ok(error instanceof ProviderError, String(value));
-      assert.ok(error.userMessage.length > 0);
-      assert.ok(typeof error.detail === "string");
-    }
+      assert.ok(error instanceof ProviderError, `case ${i} did not map`);
+      assert.ok(error.userMessage.length > 0, `case ${i} has no message`);
+      assert.ok(typeof error.detail === "string", `case ${i} has no detail`);
+    });
   });
 
   test("a cancellation is classified as one", () => {
