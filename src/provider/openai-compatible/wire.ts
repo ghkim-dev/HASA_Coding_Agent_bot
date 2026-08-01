@@ -134,16 +134,26 @@ export function toWireRequest(req: ProviderChatRequest, stream: boolean): ChatCo
 
 export function normalizeToolCall(raw: ToolCall, fallbackIndex: number): NormalizedToolCall {
   const rawArguments = raw.function?.arguments ?? "";
+  const trimmed = rawArguments.trim();
   let parsed: unknown = {};
   let valid = true;
-  try {
-    // An absent argument object and `{}` are the same thing to a tool; an
-    // unparseable one is not, and the caller has to be able to tell.
-    parsed = rawArguments.trim().length === 0 ? {} : JSON.parse(rawArguments);
-  } catch {
-    parsed = {};
-    valid = false;
+
+  // An absent argument blob and `{}` are the same thing to a tool. Anything
+  // else has to survive a stricter test than "is it JSON": a model that emits
+  // `5`, `null` or `[1,2]` produced valid JSON that no tool can be called with,
+  // and a caller reaching for `arguments.path` would get `undefined` from a
+  // scalar and never learn why. `argumentsValid: false` is what lets the agent
+  // hand `rawArguments` back and ask again.
+  if (trimmed.length > 0) {
+    try {
+      const value: unknown = JSON.parse(trimmed);
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) parsed = value;
+      else valid = false;
+    } catch {
+      valid = false;
+    }
   }
+
   return {
     id: raw.id && raw.id.length > 0 ? raw.id : `call_${fallbackIndex}`,
     name: raw.function?.name ?? "",
@@ -196,7 +206,9 @@ export function fromWireResponse(
   const message = choice?.message;
   const toolCalls = (message?.tool_calls ?? []).map(normalizeToolCall);
   return {
-    modelId: res.model ?? requestedModelId,
+    // `??` is not enough: a gateway that echoes `"model": ""` would otherwise
+    // erase the id the caller asked for, and every downstream label goes blank.
+    modelId: res.model !== undefined && res.model.length > 0 ? res.model : requestedModelId,
     text: textOf(message?.content ?? null),
     reasoning: message?.reasoning_content ?? "",
     toolCalls,
@@ -265,6 +277,13 @@ export async function* streamEvents(
         sawToolCall = true;
         pending.set(index, acc);
         yield { type: "tool_call_start", index, id: acc.id || `call_${index}`, name: acc.name };
+        // Gateways have been seen sending argument fragments before they commit
+        // to a name. Those bytes were buffered with nowhere to go; releasing
+        // them here keeps the invariant a consumer relies on — the deltas for
+        // an index concatenate to exactly that call's arguments.
+        if (acc.args.length > 0) {
+          yield { type: "tool_call_delta", index, argumentsDelta: acc.args };
+        }
       }
 
       const argsDelta = fragment.function?.arguments;
@@ -283,6 +302,9 @@ export async function* streamEvents(
     // vanished tool call looks to the agent like the model chose not to act.
     if (!acc.started) {
       yield { type: "tool_call_start", index, id: acc.id || `call_${index}`, name: acc.name };
+      if (acc.args.length > 0) {
+        yield { type: "tool_call_delta", index, argumentsDelta: acc.args };
+      }
       sawToolCall = true;
     }
     yield {
