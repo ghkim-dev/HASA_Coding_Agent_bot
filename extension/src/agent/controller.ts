@@ -3,6 +3,19 @@ import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { AgentHost } from "./agentHost.ts";
 import { ChatPanel, type PanelMessage, type PanelState } from "./chatPanel.ts";
 import { parseSavedArtifact } from "../../../src/agent/tools/mediaTools.ts";
+import {
+  imageTypeFor,
+  looksSensitive,
+  type Attachment,
+} from "../../../src/agent/attachments.ts";
+
+/** A file staged for the next message, with what the panel needs to show it. */
+interface StagedAttachment {
+  id: string;
+  name: string;
+  attachment: Attachment;
+  note: string;
+}
 
 /**
  * Joins the host to the panel.
@@ -18,6 +31,14 @@ export class AgentController {
   private readonly context: vscode.ExtensionContext;
   private readonly log: vscode.OutputChannel;
   private panel: ChatPanel | null = null;
+  /**
+   * Files staged for the next message.
+   *
+   * Held here, not in the webview: the contents never cross the boundary. The
+   * panel is told a name and a size and sends back an id.
+   */
+  private staged: StagedAttachment[] = [];
+  private staleId = 0;
 
   constructor(context: vscode.ExtensionContext, log: vscode.OutputChannel) {
     this.context = context;
@@ -74,6 +95,14 @@ export class AgentController {
       })),
       anyVerified: (listing?.models ?? []).some((m) => m.capabilities.chat !== "unknown"),
       canGenerateMedia: await this.host.canGenerateMedia(),
+      attachments: this.staged.map((s) => ({
+        id: s.id,
+        name: s.name,
+        kind: s.attachment.kind,
+        note: s.note,
+      })),
+      history: await this.host.listConversations(),
+      openConversationId: this.host.currentConversationId,
       busy: this.host.busy,
       workspaceOpen: vscode.workspace.workspaceFolders !== undefined,
       changedFiles: changed,
@@ -130,6 +159,28 @@ export class AgentController {
 
       case "verifyModels":
         await this.verify();
+        return;
+
+      case "attach":
+        await this.attach(message.source);
+        return;
+
+      case "removeAttachment":
+        this.staged = this.staged.filter((s) => s.id !== message.id);
+        await this.push();
+        return;
+
+      case "openHistory":
+        await this.push();
+        return;
+
+      case "openConversation":
+        await this.openConversation(message.id);
+        return;
+
+      case "deleteConversation":
+        await this.host.deleteConversation(message.id);
+        await this.push();
         return;
 
       case "viewDiff":
@@ -209,12 +260,104 @@ export class AgentController {
     });
   }
 
-  private async send(prompt: string): Promise<void> {
+  /**
+   * Stages a file for the next message.
+   *
+   * Two doors, and they are not the same. The workspace picker stays inside the
+   * folder the user opened; "from computer" is any file on disk, which is the
+   * one that can pick up `.env` by accident — so that door asks first. It is
+   * their file and they may mean it; what they must not do is send it without
+   * noticing.
+   */
+  private async attach(source: "file" | "workspace"): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    const picked =
+      source === "workspace" && folder !== undefined
+        ? await vscode.window.showOpenDialog({
+            canSelectMany: true,
+            defaultUri: folder.uri,
+            openLabel: "첨부",
+          })
+        : await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: "첨부" });
+    if (picked === undefined) return;
+
+    for (const uri of picked) {
+      const name =
+        folder === undefined ? uri.path.split("/").pop() ?? "file" : vscode.workspace.asRelativePath(uri, false);
+
+      if (looksSensitive(uri.fsPath)) {
+        const go = await vscode.window.showWarningMessage(
+          `${name} 은(는) 자격증명 파일로 보입니다.`,
+          { modal: true, detail: "첨부하면 그 내용이 HASA 게이트웨이로 전송됩니다." },
+          "그래도 첨부",
+        );
+        if (go !== "그래도 첨부") continue;
+      }
+
+      try {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const mediaType = imageTypeFor(name);
+        this.staleId += 1;
+        const id = `a${this.staleId}`;
+
+        if (mediaType !== null) {
+          this.staged.push({
+            id,
+            name,
+            note: `${Math.max(1, Math.round(bytes.byteLength / 1024))} KB`,
+            attachment: { kind: "image", name, mediaType, base64: Buffer.from(bytes).toString("base64") },
+          });
+          continue;
+        }
+
+        const text = Buffer.from(bytes).toString("utf8");
+        // A file full of replacement characters is a binary the model cannot
+        // read; inlining it would spend the context window on noise.
+        const replacements = (text.match(/�/g) ?? []).length;
+        if (replacements > text.length / 100) {
+          void vscode.window.showWarningMessage(`${name} 은(는) 텍스트 파일이 아니라 첨부하지 않았습니다.`);
+          continue;
+        }
+        this.staged.push({
+          id,
+          name,
+          note: `${text.split("\n").length}줄`,
+          attachment: { kind: "text", name, text },
+        });
+      } catch (err) {
+        this.fail(err);
+      }
+    }
     await this.push();
+  }
+
+  /** Reopens a stored conversation and redraws the transcript from it. */
+  private async openConversation(id: string): Promise<void> {
+    if (!(await this.host.openConversation(id))) {
+      this.panel?.post({ type: "notice", level: "error", text: "대화를 열지 못했습니다." });
+      return;
+    }
+    const messages = await this.host.openConversationMessages();
+    this.panel?.post({ type: "transcript", turns: transcriptOf(messages) });
+    await this.push();
+  }
+
+  private async send(prompt: string): Promise<void> {
+    const attachments = this.staged.map((s) => s.attachment);
+    // Cleared before the turn, not after: a failed send should not silently
+    // re-attach the same files to whatever the user types next.
+    this.staged = [];
+    await this.push();
+
     const result = await this.host.send(prompt, (event: AgentEvent) => {
       this.panel?.post({ type: "event", event });
       this.showArtifact(event);
-    });
+    }, attachments);
+
+    const attachmentProblem = this.host.takeAttachmentProblem();
+    if (attachmentProblem !== null) {
+      this.panel?.post({ type: "notice", level: "error", text: attachmentProblem });
+    }
     if (result === null) {
       // A specific reason beats a generic one: "this model cannot converse" is
       // something the user can act on, "no usable model" is not.
@@ -273,4 +416,35 @@ export class AgentController {
       text: reverted ? "되돌렸습니다." : "되돌릴 수 있는 변경 사항이 없습니다.",
     });
   }
+}
+
+/**
+ * A stored conversation as turns the panel can draw.
+ *
+ * Tool calls and tool results are dropped. They were progress lines during the
+ * turn, not part of the conversation, and §29's rule that the transcript reads
+ * like a colleague's summary applies just as much when it is reopened a week
+ * later.
+ */
+function transcriptOf(messages: readonly unknown[]): Array<{ role: "user" | "assistant"; text: string }> {
+  const turns: Array<{ role: "user" | "assistant"; text: string }> = [];
+  for (const raw of messages) {
+    if (raw === null || typeof raw !== "object") continue;
+    const message = raw as { role?: unknown; content?: unknown };
+    if (message.role !== "user" && message.role !== "assistant") continue;
+
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : Array.isArray(message.content)
+          ? message.content
+              .filter((p): p is { type: "text"; text: string } =>
+                p !== null && typeof p === "object" && (p as { type?: unknown }).type === "text")
+              .map((p) => p.text)
+              .join("\n")
+          : "";
+    if (text.trim().length === 0) continue;
+    turns.push({ role: message.role, text });
+  }
+  return turns;
 }

@@ -16,6 +16,14 @@ import { createMediaTransport } from "../../../src/provider/hasa/hasaMediaTransp
 import { HASA_DEFAULT_BASE_URL } from "../../../src/provider/hasa/defaults.ts";
 import type { AgentSessionOptions } from "../../../src/agent/session.ts";
 import { discoverCommands } from "./commands.ts";
+import { createConversationPort } from "./conversations.ts";
+import {
+  ConversationStore,
+  newConversationId,
+  titleFrom,
+  type ConversationSummary,
+} from "../../../src/agent/conversationStore.ts";
+import type { Attachment } from "../../../src/agent/attachments.ts";
 
 type MediaConfig = NonNullable<AgentSessionOptions["media"]>;
 
@@ -71,6 +79,9 @@ export class AgentHost {
   private catalog: HasaCatalog | null = null;
   /** Why the last turn could not start, when the reason is worth showing. */
   private modelProblem: string | null = null;
+  private conversations: ConversationStore | null = null;
+  /** The conversation being written to, so a turn appends rather than forks. */
+  private conversationId: string | null = null;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
 
@@ -151,6 +162,10 @@ export class AgentHost {
     this.session = null;
     this.validation = null;
     this.autoChoice = null;
+    // A different key is a different history. Dropping the store rather than
+    // reusing it is what keeps one key's conversations out of another's.
+    this.conversations = null;
+    this.conversationId = null;
     // The catalogue is public and key-independent, but a new key may reach a
     // different gateway, so it is re-read rather than carried across.
     this.catalog = null;
@@ -384,8 +399,13 @@ export class AgentHost {
     // default is larger than the model can accept — a 400 before any work
     // begins, observed on granite-guardian-3.1-8b.
     const limits = await provider.capabilities.limitsOf(choice.modelId);
+    // Measured, never inferred: an attached screenshot is sent when the model
+    // is known to read images, refused with a reason when it is known not to,
+    // and attempted when nobody has looked.
+    const capabilities = await provider.capabilities.capabilitiesOf(choice.modelId);
 
     this.session = await AgentSession.open({
+      vision: capabilities.vision,
       workspaceRoot: folder.uri.fsPath,
       model: createModelFor({
         provider,
@@ -449,7 +469,11 @@ export class AgentHost {
     return choice;
   }
 
-  async send(prompt: string, onEvent: (event: AgentEvent) => void): Promise<AgentTurnResult | null> {
+  async send(
+    prompt: string,
+    onEvent: (event: AgentEvent) => void,
+    attachments: readonly Attachment[] = [],
+  ): Promise<AgentTurnResult | null> {
     if (this.running !== null) return null;
     const session = await this.ensureSession(onEvent);
     if (session === null) return null;
@@ -459,10 +483,19 @@ export class AgentHost {
     const controller = new AbortController();
     this.running = controller;
     try {
-      return await session.send(prompt, controller.signal);
+      return await session.send(prompt, controller.signal, attachments);
     } finally {
       this.running = null;
+      // Saved even when the turn failed or was cancelled: what the user typed
+      // is theirs, and losing it because the gateway was down would be its own
+      // small betrayal.
+      await this.persist();
     }
+  }
+
+  /** Whatever could not be attached to the last message, once. */
+  takeAttachmentProblem(): string | null {
+    return this.session?.takeAttachmentProblem() ?? null;
   }
 
   async undo(): Promise<boolean> {
@@ -477,8 +510,102 @@ export class AgentHost {
     return (await this.session?.changedFiles()) ?? [];
   }
 
+  // -------------------------------------------------------------------------
+  // Conversation history
+  // -------------------------------------------------------------------------
+
+  /**
+   * The store for whichever key is in use.
+   *
+   * Built here rather than at construction because it needs the key, and the
+   * key can change. The store digests it immediately and never keeps it — see
+   * `src/agent/conversationStore.ts`.
+   */
+  private async ensureConversations(): Promise<ConversationStore | null> {
+    if (this.conversations !== null) return this.conversations;
+    const key = await this.apiKey();
+    if (key === null) return null;
+    this.conversations = new ConversationStore({
+      port: createConversationPort(),
+      home: this.context.globalStorageUri.fsPath,
+      apiKey: key,
+    });
+    return this.conversations;
+  }
+
+  get currentConversationId(): string | null {
+    return this.conversationId;
+  }
+
+  async listConversations(): Promise<ConversationSummary[]> {
+    const store = await this.ensureConversations();
+    return store === null ? [] : store.list();
+  }
+
+  /** Loads a past conversation into the live session. */
+  async openConversation(id: string): Promise<boolean> {
+    const store = await this.ensureConversations();
+    if (store === null) return false;
+    const stored = await store.load(id);
+    if (stored === null) return false;
+
+    const session = await this.ensureSession(() => {});
+    if (session === null) return false;
+    session.restore(stored.messages);
+    this.conversationId = stored.id;
+    this.log.appendLine(`[hasa] opened conversation ${id}`);
+    return true;
+  }
+
+  /** The messages of the open conversation, for redrawing the panel. */
+  async openConversationMessages(): Promise<readonly unknown[]> {
+    return this.session?.history() ?? [];
+  }
+
+  async deleteConversation(id: string): Promise<void> {
+    const store = await this.ensureConversations();
+    await store?.remove(id);
+    if (this.conversationId === id) {
+      this.conversationId = null;
+      this.session?.clearHistory();
+    }
+  }
+
+  /**
+   * Writes the live conversation to disk.
+   *
+   * Called after a turn rather than during it: a turn that is still running has
+   * a history that is about to change, and saving twice is cheaper than saving
+   * something half-finished.
+   */
+  private async persist(): Promise<void> {
+    const store = await this.ensureConversations();
+    if (store === null || this.session === null) return;
+
+    const messages = [...this.session.history()];
+    if (messages.filter((m) => m.role !== "system").length === 0) return;
+
+    const now = Date.now();
+    this.conversationId ??= newConversationId(now, Math.random);
+    try {
+      await store.save({
+        id: this.conversationId,
+        title: titleFrom(messages),
+        createdAt: now,
+        updatedAt: now,
+        messages,
+      });
+    } catch (err) {
+      // A history that cannot be written must not lose the answer on screen.
+      this.log.appendLine(`[hasa] could not save the conversation: ${describe(err)}`);
+    }
+  }
+
   newConversation(): void {
     this.session?.clearHistory();
+    // A new id, so the next turn starts a new file rather than overwriting the
+    // conversation the user just moved away from.
+    this.conversationId = null;
   }
 }
 

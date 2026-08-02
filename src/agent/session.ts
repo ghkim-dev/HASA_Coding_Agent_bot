@@ -2,7 +2,8 @@ import { realpath } from "node:fs/promises";
 import type { CommandSpec } from "../protocol/index.ts";
 import { Sandbox } from "../core/sandbox.ts";
 import { nullLogger, type Logger } from "../hasa-client/logger.ts";
-import type { ProviderMessage } from "../provider/types.ts";
+import type { ProviderMessage, Tristate } from "../provider/types.ts";
+import { composeUserMessage, describeAttachmentProblems, type Attachment } from "./attachments.ts";
 import { ApprovalManager } from "./approval.ts";
 import type { RuntimeGap } from "./discoverCommands.ts";
 import { createMediaTools } from "./tools/mediaTools.ts";
@@ -56,6 +57,12 @@ export interface AgentSessionOptions {
    * the shell tools follow: a tool that cannot work should not be offered.
    */
   media?: Omit<MediaToolOptions, "sandbox">;
+  /**
+   * Whether the chosen model was *measured* to read images. Decides whether an
+   * attached screenshot is sent or refused; `unknown` is not `false`, so an
+   * unprobed model is given the benefit of the doubt.
+   */
+  vision?: Tristate;
   /** Restricts writes to these path prefixes. Reads stay workspace-wide. */
   writeScope?: string[];
   budget?: Partial<AgentBudget>;
@@ -74,6 +81,7 @@ export class AgentSession {
   private messages: ProviderMessage[] = [];
   /** Decided once at open: whether undo and diffs are possible at all. */
   private isGitRepo = false;
+  private lastAttachmentProblem: string | null = null;
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -161,7 +169,11 @@ export class AgentSession {
    * switching mode mid-conversation takes effect immediately instead of on the
    * next session.
    */
-  async send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<AgentTurnResult> {
+  async send(
+    prompt: string,
+    signal: AbortSignal = new AbortController().signal,
+    attachments: readonly Attachment[] = [],
+  ): Promise<AgentTurnResult> {
     const definition = modeDefinition(this.mode);
     const system: ProviderMessage = {
       role: "system",
@@ -174,7 +186,16 @@ export class AgentSession {
         }),
     };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];
-    this.messages.push({ role: "user", content: prompt });
+
+    // Attachments become part of the user's message rather than a separate
+    // one, so a model that only reads the last message still sees the file the
+    // question is about. What could not be sent is returned rather than
+    // dropped — see `attachments.ts`.
+    const composed = composeUserMessage(prompt, attachments, {
+      ...(this.opts.vision === undefined ? {} : { vision: this.opts.vision }),
+    });
+    this.lastAttachmentProblem = describeAttachmentProblems(composed);
+    this.messages.push(composed.message);
 
     const loop = new AgentLoop({
       model: this.opts.model,
@@ -211,6 +232,24 @@ export class AgentSession {
   /** Forgets the conversation. The workspace and the checkpoint are untouched. */
   clearHistory(): void {
     this.messages = [];
+  }
+
+  /** Whatever could not be attached to the last message, once. */
+  takeAttachmentProblem(): string | null {
+    const problem = this.lastAttachmentProblem;
+    this.lastAttachmentProblem = null;
+    return problem;
+  }
+
+  /**
+   * Replaces the conversation with a stored one.
+   *
+   * The system message is not restored: it is re-seeded from the current mode
+   * on every turn, and a stored one would carry a prompt from whatever mode the
+   * conversation was in when it was saved.
+   */
+  restore(messages: readonly ProviderMessage[]): void {
+    this.messages = messages.filter((m) => m.role !== "system");
   }
 
   /** Read-only view, for a transcript or a test. */

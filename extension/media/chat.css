@@ -240,3 +240,92 @@ button:disabled { opacity: 0.45; cursor: default; }
   opacity: 0.7;
   font-family: var(--vscode-editor-font-family, monospace);
 }
+
+/* --------------------------------------------------------------- attachments */
+
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  max-width: 100%;
+}
+
+/* The name is the part worth reading; it truncates rather than wrapping the row. */
+.chip > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.chip-x {
+  background: none;
+  padding: 0 2px;
+  opacity: 0.7;
+  color: inherit;
+  line-height: 1;
+}
+.chip-x:hover { background: none; opacity: 1; }
+
+/*
+ * The attach menu sits above the footer rather than below the button, because
+ * the button is already at the bottom of the panel and a menu opening downward
+ * would be off screen.
+ */
+.menu {
+  position: absolute;
+  bottom: 46px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.3);
+}
+
+.menu button {
+  background: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+}
+.menu button:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-toolbar-hoverBackground)); }
+
+footer { position: relative; }
+
+/* ------------------------------------------------------------------ history */
+
+#historyList { list-style: none; margin: 0 0 12px; padding: 0; max-height: 320px; overflow-y: auto; }
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.history-row.on { font-weight: 600; }
+
+.history-open {
+  flex: 1;
+  background: none;
+  text-align: left;
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-textLink-foreground);
+}
+.history-open:hover { background: var(--vscode-toolbar-hoverBackground); }
+
+.history-meta { font-size: 0.8em; opacity: 0.6; flex-shrink: 0; }
+
+.muted { opacity: 0.7; font-size: 0.9em; }

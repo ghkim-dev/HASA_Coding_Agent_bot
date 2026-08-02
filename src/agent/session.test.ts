@@ -585,3 +585,173 @@ describe("image and video generation in a session", () => {
     assert.match(recorder.requests[0]!.summary, /이미지/);
   });
 });
+
+/**
+ * Attachments and history, through a real session.
+ *
+ * The join is where these can fail invisibly: a file that reaches the panel but
+ * not the model, or a conversation that restores a system prompt from whatever
+ * mode it was saved in.
+ */
+describe("attachments in a session", () => {
+  const lastMessage = (model: { seen: unknown[] }): { role: string; content: unknown } => {
+    const request = model.seen.at(-1) as { messages: Array<{ role: string; content: unknown }> };
+    return request.messages.at(-1)!;
+  };
+
+  test("an attached file reaches the model in the same message as the question", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "읽었습니다" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+
+    await session.send("이 파일 설명해줘", never, [
+      { kind: "text", name: "notes.md", text: "SECRET_MARKER_TEXT" },
+    ]);
+
+    const message = lastMessage(model);
+    assert.equal(message.role, "user");
+    assert.match(String(message.content), /SECRET_MARKER_TEXT/);
+    assert.match(String(message.content), /notes\.md/);
+    // The question stays last, so it is the most recent thing the model read.
+    const body = String(message.content);
+    assert.ok(body.indexOf("SECRET_MARKER_TEXT") < body.indexOf("이 파일 설명해줘"));
+  });
+
+  test("an image is refused rather than dropped when the model cannot read one", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "…" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      vision: false,
+      logger: nullLogger,
+    });
+
+    await session.send("이거 뭐야", never, [
+      { kind: "image", name: "shot.png", mediaType: "image/png", base64: "AAAA" },
+    ]);
+
+    const problem = session.takeAttachmentProblem();
+    assert.ok(problem !== null, "the user was not told the image was not sent");
+    assert.match(problem, /shot\.png/);
+    assert.equal(typeof lastMessage(model).content, "string", "an image part was sent anyway");
+  });
+
+  test("an image reaches a model that was measured to read one", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "…" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      vision: true,
+      logger: nullLogger,
+    });
+
+    await session.send("이거 뭐야", never, [
+      { kind: "image", name: "shot.png", mediaType: "image/png", base64: "AAAA" },
+    ]);
+
+    const parts = lastMessage(model).content as Array<{ type: string }>;
+    assert.ok(Array.isArray(parts));
+    assert.ok(parts.some((p) => p.type === "image"));
+    assert.equal(session.takeAttachmentProblem(), null);
+  });
+
+  test("the problem is reported once, then it is stale", async () => {
+    const fixture = await repo();
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model: scripted([turn({ text: "…" })]),
+      approvalPort: allowingApprovalPort,
+      vision: false,
+      logger: nullLogger,
+    });
+    await session.send("q", never, [{ kind: "image", name: "a.png", mediaType: "image/png", base64: "AA" }]);
+    assert.ok(session.takeAttachmentProblem() !== null);
+    assert.equal(session.takeAttachmentProblem(), null);
+  });
+
+  test("a turn with no attachments sends the prompt unchanged", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "…" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    await session.send("그냥 질문", never);
+    assert.equal(lastMessage(model).content, "그냥 질문");
+  });
+});
+
+describe("restoring a conversation", () => {
+  test("the messages come back and the next turn continues them", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "이어서" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+
+    session.restore([
+      { role: "user", content: "예전 질문" },
+      { role: "assistant", content: "예전 답" },
+    ]);
+    await session.send("그 다음은?", never);
+
+    const request = model.seen[0] as { messages: Array<{ role: string; content: unknown }> };
+    const texts = request.messages.map((m) => String(m.content));
+    assert.ok(texts.some((t) => t.includes("예전 질문")));
+    assert.ok(texts.some((t) => t.includes("그 다음은?")));
+  });
+
+  test("a stored system prompt is not restored", async () => {
+    // It is re-seeded from the current mode every turn. Restoring one would
+    // put a prompt from a different mode back into this session.
+    const fixture = await repo();
+    const model = scripted([turn({ text: "…" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      mode: "ask",
+      logger: nullLogger,
+    });
+
+    session.restore([
+      { role: "system", content: "STALE_PROMPT_FROM_ANOTHER_MODE" },
+      { role: "user", content: "질문" },
+    ]);
+    await session.send("또 질문", never);
+
+    const request = model.seen[0] as { messages: Array<{ role: string; content: unknown }> };
+    const systems = request.messages.filter((m) => m.role === "system");
+    assert.equal(systems.length, 1, "there should be exactly one system message");
+    assert.ok(!String(systems[0]?.content).includes("STALE_PROMPT_FROM_ANOTHER_MODE"));
+    assert.match(String(systems[0]?.content), /You answer questions about this repository/);
+  });
+
+  test("restoring replaces rather than appends", async () => {
+    const fixture = await repo();
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model: scripted([turn({ text: "…" })]),
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    session.restore([{ role: "user", content: "첫 번째" }]);
+    session.restore([{ role: "user", content: "두 번째" }]);
+    const history = session.history().map((m) => String(m.content));
+    assert.deepEqual(history, ["두 번째"]);
+  });
+});

@@ -167,12 +167,46 @@ describe("the extension stays thin (§ the reason src/ holds the logic)", () => 
   test("no decision about models, commands or approval is made in the extension", () => {
     // Anything here is untestable by `pnpm test`. The policies live in `src/`
     // for that reason, and this is what stops them drifting back.
+    // Matched as model-id shapes rather than as bare substrings. `coder` alone
+    // fires on `TextDecoder`, and a rule that cries wolf is one the next person
+    // silences — after which it protects nothing. Each of these still catches
+    // the real thing: the assertions below prove it.
+    const MODEL_SHAPED = [/\bqwen[\w.-]*/i, /\bexaone[\w.-]*/i, /\bgpt-oss[\w.-]*/i, /-coder\b/i, /\bllama-\d/i];
+
     for (const file of hostFiles) {
       if (file.name.includes("orchestrator")) continue; // the Arena's own client
-      for (const smell of ["coder", "exaone", "qwen", "gpt-oss"]) {
-        assert.ok(!file.text.toLowerCase().includes(smell), `${file.name} names a model`);
+      for (const smell of MODEL_SHAPED) {
+        const hit = smell.exec(file.text);
+        assert.equal(hit, null, `${file.name} names a model: ${hit?.[0]}`);
       }
       assert.ok(!file.text.includes("npm publish"), `${file.name} decides what may run`);
+    }
+  });
+
+  test("that rule still catches a model name, and still ignores ordinary code", () => {
+    // Written down because the rule was loosened once to stop it firing on
+    // `TextDecoder`, and a loosened rule is worth only what it still catches.
+    const MODEL_SHAPED = [/\bqwen[\w.-]*/i, /\bexaone[\w.-]*/i, /\bgpt-oss[\w.-]*/i, /-coder\b/i, /\bllama-\d/i];
+    const fires = (text: string): boolean => MODEL_SHAPED.some((r) => r.test(text));
+
+    for (const named of [
+      'const m = "qwen3-coder";',
+      'if (id === "exaone-4.0-32b") {',
+      'fallback("gpt-oss-20b")',
+      'model: "qwen2.5-coder-32b"',
+      '"llama-3.3-70b"',
+    ]) {
+      assert.ok(fires(named), `should have caught: ${named}`);
+    }
+
+    for (const ordinary of [
+      'new TextDecoder("utf-8")',
+      "const decoder = new TextDecoder();",
+      "encoder.encode(text)",
+      "// the coder writes the code",
+      "transcoderOptions",
+    ]) {
+      assert.ok(!fires(ordinary), `should have ignored: ${ordinary}`);
     }
   });
 

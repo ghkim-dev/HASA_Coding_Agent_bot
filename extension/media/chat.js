@@ -107,6 +107,13 @@ const el = {
   status: /** @type {HTMLElement} */ (document.getElementById("status")),
   newChat: /** @type {HTMLButtonElement} */ (document.getElementById("newChat")),
   verify: /** @type {HTMLButtonElement} */ (document.getElementById("verify")),
+  attach: /** @type {HTMLButtonElement} */ (document.getElementById("attach")),
+  attachMenu: /** @type {HTMLElement} */ (document.getElementById("attachMenu")),
+  attachments: /** @type {HTMLElement} */ (document.getElementById("attachments")),
+  historyBtn: /** @type {HTMLButtonElement} */ (document.getElementById("historyBtn")),
+  history: /** @type {HTMLElement} */ (document.getElementById("history")),
+  historyList: /** @type {HTMLElement} */ (document.getElementById("historyList")),
+  historyClose: /** @type {HTMLButtonElement} */ (document.getElementById("historyClose")),
   connect: /** @type {HTMLElement} */ (document.getElementById("connect")),
   connectDetail: /** @type {HTMLElement} */ (document.getElementById("connectDetail")),
   connectBtn: /** @type {HTMLButtonElement} */ (document.getElementById("connectBtn")),
@@ -218,6 +225,85 @@ function showArtifact(message) {
 
   if (anchor && anchor.nextSibling) host.insertBefore(figure, anchor.nextSibling);
   else host.appendChild(figure);
+  scrollToEnd();
+}
+
+/** The staged files, as chips with a way to take one back off. */
+function renderAttachments(list) {
+  el.attachments.textContent = "";
+  el.attachments.classList.toggle("hidden", list.length === 0);
+  for (const item of list) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+
+    const icon = document.createElement("span");
+    icon.textContent = item.kind === "image" ? "🖼" : "📄";
+    const label = document.createElement("span");
+    // textContent, not innerHTML: this is a filename from the user's disk.
+    label.textContent = `${item.name} · ${item.note}`;
+
+    const remove = document.createElement("button");
+    remove.className = "chip-x";
+    remove.textContent = "✕";
+    remove.title = "빼기";
+    remove.addEventListener("click", () => post({ type: "removeAttachment", id: item.id }));
+
+    chip.append(icon, label, remove);
+    el.attachments.appendChild(chip);
+  }
+}
+
+/** Past conversations for the key in use. */
+function renderHistory(state) {
+  el.historyList.textContent = "";
+  if (state.history.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "muted";
+    empty.textContent = "아직 저장된 대화가 없습니다.";
+    el.historyList.appendChild(empty);
+    return;
+  }
+
+  for (const item of state.history) {
+    const row = document.createElement("li");
+    row.className = item.id === state.openConversationId ? "history-row on" : "history-row";
+
+    const open = document.createElement("button");
+    open.className = "history-open";
+    open.textContent = item.title;
+    open.addEventListener("click", () => post({ type: "openConversation", id: item.id }));
+
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+    meta.textContent = `${item.messageCount}개 · ${new Date(item.updatedAt).toLocaleDateString()}`;
+
+    const remove = document.createElement("button");
+    remove.className = "ghost";
+    remove.textContent = "삭제";
+    remove.addEventListener("click", () => post({ type: "deleteConversation", id: item.id }));
+
+    row.append(open, meta, remove);
+    el.historyList.appendChild(row);
+  }
+}
+
+/** Redraws the whole transcript from a conversation that was reopened. */
+function renderTranscript(turns) {
+  el.transcript.textContent = "";
+  current = null;
+  for (const turn of turns) {
+    if (turn.role === "user") {
+      addUserTurn(turn.text);
+      continue;
+    }
+    const node = document.createElement("div");
+    node.className = "turn agent";
+    const body = document.createElement("div");
+    body.className = "body";
+    renderMarkdown(body, turn.text);
+    node.appendChild(body);
+    el.transcript.appendChild(node);
+  }
   scrollToEnd();
 }
 
@@ -340,6 +426,11 @@ function renderState(state) {
 
   // Offered only when there is a key to measure with, and worth pointing at
   // while nothing has been measured yet.
+  renderAttachments(state.attachments);
+  renderHistory(state);
+  el.attach.disabled = state.busy || !connection.connected;
+  el.historyBtn.disabled = !connection.connected;
+
   el.verify.disabled = state.busy || !connection.connected;
   el.verify.classList.toggle("hidden", !connection.connected);
   el.verify.classList.toggle("primary", connection.connected && !state.anyVerified);
@@ -397,6 +488,31 @@ el.connectBtn.addEventListener("click", () => post({ type: "connect" }));
 el.viewDiff.addEventListener("click", () => post({ type: "viewDiff" }));
 el.keep.addEventListener("click", () => post({ type: "keep" }));
 el.undo.addEventListener("click", () => post({ type: "undo" }));
+el.attach.addEventListener("click", (event) => {
+  event.stopPropagation();
+  el.attachMenu.classList.toggle("hidden");
+});
+
+for (const button of el.attachMenu.querySelectorAll("button")) {
+  button.addEventListener("click", () => {
+    el.attachMenu.classList.add("hidden");
+    post({ type: "attach", source: button.dataset.source });
+  });
+}
+
+// A menu that only closes on its own items is one that stays open by accident.
+document.addEventListener("click", () => el.attachMenu.classList.add("hidden"));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") el.attachMenu.classList.add("hidden");
+});
+
+el.historyBtn.addEventListener("click", () => {
+  el.history.classList.toggle("hidden");
+  post({ type: "openHistory" });
+});
+
+el.historyClose.addEventListener("click", () => el.history.classList.add("hidden"));
+
 el.verify.addEventListener("click", () => {
   post({ type: "verifyModels" });
 });
@@ -413,6 +529,7 @@ window.addEventListener("message", (e) => {
   else if (message.type === "event") renderEvent(message.event);
   else if (message.type === "notice") notice(message.level, message.text);
   else if (message.type === "artifact") showArtifact(message);
+  else if (message.type === "transcript") renderTranscript(message.turns);
 });
 
 post({ type: "ready" });

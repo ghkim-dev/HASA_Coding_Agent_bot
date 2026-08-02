@@ -27,6 +27,11 @@ export type PanelMessage =
   | { type: "changeKey" }
   | { type: "refreshModels" }
   | { type: "verifyModels" }
+  | { type: "attach"; source: "file" | "workspace" }
+  | { type: "removeAttachment"; id: string }
+  | { type: "openHistory" }
+  | { type: "openConversation"; id: string }
+  | { type: "deleteConversation"; id: string }
   | { type: "viewDiff" }
   | { type: "undo" }
   | { type: "keep" }
@@ -50,6 +55,11 @@ export interface PanelState {
    * that they exist and how to reach them: by asking.
    */
   canGenerateMedia: boolean;
+  /** Files staged for the next message. Names only — no contents cross over. */
+  attachments: Array<{ id: string; name: string; kind: "text" | "image"; note: string }>;
+  /** Past conversations for the key in use. */
+  history: Array<{ id: string; title: string; updatedAt: number; messageCount: number }>;
+  openConversationId: string | null;
   busy: boolean;
   workspaceOpen: boolean;
   changedFiles: string[];
@@ -67,7 +77,9 @@ export type HostMessage =
    * mint a `vscode-webview:` URI, and the webview must never be handed a
    * filesystem path it could try to resolve itself.
    */
-  | { type: "artifact"; callId: string; kind: "image" | "video"; src: string; path: string };
+  | { type: "artifact"; callId: string; kind: "image" | "video"; src: string; path: string }
+  /** Redraw the transcript from a conversation the user reopened. */
+  | { type: "transcript"; turns: Array<{ role: "user" | "assistant"; text: string }> };
 
 export class ChatPanel {
   static active: ChatPanel | null = null;
@@ -159,8 +171,19 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     </div>
     <div class="spacer"></div>
     <span id="status" class="status"></span>
+    <button id="historyBtn" class="ghost" title="이전 대화">기록</button>
     <button id="newChat" class="ghost" title="새 대화">새 대화</button>
   </header>
+
+  <section id="history" class="card hidden">
+    <h2>이전 대화</h2>
+    <p class="muted">이 API Key로 나눈 대화만 보입니다. 이 컴퓨터에만 저장됩니다.</p>
+    <ul id="historyList"></ul>
+    <div class="row">
+      <div class="spacer"></div>
+      <button id="historyClose" class="ghost">닫기</button>
+    </div>
+  </section>
 
   <section id="connect" class="card hidden">
     <h2>HASA Coding Agent</h2>
@@ -180,8 +203,14 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   </section>
 
   <footer>
+    <div id="attachments" class="attachments hidden"></div>
     <textarea id="prompt" rows="3" placeholder="무엇을 만들어 드릴까요?"></textarea>
     <div class="row">
+      <button id="attach" class="ghost" title="파일 첨부">＋</button>
+      <div id="attachMenu" class="menu hidden" role="menu">
+        <button data-source="file" role="menuitem">내 컴퓨터에서 올리기</button>
+        <button data-source="workspace" role="menuitem">작업 공간에서 고르기</button>
+      </div>
       <span id="hint" class="hint"></span>
       <div class="spacer"></div>
       <button id="cancel" class="ghost hidden">중지</button>
