@@ -43,10 +43,37 @@ const options = {
   resolveExtensions: [".ts", ".js", ".mjs", ".json"],
 };
 
+/**
+ * The webview script, bundled for the same reason.
+ *
+ * It needs the Markdown parser, and a parser is the kind of thing that is wrong
+ * in ways only a test finds — so the parser lives in `src/` under `pnpm test`
+ * and the browser file imports it. A plain <script> cannot resolve a `.ts`
+ * specifier, so this one gets bundled too. IIFE rather than ESM: the panel
+ * loads it with a nonce'd <script> tag, not a module graph.
+ *
+ * `platform: "browser"` matters. The webview has no `require`, and bundling
+ * this as though it were Node would emit one.
+ */
+/** @type {import("esbuild").BuildOptions} */
+const webview = {
+  entryPoints: [join(here, "media", "chat.js")],
+  outfile: join(here, "media", "chat.bundle.js"),
+  bundle: true,
+  platform: "browser",
+  format: "iife",
+  target: "es2022",
+  sourcemap: true,
+  minify: false,
+  logLevel: "info",
+  resolveExtensions: [".ts", ".js", ".mjs", ".json"],
+};
+
 if (watch) {
   const ctx = await context(options);
-  await ctx.watch();
+  const webviewCtx = await context(webview);
+  await Promise.all([ctx.watch(), webviewCtx.watch()]);
   console.log("watching…");
 } else {
-  await build(options);
+  await Promise.all([build(options), build(webview)]);
 }

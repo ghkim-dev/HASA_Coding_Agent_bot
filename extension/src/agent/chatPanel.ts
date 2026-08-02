@@ -161,7 +161,7 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     </div>
   </footer>
 
-  <script nonce="${nonce}" src="${media("chat.js")}"></script>
+  <script nonce="${nonce}" src="${media("chat.bundle.js")}"></script>
 </body>
 </html>`;
 }

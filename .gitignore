@@ -25,3 +25,5 @@ Thumbs.db
 
 # downloaded VS Code for extension host tests
 .vscode-test/
+extension/media/chat.bundle.js
+extension/media/chat.bundle.js.map

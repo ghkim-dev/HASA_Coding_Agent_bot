@@ -14,7 +14,91 @@
  * colleague's summary rather than an execution trace.
  */
 
+import { parseMarkdown } from "../../src/agent/markdown.ts";
+
 const vscode = acquireVsCodeApi();
+
+/**
+ * Renders parsed Markdown into a container.
+ *
+ * Every piece of text goes in through `textContent` and every element is built
+ * with `createElement`. There is no `innerHTML` anywhere in this function, and
+ * that is not belt-and-braces: this text comes from a model, which is to say
+ * from whatever it read in the user's repository. The CSP would stop a script
+ * from running, but the rule that model output is never HTML is cheaper to keep
+ * than to reason about each time.
+ */
+function renderMarkdown(container, source) {
+  container.textContent = "";
+  appendBlocks(container, parseMarkdown(source));
+}
+
+function appendBlocks(container, blocks) {
+  for (const block of blocks) {
+    switch (block.kind) {
+      case "heading": {
+        // Rendered as emphasised text rather than a real <h1>. The model is
+        // answering inside a chat turn, not authoring a document, and a page
+        // heading in the middle of a conversation reads as a mistake.
+        const node = document.createElement("p");
+        node.className = "md-heading";
+        appendInlines(node, block.inlines);
+        container.appendChild(node);
+        break;
+      }
+
+      case "list": {
+        const list = document.createElement(block.ordered ? "ol" : "ul");
+        for (const item of block.items) {
+          const li = document.createElement("li");
+          appendInlines(li, item.inlines);
+          // Sub-items nest. Flattening them into the parent renumbered them as
+          // siblings, which told the user a structure the model did not write.
+          appendBlocks(li, item.children);
+          list.appendChild(li);
+        }
+        container.appendChild(list);
+        break;
+      }
+
+      case "code": {
+        const pre = document.createElement("pre");
+        const code = document.createElement("code");
+        code.textContent = block.text;
+        if (block.language) code.dataset.language = block.language;
+        pre.appendChild(code);
+        container.appendChild(pre);
+        break;
+      }
+
+      default: {
+        const node = document.createElement("p");
+        appendInlines(node, block.inlines);
+        container.appendChild(node);
+        break;
+      }
+    }
+  }
+}
+
+function appendInlines(parent, inlines) {
+  for (const inline of inlines) {
+    if (inline.kind === "text") {
+      parent.appendChild(document.createTextNode(inline.text));
+      continue;
+    }
+    if (inline.kind === "code") {
+      const node = document.createElement("code");
+      node.textContent = inline.text;
+      parent.appendChild(node);
+      continue;
+    }
+    // Emphasis holds spans, not a string, so `code` inside bold stays code.
+    const node = document.createElement(inline.kind === "strong" ? "strong" : "em");
+    appendInlines(node, inline.children);
+    parent.appendChild(node);
+  }
+}
 
 const el = {
   bar: /** @type {HTMLElement} */ (document.getElementById("bar")),
@@ -64,7 +148,10 @@ function openAgentTurn() {
   body.className = "body";
   node.appendChild(body);
   el.transcript.appendChild(node);
-  current = { node, body, steps: new Map() };
+  // The raw text is kept because Markdown cannot be rendered incrementally:
+  // a `**` is only emphasis once its partner arrives, so each delta re-renders
+  // from the accumulated source rather than appending to the DOM.
+  current = { node, body, steps: new Map(), raw: "", frame: 0 };
   scrollToEnd();
   return current;
 }
@@ -79,6 +166,28 @@ function stepLine(icon, text, className) {
   label.textContent = text;
   line.append(glyph, label);
   return line;
+}
+
+/**
+ * Coalesces re-renders to one per frame.
+ *
+ * Deltas arrive per token, and rebuilding the body for each one would rebuild
+ * it hundreds of times a second to no visible effect.
+ */
+function scheduleRender(turn) {
+  if (turn.frame !== 0) return;
+  turn.frame = requestAnimationFrame(() => {
+    turn.frame = 0;
+    renderMarkdown(turn.body, turn.raw);
+    scrollToEnd();
+  });
+}
+
+/** Renders now, so the finished turn cannot be left a frame behind. */
+function flushRender(turn) {
+  if (turn.frame !== 0) cancelAnimationFrame(turn.frame);
+  turn.frame = 0;
+  renderMarkdown(turn.body, turn.raw);
 }
 
 function notice(level, text) {
@@ -102,7 +211,8 @@ function renderEvent(event) {
 
   switch (event.type) {
     case "text":
-      turn.body.textContent += event.delta;
+      turn.raw += event.delta;
+      scheduleRender(turn);
       break;
 
     case "tool_start": {
@@ -142,7 +252,8 @@ function renderEvent(event) {
     case "done":
       // The summary is the model's own words when it produced them, so an empty
       // body is filled rather than duplicated.
-      if (turn.body.textContent.trim().length === 0) turn.body.textContent = event.summary;
+      if (turn.raw.trim().length === 0) turn.raw = event.summary;
+      flushRender(turn);
       current = null;
       break;
 
