@@ -9,7 +9,27 @@ import { describeVerification, verifyModels } from "../../../src/provider/hasa/v
 import { FileModelCache } from "../../../src/provider/modelCache.ts";
 import { ProviderError } from "../../../src/provider/errors.ts";
 import type { ModelListing, ProviderValidation } from "../../../src/provider/types.ts";
+import type { CommandSpec } from "../../../src/protocol/index.ts";
+import type { RuntimeGap } from "../../../src/agent/discoverCommands.ts";
 import { discoverCommands } from "./commands.ts";
+
+/**
+ * What can be run here, and what is missing.
+ *
+ * Logged because a beginner who is told "Python is not installed" will
+ * reasonably ask how the agent knows, and the output channel is where that
+ * answer lives.
+ */
+async function workspaceCommands(
+  root: string,
+  log: vscode.OutputChannel,
+): Promise<{ commands: CommandSpec[]; runtimeGaps: RuntimeGap[] }> {
+  const { commands, gaps } = await discoverCommands(root);
+  const names = commands.map((c) => [c.cmd, ...c.args].join(" "));
+  log.appendLine(`[hasa] runnable: ${names.length > 0 ? names.join(", ") : "(none)"}`);
+  for (const gap of gaps) log.appendLine(`[hasa] ${gap.language} files present, no interpreter found`);
+  return { commands, runtimeGaps: gaps };
+}
 
 /**
  * Everything the agent needs, assembled once and held in the extension host.
@@ -257,7 +277,7 @@ export class AgentHost {
       approvalMode: vscode.workspace
         .getConfiguration("hasaAgent")
         .get<"safe" | "balanced" | "auto">("approvalMode", "safe"),
-      commands: await discoverCommands(folder.uri.fsPath),
+      ...(await workspaceCommands(folder.uri.fsPath, this.log)),
       onEvent,
     });
     return this.session;

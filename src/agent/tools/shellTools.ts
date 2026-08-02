@@ -48,21 +48,40 @@ export function createShellTools(opts: ShellToolOptions): AgentTool[] {
   return tools;
 }
 
-function describeAllowlist(allowlist: CommandSpec[]): string {
-  return allowlist.map((c) => `${c.gate} (${c.cmd} ${c.args.join(" ")})`.trim()).join(", ");
+/**
+ * What the model calls each command.
+ *
+ * The gate alone was enough while every command came from `package.json`, where
+ * there is one `test` and one `build`. A workspace can hold several runnable
+ * scripts, and keying by gate silently dropped all but the last of them.
+ */
+export function labelFor(spec: CommandSpec, allowlist: readonly CommandSpec[]): string {
+  const sameGate = allowlist.filter((other) => other.gate === spec.gate);
+  if (sameGate.length <= 1) return spec.gate;
+  // The last argument is the file for a run command, which is the part the user
+  // and the model both think in.
+  return `${spec.gate} ${spec.args[spec.args.length - 1] ?? ""}`.trim();
+}
+
+function describeAllowlist(byLabel: Map<string, CommandSpec>): string {
+  return [...byLabel]
+    .map(([label, c]) => `"${label}" (${[c.cmd, ...c.args].join(" ")})`)
+    .join(", ");
 }
 
 function executeCommand(opts: ShellToolOptions): AgentTool {
   // Keyed by plain string: the model sends whatever it likes, and narrowing the
   // key type would only move the check from runtime to a cast.
-  const byGate = new Map<string, CommandSpec>(opts.allowlist.map((c) => [c.gate, c]));
+  const byGate = new Map<string, CommandSpec>(
+    opts.allowlist.map((c) => [labelFor(c, opts.allowlist), c]),
+  );
   return {
     name: "execute_command",
     risk: "execute",
     description:
-      `Run one of this project's declared commands: ${describeAllowlist(opts.allowlist)}. ` +
-      "Nothing else can be run. Use it to check your work — a change that has not been built or tested " +
-      "is a change you are guessing about.",
+      `Run one of this workspace's commands: ${describeAllowlist(byGate)}. ` +
+      "Nothing else can be run. Use it to check your work — a change that has not been built, tested " +
+      "or run is a change you are guessing about.",
     parameters: {
       type: "object",
       properties: {

@@ -26,7 +26,13 @@ export type GateName = (typeof GATE_NAMES)[number];
 /** Gates whose failure removes a candidate outright. */
 export const HARD_GATES: GateName[] = ["no_change", "patch_applies", "build", "test"];
 
-export const COMMAND_GATES = ["install", "build", "test", "typecheck", "lint"] as const;
+/**
+ * `run` is not a gate in the Arena's sense — nothing is scored by it and it
+ * appears in no `HARD_GATES`. It exists because the coding agent's allowlist
+ * uses this same shape, and "run the program the user is looking at" is the
+ * request a beginner actually makes.
+ */
+export const COMMAND_GATES = ["install", "build", "test", "typecheck", "lint", "run"] as const;
 export type CommandGate = (typeof COMMAND_GATES)[number];
 
 /**

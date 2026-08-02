@@ -4,6 +4,7 @@ import { Sandbox } from "../core/sandbox.ts";
 import { nullLogger, type Logger } from "../hasa-client/logger.ts";
 import type { ProviderMessage } from "../provider/types.ts";
 import { ApprovalManager } from "./approval.ts";
+import type { RuntimeGap } from "./discoverCommands.ts";
 import { CheckpointManager } from "./checkpoint.ts";
 import { AgentLoop } from "./loop.ts";
 import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
@@ -40,6 +41,12 @@ export interface AgentSessionOptions {
   approvalMode?: ApprovalMode;
   /** Commands this project declares. Empty means no command tool is offered. */
   commands?: CommandSpec[];
+  /**
+   * Languages present here with no interpreter installed. Told to the model so
+   * "I cannot run it" can become "Python is not installed, here is where to get
+   * it" — the difference between a dead end and a next step.
+   */
+  runtimeGaps?: RuntimeGap[];
   /** Restricts writes to these path prefixes. Reads stay workspace-wide. */
   writeScope?: string[];
   budget?: Partial<AgentBudget>;
@@ -151,6 +158,7 @@ export class AgentSession {
         workspaceNote({
           canRunCommands: (this.opts.commands ?? []).length > 0,
           isGitRepo: this.isGitRepo,
+          runtimeGaps: this.opts.runtimeGaps,
         }),
     };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];

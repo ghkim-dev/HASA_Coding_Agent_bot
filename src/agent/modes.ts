@@ -109,13 +109,35 @@ export function modeDefinition(mode: AgentMode): ModeDefinition {
  * "I cannot run this here, but you can with `python calculator.py`" has given
  * the user something; one that keeps promising has not.
  */
-export function workspaceNote(available: { canRunCommands: boolean; isGitRepo: boolean }): string {
+export function workspaceNote(available: {
+  canRunCommands: boolean;
+  isGitRepo: boolean;
+  /** Languages present here whose interpreter is not installed. */
+  runtimeGaps?: ReadonlyArray<{ language: string; files: readonly string[]; install: string }>;
+}): string {
   const limits: string[] = [];
+
+  /*
+   * A missing interpreter is stated before the general "cannot run" line,
+   * because they are different facts and only one of them the user can fix.
+   * Told merely that nothing is runnable, someone who is not a programmer
+   * concludes their file is wrong; told that Python is not installed and where
+   * to get it, they are three minutes from running it.
+   */
+  for (const gap of available.runtimeGaps ?? []) {
+    limits.push(
+      `- This workspace has ${gap.language} files (${gap.files.join(", ")}) but ${gap.language} is not\n` +
+        `  installed, so nothing can run them. If the user asks you to run one, tell them that plainly:\n` +
+        `  the code is fine, the tool to run it is missing, and they should ${gap.install}.\n` +
+        `  Say it in one or two sentences, without jargon. Do not guess at another way to run it.`,
+    );
+  }
+
   if (!available.canRunCommands) {
     limits.push(
-      "- You cannot run programs, tests or any command in this workspace: it declares no runnable\n" +
-        "  scripts, so no such tool exists. If asked to run something, say plainly that you cannot,\n" +
-        "  and tell the user the exact command they can run themselves.",
+      "- You cannot run programs, tests or any command in this workspace, so no such tool exists.\n" +
+        "  If asked to run something, say plainly that you cannot, and tell the user the exact\n" +
+        "  command they can run themselves in a terminal.",
     );
   }
   if (!available.isGitRepo) {
