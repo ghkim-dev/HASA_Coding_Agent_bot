@@ -11,7 +11,7 @@ import { ProviderError } from "../../../src/provider/errors.ts";
 import type { ModelListing, ProviderValidation } from "../../../src/provider/types.ts";
 import type { CommandSpec } from "../../../src/protocol/index.ts";
 import type { RuntimeGap } from "../../../src/agent/discoverCommands.ts";
-import { HasaCatalog } from "../../../src/provider/hasa/hasaCatalog.ts";
+import { HasaCatalog, canConverse } from "../../../src/provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../../../src/provider/hasa/hasaMediaTransport.ts";
 import { HASA_DEFAULT_BASE_URL } from "../../../src/provider/hasa/defaults.ts";
 import type { AgentSessionOptions } from "../../../src/agent/session.ts";
@@ -69,6 +69,8 @@ export class AgentHost {
   private selectedModelId: string | null = null;
   private autoChoice: AutoModelChoice | null = null;
   private catalog: HasaCatalog | null = null;
+  /** Why the last turn could not start, when the reason is worth showing. */
+  private modelProblem: string | null = null;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
 
@@ -96,6 +98,14 @@ export class AgentHost {
 
   selectModel(modelId: string | null): void {
     this.selectedModelId = modelId;
+    this.modelProblem = null;
+  }
+
+  /** Taken, not read: the reason is shown once and then it is stale. */
+  takeModelProblem(): string | null {
+    const problem = this.modelProblem;
+    this.modelProblem = null;
+    return problem;
   }
 
   get busy(): boolean {
@@ -188,7 +198,8 @@ export class AgentHost {
     const origin = (configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL).replace(/\/v1\/?$/, "");
 
     const transport = createMediaTransport({ origin, apiKey: key });
-    this.catalog ??= new HasaCatalog(transport);
+    await this.ensureCatalog();
+    if (this.catalog === null) return {};
 
     const [imageModels, videoModels] = await Promise.all([
       this.catalog.byModality("image"),
@@ -264,7 +275,10 @@ export class AgentHost {
     if (provider === null) return "먼저 API Key를 입력해 주세요.";
 
     if (this.validation === null) await this.validate();
-    const listing = await provider.listModels({ refresh: true });
+    // Only models that could hold a conversation are worth measuring — the
+    // probe asks for a chat completion, and an image model answers 404 to that
+    // no matter how well it draws.
+    const listing = (await this.conversationModels()) ?? (await provider.listModels({ refresh: true }));
 
     // Anything measured under the old answers is re-measured, which is the
     // point of pressing the button.
@@ -281,6 +295,58 @@ export class AgentHost {
     this.autoChoice = null;
     this.log.appendLine(`[hasa] verified ${result.models.length} model(s)`);
     return describeVerification(result);
+  }
+
+  /**
+   * The models that can hold the conversation.
+   *
+   * Not every model in the catalogue can. Selecting an image model in the
+   * picker sent the turn to `/v1/chat/completions` and got a 404 before the
+   * agent did anything — a user who wanted a picture had reached for the image
+   * model, which is the obvious thing to do and the wrong one. Images come from
+   * the generation tools; you ask for one, you do not switch model to get it.
+   *
+   * Which modalities those are is decided in `src/provider/hasa/hasaCatalog.ts`.
+   * Nothing here knows the name of a single model, which is what keeps that
+   * decision testable and this file thin.
+   *
+   * A catalogue that cannot be reached leaves every modality unknown, and
+   * unknown converses — the picker degrades to what it listed before rather
+   * than to empty.
+   */
+  async conversationModels(): Promise<ModelListing | null> {
+    const listing = await this.listModels();
+    if (listing === null) return null;
+
+    const catalog = await this.ensureCatalog();
+    if (catalog === null) return listing;
+
+    const modalities = new Map((await catalog.all()).map((e) => [e.id, e.modality]));
+    const models = listing.models.filter((m) => canConverse(modalities.get(m.id) ?? "unknown"));
+    const hidden = listing.models.length - models.length;
+    if (hidden > 0) this.log.appendLine(`[hasa] ${hidden} model(s) hidden from the picker: not conversational`);
+    return { ...listing, models };
+  }
+
+  /** Whether asking for a picture or a clip will actually produce one. */
+  async canGenerateMedia(): Promise<boolean> {
+    const catalog = await this.ensureCatalog();
+    if (catalog === null) return false;
+    const [images, videos] = await Promise.all([
+      catalog.byModality("image"),
+      catalog.byModality("video"),
+    ]);
+    return images.length > 0 || videos.length > 0;
+  }
+
+  private async ensureCatalog(): Promise<HasaCatalog | null> {
+    if (this.catalog !== null) return this.catalog;
+    const key = await this.apiKey();
+    if (key === null) return null;
+    const configured = vscode.workspace.getConfiguration("hasaAgent").get<string>("baseUrl", "").trim();
+    const origin = (configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL).replace(/\/v1\/?$/, "");
+    this.catalog = new HasaCatalog(createMediaTransport({ origin, apiKey: key }));
+    return this.catalog;
   }
 
   async listModels(refresh = false): Promise<ModelListing | null> {
@@ -342,6 +408,20 @@ export class AgentHost {
   /** The model to use, and how it will be asked to call tools. */
   private async resolveModel(provider: HasaProvider): Promise<AutoModelChoice | null> {
     if (this.selectedModelId !== null) {
+      // The picker no longer offers these, but a selection outlives the list it
+      // came from, and sending one produces a bare `404 Not Found` that says
+      // nothing about what went wrong. Refusing here costs a request and buys
+      // an error the user can act on.
+      const catalog = await this.ensureCatalog();
+      const modality = (await catalog?.modalityOf(this.selectedModelId)) ?? "unknown";
+      if (!canConverse(modality)) {
+        this.modelProblem =
+          `${this.selectedModelId} 은(는) ${modality === "image" ? "이미지" : modality === "video" ? "동영상" : modality} ` +
+          "전용 모델이라 대화에 쓸 수 없습니다. ✨ Auto 로 두고 원하는 것을 말씀하시면 " +
+          "필요할 때 알아서 사용합니다.";
+        this.log.appendLine(`[hasa] refused ${this.selectedModelId}: modality ${modality} cannot converse`);
+        return null;
+      }
       // A hand-picked model still needs the right protocol, and the capability
       // cache usually already knows — asking it costs nothing.
       const capabilities = await provider.capabilities.capabilitiesOf(this.selectedModelId);

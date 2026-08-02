@@ -11,7 +11,7 @@ import {
   readJob,
   type MediaTransport,
 } from "./hasaMedia.ts";
-import { parseCatalog, readVideoSpec, HasaCatalog } from "./hasaCatalog.ts";
+import { canConverse, parseCatalog, readVideoSpec, HasaCatalog } from "./hasaCatalog.ts";
 
 /**
  * Image and video generation.
@@ -422,5 +422,73 @@ describe("the catalogue, which is where modality comes from", () => {
     assert.equal(spec?.audio, true);
     assert.equal(spec?.frameAlign, 8);
     assert.deepEqual(spec?.sizes, ["1280x704", "1216x704", "768x512"]);
+  });
+});
+
+/**
+ * Which models may hold the conversation.
+ *
+ * The failure this answers was reported from a running extension: the picker
+ * listed all 21 models, the user selected `Qwen-Image` to draw a picture — the
+ * obvious thing to do — and every turn died on `404 not_found` before the agent
+ * ran at all. Verified against the live gateway: `/v1/chat/completions` answers
+ * 404 for `Qwen-Image` and `Wan2.1-T2V`, 200 for `exaone-4.0-32b`.
+ */
+describe("models that cannot converse", () => {
+  test("image and video models are not conversation models", () => {
+    assert.equal(canConverse("image"), false);
+    assert.equal(canConverse("video"), false);
+  });
+
+  test("neither are the models with their own endpoints", () => {
+    // embeddings → /v1/embeddings, rerank → /rerank. Same reason.
+    assert.equal(canConverse("embeddings"), false);
+    assert.equal(canConverse("rerank"), false);
+  });
+
+  test("chat and vision models do converse", () => {
+    assert.equal(canConverse("chat"), true);
+    assert.equal(canConverse("vision"), true);
+  });
+
+  test("a safety model converses, because it actually does", () => {
+    // granite-guardian is catalogued as `safety` and measured chat=true against
+    // the live gateway. A list of modalities that *may* converse would have
+    // excluded a model that does — which is why this is written as the inverse.
+    assert.equal(canConverse("safety"), true);
+  });
+
+  test("an unknown modality converses, so an unreachable catalogue does not empty the picker", () => {
+    // Degrading to "offer it" is recoverable; degrading to "hide it" leaves a
+    // user with no models and no explanation.
+    assert.equal(canConverse("unknown"), true);
+  });
+
+  test("filtering the live catalogue leaves the models that answer chat", async () => {
+    const catalog = new HasaCatalog({
+      fetchJson: async () => [
+        { name: "exaone-4.0-32b", modality: "chat", status: "available", callable: true },
+        { name: "qwen2.5-vl-72b", modality: "vision", status: "available", callable: true },
+        { name: "granite-guardian-3.1-8b", modality: "safety", status: "available", callable: true },
+        { name: "Qwen-Image", modality: "image", status: "available", callable: true },
+        { name: "Wan2.1-T2V", modality: "video", status: "available", callable: true },
+        { name: "bge-m3", modality: "embeddings", status: "available", callable: true },
+        { name: "bge-reranker-v2-m3", modality: "rerank", status: "available", callable: true },
+      ],
+    });
+    const entries = await catalog.all();
+    const offered = entries.filter((e) => canConverse(e.modality)).map((e) => e.id);
+
+    assert.deepEqual(offered, ["exaone-4.0-32b", "qwen2.5-vl-72b", "granite-guardian-3.1-8b"]);
+    for (const hidden of ["Qwen-Image", "Wan2.1-T2V"]) {
+      assert.ok(!offered.includes(hidden), `${hidden} would 404 on /v1/chat/completions`);
+    }
+  });
+
+  test("a model absent from the catalogue is still offered", async () => {
+    // The picker's list comes from /v1/models; the catalogue only annotates it.
+    // A model in one and not the other must not disappear.
+    const catalog = new HasaCatalog({ fetchJson: async () => [] });
+    assert.equal(canConverse(await catalog.modalityOf("brand-new-model")), true);
   });
 });

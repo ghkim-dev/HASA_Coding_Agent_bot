@@ -42,6 +42,14 @@ export interface PanelState {
    */
   models: Array<{ id: string; verified: boolean; usable: boolean }>;
   anyVerified: boolean;
+  /**
+   * Whether the gateway offers image or video generation.
+   *
+   * The picker deliberately does not list those models — selecting one sent the
+   * turn to the chat endpoint and got a 404. So the panel has to say, once,
+   * that they exist and how to reach them: by asking.
+   */
+  canGenerateMedia: boolean;
   busy: boolean;
   workspaceOpen: boolean;
   changedFiles: string[];

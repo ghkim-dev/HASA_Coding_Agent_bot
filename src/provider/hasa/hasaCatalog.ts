@@ -41,6 +41,40 @@ const KNOWN: ReadonlySet<string> = new Set([
   "safety",
 ]);
 
+/**
+ * Modalities served by an endpoint of their own.
+ *
+ * Taken from the gateway's own routing table rather than reasoned out here:
+ * image → `/v1/images/generations`, video → `/v1/videos/generations`,
+ * embeddings → `/v1/embeddings`, rerank → `/rerank`, everything else →
+ * `/v1/chat/completions`. That "everything else" matters — `granite-guardian`
+ * is catalogued as `safety` and answers chat perfectly well, so a list of
+ * modalities that *may* converse would have excluded a model that does.
+ */
+const DEDICATED_ENDPOINT: ReadonlySet<Modality> = new Set<Modality>([
+  "image",
+  "video",
+  "embeddings",
+  "rerank",
+]);
+
+/**
+ * Whether this model can hold the conversation.
+ *
+ * A user who wants a picture reasonably reaches for the image model, and the
+ * picker used to let them: selecting `Qwen-Image` sent the turn to
+ * `/v1/chat/completions`, which answers 404 before the agent does anything.
+ * Image and video models are reached through the generation tools instead —
+ * the user asks for a picture and the agent uses one.
+ *
+ * `unknown` converses. A catalogue that is unreachable must not empty the
+ * picker; not knowing what a model is has to degrade to offering it, not to
+ * hiding it.
+ */
+export function canConverse(modality: Modality): boolean {
+  return !DEDICATED_ENDPOINT.has(modality);
+}
+
 export interface CatalogEntry {
   id: string;
   modality: Modality;

@@ -59,7 +59,7 @@ export class AgentController {
   // -------------------------------------------------------------------------
 
   private async state(): Promise<PanelState> {
-    const listing = await this.host.listModels();
+    const listing = await this.host.conversationModels();
     const changed = await this.host.changedFiles();
     return {
       connection: await this.host.connectionState(),
@@ -73,6 +73,7 @@ export class AgentController {
         usable: m.capabilities.chat === true,
       })),
       anyVerified: (listing?.models ?? []).some((m) => m.capabilities.chat !== "unknown"),
+      canGenerateMedia: await this.host.canGenerateMedia(),
       busy: this.host.busy,
       workspaceOpen: vscode.workspace.workspaceFolders !== undefined,
       changedFiles: changed,
@@ -215,12 +216,15 @@ export class AgentController {
       this.showArtifact(event);
     });
     if (result === null) {
+      // A specific reason beats a generic one: "this model cannot converse" is
+      // something the user can act on, "no usable model" is not.
+      const problem = this.host.takeModelProblem();
       this.panel?.post({
         type: "notice",
         level: "error",
-        text: vscode.workspace.workspaceFolders === undefined
+        text: problem ?? (vscode.workspace.workspaceFolders === undefined
           ? "폴더를 먼저 열어 주세요."
-          : "사용할 수 있는 모델을 찾지 못했습니다. 설정에서 API Key를 확인해 주세요.",
+          : "사용할 수 있는 모델을 찾지 못했습니다. 설정에서 API Key를 확인해 주세요."),
       });
     }
     await this.push();

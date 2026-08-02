@@ -352,7 +352,11 @@ function renderState(state) {
     ? "폴더를 먼저 열어 주세요."
     : state.busy
       ? "작업 중…"
-      : "Ctrl+Enter 로 전송";
+      // The image model is not in the picker on purpose, so the one place a
+      // user would look for it has to say where it went.
+      : state.canGenerateMedia
+        ? "Ctrl+Enter 로 전송 · 그림이나 영상은 말로 요청하세요"
+        : "Ctrl+Enter 로 전송";
 
   const changed = state.changedFiles;
   el.review.classList.toggle("hidden", changed.length === 0);
