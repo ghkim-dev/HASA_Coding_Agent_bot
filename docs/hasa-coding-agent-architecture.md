@@ -745,6 +745,46 @@ Model
 
 결과는 개발 실무자의 언어로 보고한다 (§29).
 
+### 12.1 "확인되지 않음"은 "권한 없음"이 아니다
+
+Lazy probe에는 대가가 있었다. 측정을 요청할 방법이 없으면 picker는 영원히
+비어 있고, 모든 모델 옆에 붙은 "확인되지 않음"을 **권한이 있는 사용자**가
+"나는 권한이 없다"로 읽었다. 실제 보고된 실패다.
+
+원인은 두 가지였고 둘 다 UI 쪽이었다.
+
+1. **측정을 시작할 수단이 없었다.** `ensure()`는 턴이 시작될 때 Auto가 고른
+   모델 하나에 대해서만 돌아간다. Picker에 채울 값을 만드는 경로가 없었다.
+2. **문구가 두 상태를 하나로 뭉갰다.** `capable: chat === true`는 "측정 안 함"과
+   "사용 불가"를 구분하지 못한다. Tristate를 둔 이유가 바로 그 구분인데,
+   webview로 넘어오면서 boolean으로 접혔다.
+
+`src/provider/hasa/verifyModels.ts`가 정책을 갖는다. 403이 이미 `allowed_models`로
+이 키가 부를 수 있는 모델을 알려주었으므로 **나머지는 측정하지 않는다** —
+19개가 아니라 6개 요청이다. 403은 능력에 대해 아무것도 말해주지 않으므로
+그 요청은 strike만 쌓고 얻는 것이 없다. 측정은 순차적이다(공유 GPU, 동시 3에서
+503 관측). 측정하지 못한 모델은 `unknown`으로 남는다 — 장애를 영구 판정으로
+기록하는 것이 tristate가 막으려던 실수다.
+
+UI는 세 상태를 그대로 보여준다: 측정 전(표식 없음) / `✓` / `(사용 불가)`.
+
+실측 (2026-08-02, 개발용 키 1개 기준. 키마다 allow-list가 다르므로 이 표는
+예시이지 제품이 가정해도 되는 목록이 아니다):
+
+| model | chat | tools | coding | 경로 |
+|---|---|---|---|---|
+| `exaone-4.0-32b` | O | O | O | native tool calling |
+| `gpt-oss-20b` | O | O | O | native tool calling |
+| `qwen2.5-coder-32b` | O | **X** | X | text protocol (§3.2.3) |
+| `granite-guardian-3.1-8b` | O | **X** | X | text protocol (§3.2.3) |
+| `bge-m3`, `bge-reranker-v2-m3` | X | ? | X | embedding/rerank 전용 |
+| 나머지 13개 | — | — | — | 이 키에 권한 없음 (403) |
+
+`coding: false`가 CODE mode에서의 제외를 뜻하지 않는다. `autoModel`은
+`chat === true && toolCalling === false`인 모델을 text protocol 경로로 받는다
+(`autoModel.ts:142`). 즉 이 키로 **4개 모두 코드를 수정할 수 있고**, 그중 2개가
+native tool calling을 쓴다.
+
 ```
 수정 완료
 

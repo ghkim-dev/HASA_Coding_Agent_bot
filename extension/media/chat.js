@@ -22,6 +22,7 @@ const el = {
   model: /** @type {HTMLSelectElement} */ (document.getElementById("model")),
   status: /** @type {HTMLElement} */ (document.getElementById("status")),
   newChat: /** @type {HTMLButtonElement} */ (document.getElementById("newChat")),
+  verify: /** @type {HTMLButtonElement} */ (document.getElementById("verify")),
   connect: /** @type {HTMLElement} */ (document.getElementById("connect")),
   connectDetail: /** @type {HTMLElement} */ (document.getElementById("connectDetail")),
   connectBtn: /** @type {HTMLButtonElement} */ (document.getElementById("connectBtn")),
@@ -183,10 +184,23 @@ function renderState(state) {
   for (const model of state.models) {
     const option = document.createElement("option");
     option.value = model.id;
-    option.textContent = model.capable ? model.id : `${model.id} (확인되지 않음)`;
+    // Three states, not two. Before this said "확인되지 않음" for anything not
+    // yet measured, which a user with full access read as "you have no
+    // permission" — the one thing it does not mean.
+    option.textContent = !model.verified
+      ? model.id
+      : model.usable
+        ? `${model.id} ✓`
+        : `${model.id} (사용 불가)`;
     el.model.appendChild(option);
   }
   el.model.value = state.models.some((m) => m.id === chosen) ? chosen : "";
+
+  // Offered only when there is a key to measure with, and worth pointing at
+  // while nothing has been measured yet.
+  el.verify.disabled = state.busy || !connection.connected;
+  el.verify.classList.toggle("hidden", !connection.connected);
+  el.verify.classList.toggle("primary", connection.connected && !state.anyVerified);
 
   el.send.disabled = state.busy || !connection.connected || !state.workspaceOpen;
   el.cancel.classList.toggle("hidden", !state.busy);
@@ -237,6 +251,10 @@ el.connectBtn.addEventListener("click", () => post({ type: "connect" }));
 el.viewDiff.addEventListener("click", () => post({ type: "viewDiff" }));
 el.keep.addEventListener("click", () => post({ type: "keep" }));
 el.undo.addEventListener("click", () => post({ type: "undo" }));
+el.verify.addEventListener("click", () => {
+  post({ type: "verifyModels" });
+});
+
 el.newChat.addEventListener("click", () => {
   el.transcript.innerHTML = "";
   current = null;

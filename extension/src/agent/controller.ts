@@ -66,9 +66,12 @@ export class AgentController {
       modelLabel: this.host.modelLabel,
       models: (listing?.models ?? []).map((m) => ({
         id: m.id,
-        // "Confirmed" means measured, never inferred from the name.
-        capable: m.capabilities.chat === true,
+        // Measured, never inferred from the name — and "not measured" is not
+        // the same claim as "not usable".
+        verified: m.capabilities.chat !== "unknown",
+        usable: m.capabilities.chat === true,
       })),
+      anyVerified: (listing?.models ?? []).some((m) => m.capabilities.chat !== "unknown"),
       busy: this.host.busy,
       workspaceOpen: vscode.workspace.workspaceFolders !== undefined,
       changedFiles: changed,
@@ -123,6 +126,10 @@ export class AgentController {
         await this.push();
         return;
 
+      case "verifyModels":
+        await this.verify();
+        return;
+
       case "viewDiff":
         await this.showDiff();
         return;
@@ -142,6 +149,29 @@ export class AgentController {
         await this.push();
         return;
     }
+  }
+
+  /**
+   * Measures the models, with a progress notification.
+   *
+   * A notification rather than a spinner in the panel: it takes several
+   * seconds, and VS Code's own progress UI can be cancelled, which matters when
+   * each step is a real request.
+   */
+  private async verify(): Promise<void> {
+    const summary = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "HASA 모델 확인", cancellable: true },
+      async (progress, token) => {
+        const controller = new AbortController();
+        token.onCancellationRequested(() => controller.abort());
+        return this.host.verifyModels(
+          (done, total) => progress.report({ message: `${done}/${total}` }),
+          controller.signal,
+        );
+      },
+    );
+    await this.push();
+    this.panel?.post({ type: "notice", level: "info", text: summary });
   }
 
   private async send(prompt: string): Promise<void> {

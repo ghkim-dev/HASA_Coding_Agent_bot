@@ -26,6 +26,7 @@ export type PanelMessage =
   | { type: "connect" }
   | { type: "changeKey" }
   | { type: "refreshModels" }
+  | { type: "verifyModels" }
   | { type: "viewDiff" }
   | { type: "undo" }
   | { type: "keep" }
@@ -35,7 +36,12 @@ export interface PanelState {
   connection: ConnectionState;
   mode: AgentMode;
   modelLabel: string;
-  models: Array<{ id: string; capable: boolean }>;
+  /**
+   * `verified` is what has been measured, not what is permitted. The two were
+   * conflated once and a user with full access read it as having none.
+   */
+  models: Array<{ id: string; verified: boolean; usable: boolean }>;
+  anyVerified: boolean;
   busy: boolean;
   workspaceOpen: boolean;
   changedFiles: string[];
@@ -121,6 +127,7 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <div class="field">
       <label for="model">Model</label>
       <select id="model"><option value="">✨ Auto</option></select>
+      <button id="verify" class="ghost" title="이 키로 쓸 수 있는 모델을 확인합니다">모델 확인</button>
     </div>
     <div class="spacer"></div>
     <span id="status" class="status"></span>

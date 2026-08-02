@@ -5,6 +5,7 @@ import { chooseModel, protocolFor, type AutoModelChoice } from "../../../src/age
 import type { AgentEvent, AgentMode, AgentTurnResult, ApprovalRequest } from "../../../src/agent/types.ts";
 import type { HasaProvider } from "../../../src/provider/hasa/hasaProvider.ts";
 import { createHasaProvider } from "../../../src/provider/hasa/createProvider.ts";
+import { describeVerification, verifyModels } from "../../../src/provider/hasa/verifyModels.ts";
 import { FileModelCache } from "../../../src/provider/modelCache.ts";
 import { ProviderError } from "../../../src/provider/errors.ts";
 import type { ModelListing, ProviderValidation } from "../../../src/provider/types.ts";
@@ -167,6 +168,44 @@ export class AgentHost {
       this.log.appendLine(`[hasa] validate failed: ${describe(err)}`);
     }
     return this.connectionState();
+  }
+
+  /**
+   * Measures the models this key can reach.
+   *
+   * Explicit rather than automatic: probing a catalogue on startup is nineteen
+   * inference requests to fill a dropdown. But without a way to ask, the picker
+   * says "확인되지 않음" beside every model forever, which reads as *you have no
+   * permission* when it means *nobody has looked yet*.
+   *
+   * The allow-list from a 403 keeps it narrow — six requests instead of
+   * nineteen, because the other thirteen would only answer 403 again.
+   */
+  async verifyModels(
+    onProgress: (done: number, total: number) => void,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const provider = await this.ensureProvider();
+    if (provider === null) return "먼저 API Key를 입력해 주세요.";
+
+    if (this.validation === null) await this.validate();
+    const listing = await provider.listModels({ refresh: true });
+
+    // Anything measured under the old answers is re-measured, which is the
+    // point of pressing the button.
+    provider.capabilities.invalidate();
+    const result = await verifyModels({
+      models: listing.models,
+      allowedModels: this.validation?.allowedModels ?? null,
+      measure: (id) => provider.capabilities.ensure(id, signal),
+      onProgress: (p) => onProgress(p.done, p.total),
+      signal,
+    });
+
+    // The pick was made under the old measurements and may no longer be best.
+    this.autoChoice = null;
+    this.log.appendLine(`[hasa] verified ${result.models.length} model(s)`);
+    return describeVerification(result);
   }
 
   async listModels(refresh = false): Promise<ModelListing | null> {
