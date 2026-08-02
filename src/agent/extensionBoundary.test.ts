@@ -185,3 +185,87 @@ describe("the extension stays thin (§ the reason src/ holds the logic)", () => 
     }
   });
 });
+
+/**
+ * Configuration that belongs in one place stays in one place (§8).
+ *
+ * The gateway address had been written a second time in `agentHost.ts` while
+ * the rule enforcing it only scanned `src/provider` — so the rule existed, the
+ * violation was in the one directory it could not see, and everything passed.
+ * The extension is where that mistake is easiest to make, because it is the
+ * layer that reads user settings and needs a fallback.
+ */
+describe("the extension does not re-declare provider configuration (§8)", () => {
+  test("the gateway host is not written in the extension", () => {
+    for (const file of hostFiles) {
+      assert.ok(
+        !file.text.includes("open.hasa.re.kr"),
+        `${file.name} hardcodes the gateway host; import it from src/provider/hasa/defaults.ts`,
+      );
+    }
+  });
+
+  test("no webview file knows the gateway at all", () => {
+    // The webview is outside the trust boundary and has no business holding an
+    // address it could be persuaded to send something to.
+    for (const file of webviewFiles) {
+      assert.ok(!file.text.includes("open.hasa.re.kr"), `${file.name} names the gateway`);
+    }
+  });
+
+  test("the extension does not invent generation endpoints", () => {
+    // The paths live in hasaMedia.ts, verified against the live service. A
+    // second spelling here is how a working client and a broken one coexist.
+    for (const file of [...hostFiles, ...webviewFiles]) {
+      for (const path of ["/images/generations", "/videos/generations", "/v1/jobs/"]) {
+        assert.ok(!file.text.includes(path), `${file.name} spells out "${path}"`);
+      }
+    }
+  });
+});
+
+/**
+ * Model output cannot become markup.
+ *
+ * The panel gained the ability to display images. The rule that keeps that from
+ * becoming an injection surface is that the only `<img>` in the webview is
+ * built from a structured `artifact` message minted by the extension host —
+ * never from anything the model wrote.
+ */
+describe("the panel renders model text as text (§1.3)", () => {
+  test("innerHTML is only ever used to clear an element", () => {
+    // Stated as "only the empty string" rather than "no variables" because it
+    // is the version that cannot be argued with: clearing is safe, and every
+    // other assignment — literal markup included — should be createElement, so
+    // that no future edit can slip an interpolation into an existing template.
+    for (const file of webviewFiles) {
+      for (const [, assigned] of file.text.matchAll(/\.innerHTML\s*=\s*([^;\n]*)/g)) {
+        assert.match(
+          (assigned ?? "").trim(),
+          /^(""|''|``)$/,
+          `${file.name} assigns innerHTML something other than an empty string`,
+        );
+      }
+    }
+  });
+
+  test("the markdown renderer emits no image, media or link element", () => {
+    const chat = webviewFiles.find((f) => f.name.endsWith("media/chat.js"));
+    assert.ok(chat !== undefined, "chat.js should be present");
+    // Everything between the renderer and the element map is model-driven.
+    const renderer = chat.text.slice(0, chat.text.indexOf("const el = {"));
+    for (const tag of ['"img"', '"video"', '"a"', '"iframe"', '"source"']) {
+      assert.ok(
+        !renderer.includes(`createElement(${tag})`),
+        `the markdown renderer creates ${tag}; model text must not become an element that loads or navigates`,
+      );
+    }
+  });
+
+  test("an image is only ever built from a host message", () => {
+    const chat = webviewFiles.find((f) => f.name.endsWith("media/chat.js"));
+    assert.ok(chat !== undefined);
+    const imageSites = chat.text.split("\n").filter((line) => /createElement\(\s*message\.kind/.test(line));
+    assert.equal(imageSites.length, 1, "exactly one place should build media, and from `message`");
+  });
+});

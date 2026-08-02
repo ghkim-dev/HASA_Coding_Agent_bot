@@ -78,7 +78,7 @@ function decodeBase64(text: string): Uint8Array {
 }
 
 export class MediaUnavailable extends Error {
-  readonly reason: "no_image" | "no_job" | "failed" | "cancelled" | "artifact_unreachable";
+  readonly reason: "no_image" | "no_job" | "failed" | "cancelled" | "timed_out";
   constructor(reason: MediaUnavailable["reason"], message: string) {
     super(message);
     this.name = "MediaUnavailable";
@@ -214,14 +214,35 @@ export function estimateSeconds(spec: VideoSpec, frames: number): number {
 
 export interface VideoOptions {
   pollIntervalMs?: number;
+  /**
+   * How long to wait for a terminal status before giving up.
+   *
+   * Not a nicety. The poll loop exits on a terminal status and nothing else, so
+   * a job that stays `GENERATING` — a wedged worker, a status this build does
+   * not recognise as terminal — polls for as long as the process lives. In the
+   * extension that is a turn that never ends and a Send button that never comes
+   * back, and only Cancel escapes it.
+   */
+  maxWaitMs?: number;
   /** Called on every poll, for a progress bar. */
   onProgress?: (job: VideoJob) => void;
   signal?: AbortSignal;
   /** Injected so tests do not sleep. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injected so tests need no clock. */
+  now?: () => number;
 }
 
 const DEFAULT_POLL_MS = 2000;
+
+/**
+ * Fifteen minutes.
+ *
+ * The slowest published model is about 73 seconds of compute per second of
+ * output, so a ten-second clip is roughly twelve minutes at full length. This
+ * leaves room for a queue without leaving a wedged job to poll all afternoon.
+ */
+const DEFAULT_MAX_WAIT_MS = 15 * 60_000;
 
 /** Submits a video job and waits for it to finish. */
 export async function generateVideo(
@@ -247,11 +268,22 @@ export async function generateVideo(
   }
 
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? (() => Date.now());
+  const deadline = now() + (opts.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
   let job = submitted;
   opts.onProgress?.(job);
 
   while (!isTerminal(job.status)) {
     if (opts.signal?.aborted === true) throw new MediaUnavailable("cancelled", "cancelled");
+    if (now() >= deadline) {
+      // The job may still finish on the gateway, so the id goes in the message:
+      // the user can retrieve it rather than being told it is gone.
+      throw new MediaUnavailable(
+        "timed_out",
+        `the job did not finish in time and was last seen as ${job.status} ` +
+          `(${job.progress}%). Job id ${job.jobId}.`,
+      );
+    }
     await sleep(opts.pollIntervalMs ?? DEFAULT_POLL_MS);
     const polled = readJob(
       await transport.getJson(`/v1/jobs/${encodeURIComponent(job.jobId)}`, opts.signal),

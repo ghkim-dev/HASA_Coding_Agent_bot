@@ -41,7 +41,22 @@ export type Block =
   | { kind: "list"; ordered: boolean; items: ListItem[] }
   | { kind: "code"; language: string | null; text: string };
 
-const FENCE = /^(\s*)(?:```|~~~)\s*(\S*)/;
+/**
+ * A fence line, and nothing that merely starts like one.
+ *
+ * The info string is anchored to the end of the line on purpose. Taking the
+ * first word and ignoring the rest is what a strict Markdown parser does, and
+ * here it silently ate whole sentences: a model that wrote
+ * `` ```assertion **retry** `timeout` `` — a paragraph that happens to open with
+ * backticks — produced an empty code block and lost every word on the line.
+ * Found by the fuzzer, not by reading.
+ *
+ * Requiring the whole line keeps every real fence working (```` ``` ````,
+ * ```` ```py ````) and leaves anything wordier as the text the model wrote,
+ * which is the trade this parser makes everywhere: worse formatting, never
+ * lost words.
+ */
+const FENCE = /^(\s*)(?:```|~~~)\s*(\S*)\s*$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const MARKER = /^(\s*)(?:([-*+])|(\d{1,9})[.)])\s+(.*)$/;
 

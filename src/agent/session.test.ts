@@ -433,3 +433,155 @@ describe("the registry", () => {
     assert.throws(() => new ToolRegistry([tool("a", "read"), tool("a", "write")]), /duplicate tool/);
   });
 });
+
+/**
+ * Media generation, wired through a real session.
+ *
+ * The tools are tested alone and the session is tested alone; what is checked
+ * here is the join. It is the one path where a mistake is invisible until a
+ * user asks for a picture and nothing happens.
+ */
+describe("image and video generation in a session", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xde, 0xad]);
+  const entry = (id: string, modality: "image" | "video") => ({
+    id, modality, title: null, available: true, callable: true, videoSpec: null,
+  }) as const;
+
+  const media = (onPost?: () => void) => ({
+    transport: {
+      postJson: async () => {
+        onPost?.();
+        return { data: [{ b64_json: Buffer.from(PNG).toString("base64") }] };
+      },
+      getJson: async () => ({}),
+      getBinary: async () => null,
+    },
+    imageModels: [entry("img-1", "image")],
+    videoModels: [entry("vid-1", "video")],
+    videoSpecFor: async () => null,
+  });
+
+  test("the tools reach the model when the gateway offers them", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "done" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      media: media(),
+      logger: nullLogger,
+    });
+    await session.send("hello");
+
+    const offered = (model.seen[0] as { tools?: AgentTool[] }).tools ?? [];
+    const names = offered.map((t) => t.name);
+    assert.ok(names.includes("generate_image"), `tools were: ${names.join(", ")}`);
+    assert.ok(names.includes("generate_video"));
+  });
+
+  test("no media options means no media tools at all", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "done" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    await session.send("hello");
+
+    const names = ((model.seen[0] as { tools?: AgentTool[] }).tools ?? []).map((t) => t.name);
+    assert.ok(!names.some((n) => n.startsWith("generate_")), `tools were: ${names.join(", ")}`);
+  });
+
+  test("a read-only mode is never offered them", async () => {
+    // ARCHITECT and ASK cannot change the workspace, and a generated file is a
+    // change. The ceiling has to hold here, not only in the registry test.
+    for (const mode of AGENT_MODES.filter((m) => !modeCanWrite(m))) {
+      const fixture = await repo();
+      const model = scripted([turn({ text: "done" })]);
+      const session = await AgentSession.open({
+        workspaceRoot: fixture.root,
+        model,
+        approvalPort: allowingApprovalPort,
+        media: media(),
+        mode,
+        logger: nullLogger,
+      });
+      await session.send("hello");
+
+      const names = ((model.seen[0] as { tools?: AgentTool[] }).tools ?? []).map((t) => t.name);
+      assert.ok(!names.some((n) => n.startsWith("generate_")), `${mode} offered: ${names.join(", ")}`);
+    }
+  });
+
+  test("generating writes into the workspace and can be undone", async () => {
+    // The whole reason the result is a file: it is an ordinary change, so the
+    // checkpoint that protects every other edit protects this one too.
+    const fixture = await repo();
+    const model = scripted([
+      turn({ toolCalls: [call("generate_image", { prompt: "a red apple" })] }),
+      turn({ text: "made it" }),
+    ]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      media: media(),
+      logger: nullLogger,
+    });
+    await session.send("draw an apple");
+
+    const changed = await session.changedFiles();
+    assert.ok(
+      changed.some((f) => f.includes("assets/generated/a-red-apple.png")),
+      `changed: ${changed.join(", ")}`,
+    );
+
+    assert.equal(await session.undo(), true);
+    assert.deepEqual(await session.changedFiles(), []);
+  });
+
+  test("refusing the approval spends no GPU time", async () => {
+    // The request must not be sent before the user has agreed to it — a refusal
+    // after the fact would still have cost them the quota.
+    let requests = 0;
+    const fixture = await repo();
+    const model = scripted([
+      turn({ toolCalls: [call("generate_image", { prompt: "x" })] }),
+      turn({ text: "stopped" }),
+    ]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: denyingApprovalPort,
+      media: media(() => {
+        requests += 1;
+      }),
+      logger: nullLogger,
+    });
+    await session.send("draw something");
+    assert.equal(requests, 0, "a denied tool still called the gateway");
+  });
+
+  test("the user is asked before a picture is generated", async () => {
+    const recorder = recordingApprovalPort(() => true);
+    const fixture = await repo();
+    const model = scripted([
+      turn({ toolCalls: [call("generate_image", { prompt: "a red apple" })] }),
+      turn({ text: "done" }),
+    ]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: recorder.port,
+      media: media(),
+      logger: nullLogger,
+    });
+    await session.send("draw an apple");
+
+    assert.equal(recorder.requests.length, 1);
+    // What they are shown must be a decision, not a JSON blob.
+    assert.match(recorder.requests[0]!.summary, /이미지/);
+  });
+});

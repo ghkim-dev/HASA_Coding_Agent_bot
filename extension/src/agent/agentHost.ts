@@ -13,6 +13,7 @@ import type { CommandSpec } from "../../../src/protocol/index.ts";
 import type { RuntimeGap } from "../../../src/agent/discoverCommands.ts";
 import { HasaCatalog } from "../../../src/provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../../../src/provider/hasa/hasaMediaTransport.ts";
+import { HASA_DEFAULT_BASE_URL } from "../../../src/provider/hasa/defaults.ts";
 import type { AgentSessionOptions } from "../../../src/agent/session.ts";
 import { discoverCommands } from "./commands.ts";
 
@@ -180,8 +181,11 @@ export class AgentHost {
     if (key === null) return {};
 
     const configured = vscode.workspace.getConfiguration("hasaAgent").get<string>("baseUrl", "").trim();
+    // The default comes from the provider's own defaults rather than being
+    // written again here — §8 puts the gateway address in one place, and a
+    // second copy is the one that goes stale.
     // The catalogue and the media endpoints hang off the origin, not off `/v1`.
-    const origin = (configured.length > 0 ? configured : "https://open.hasa.re.kr/v1").replace(/\/v1\/?$/, "");
+    const origin = (configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL).replace(/\/v1\/?$/, "");
 
     const transport = createMediaTransport({ origin, apiKey: key });
     this.catalog ??= new HasaCatalog(transport);

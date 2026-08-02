@@ -213,6 +213,72 @@ describe("video jobs", () => {
     );
   });
 
+  test("a job that never finishes gives up instead of polling forever", async () => {
+    // Found by probing rather than by reading: the loop exited on a terminal
+    // status and on nothing else, so a wedged worker polled for as long as the
+    // process lived. In the extension that is a turn that never ends.
+    let clock = 0;
+    let polls = 0;
+    await assert.rejects(
+      () =>
+        generateVideo(
+          transport({
+            postJson: async () => ({ job_id: "j", status: "GENERATING", progress: 50 }),
+            getJson: async () => {
+              polls += 1;
+              return { job_id: "j", status: "GENERATING", progress: 50 };
+            },
+          }),
+          { model: "m", prompt: "p" },
+          {
+            sleep: async (ms) => {
+              clock += ms;
+            },
+            now: () => clock,
+            maxWaitMs: 10_000,
+            pollIntervalMs: 1000,
+          },
+        ),
+      (err: unknown) => err instanceof MediaUnavailable && err.reason === "timed_out",
+    );
+    assert.ok(polls <= 11, `polled ${polls} times for a 10s budget at 1s intervals`);
+  });
+
+  test("giving up still hands back the job id and the last status", async () => {
+    // The job may yet finish on the gateway; the user should be able to go and
+    // get it rather than be told it is gone.
+    let clock = 0;
+    await assert.rejects(
+      () =>
+        generateVideo(
+          transport({ postJson: async () => ({ job_id: "vid_abc", status: "QUEUED", progress: 0 }) }),
+          { model: "m", prompt: "p" },
+          { sleep: async (ms) => { clock += ms; }, now: () => clock, maxWaitMs: 5000 },
+        ),
+      (err: unknown) => err instanceof Error && err.message.includes("vid_abc") && err.message.includes("QUEUED"),
+    );
+  });
+
+  test("a job that finishes inside the budget is unaffected", async () => {
+    let clock = 0;
+    const result = await generateVideo(
+      transport({
+        postJson: async () => ({ job_id: "j", status: "GENERATING" }),
+        getJson: async () => ({ job_id: "j", status: "COMPLETED", progress: 100 }),
+      }),
+      { model: "m", prompt: "p" },
+      { sleep: async (ms) => { clock += ms; }, now: () => clock, maxWaitMs: 10_000 },
+    );
+    assert.equal(result.job.status, "COMPLETED");
+  });
+
+  test("the default budget allows the slowest published model its full clip", () => {
+    // Wan2.2-T2V is ~73s of compute per second of output, so a ten-second clip
+    // is about twelve minutes. A budget under that would cut off real work.
+    const slowest = 72.7 * 10.1;
+    assert.ok(15 * 60 > slowest, `default budget must exceed ${Math.round(slowest)}s`);
+  });
+
   test("the terminal set is exactly the gateway's", () => {
     for (const s of ["COMPLETED", "FAILED", "CANCELLED"]) assert.ok(isTerminal(s));
     for (const s of ["QUEUED", "LOADING", "GENERATING", "DECODING", "ENCODING", "MODERATING"]) {

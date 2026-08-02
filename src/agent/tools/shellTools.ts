@@ -54,13 +54,49 @@ export function createShellTools(opts: ShellToolOptions): AgentTool[] {
  * The gate alone was enough while every command came from `package.json`, where
  * there is one `test` and one `build`. A workspace can hold several runnable
  * scripts, and keying by gate silently dropped all but the last of them.
+ *
+ * Returned as a map rather than a per-spec function because uniqueness is the
+ * whole point and a function cannot promise it: `python src/main.py` and
+ * `node src/main.py` both shorten to `run src/main.py`, and the map that keys
+ * on the result would drop one of them exactly as keying on the gate did. So
+ * the labels are built together, and each step is tried only for the entries
+ * that are still ambiguous.
  */
-export function labelFor(spec: CommandSpec, allowlist: readonly CommandSpec[]): string {
-  const sameGate = allowlist.filter((other) => other.gate === spec.gate);
-  if (sameGate.length <= 1) return spec.gate;
-  // The last argument is the file for a run command, which is the part the user
-  // and the model both think in.
-  return `${spec.gate} ${spec.args[spec.args.length - 1] ?? ""}`.trim();
+export function commandLabels(allowlist: readonly CommandSpec[]): Map<string, CommandSpec> {
+  const namings: Array<(spec: CommandSpec, index: number) => string> = [
+    (spec) => spec.gate,
+    // The last argument is the file for a run command, which is the part the
+    // user and the model both think in.
+    (spec) => `${spec.gate} ${spec.args[spec.args.length - 1] ?? ""}`.trim(),
+    (spec) => [spec.cmd, ...spec.args].join(" "),
+    // Nothing about a command distinguishes it, so its position does. Reached
+    // only by two byte-identical entries, which is a caller bug rather than a
+    // reason to lose one.
+    (spec, index) => `${spec.gate} #${index + 1}`,
+  ];
+
+  const out = new Map<string, CommandSpec>();
+  const pending = allowlist.map((spec, index) => ({ spec, index }));
+
+  for (const name of namings) {
+    if (pending.length === 0) break;
+    const counts = new Map<string, number>();
+    for (const { spec, index } of pending) {
+      const label = name(spec, index);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    // Ambiguous within this round, or already claimed by an earlier one.
+    const stillPending: typeof pending = [];
+    for (const entry of pending) {
+      const label = name(entry.spec, entry.index);
+      if (counts.get(label) === 1 && !out.has(label)) out.set(label, entry.spec);
+      else stillPending.push(entry);
+    }
+    pending.length = 0;
+    pending.push(...stillPending);
+  }
+
+  return out;
 }
 
 function describeAllowlist(byLabel: Map<string, CommandSpec>): string {
@@ -72,9 +108,7 @@ function describeAllowlist(byLabel: Map<string, CommandSpec>): string {
 function executeCommand(opts: ShellToolOptions): AgentTool {
   // Keyed by plain string: the model sends whatever it likes, and narrowing the
   // key type would only move the check from runtime to a cast.
-  const byGate = new Map<string, CommandSpec>(
-    opts.allowlist.map((c) => [labelFor(c, opts.allowlist), c]),
-  );
+  const byGate = commandLabels(opts.allowlist);
   return {
     name: "execute_command",
     risk: "execute",

@@ -2,7 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { discoverRunnableScripts } from "./discoverCommands.ts";
 import { assertRunnable } from "../core/commands.ts";
-import { createShellTools, labelFor } from "./tools/shellTools.ts";
+import type { CommandSpec } from "../protocol/index.ts";
+import { commandLabels, createShellTools } from "./tools/shellTools.ts";
 
 /**
  * Running the file the user is looking at.
@@ -198,23 +199,48 @@ describe("naming the commands", () => {
     ({ gate, kind: "acceptance" as const, cmd: "python", args, timeoutMs: 1000 });
 
   test("a single command of a gate keeps the plain gate name", () => {
-    const all = [spec("test", ["-m", "pytest"])];
-    assert.equal(labelFor(all[0]!, all), "test");
+    assert.deepEqual([...commandLabels([spec("test", ["-m", "pytest"])]).keys()], ["test"]);
   });
 
   test("several run commands are distinguished by file", () => {
     // Keying by gate alone kept only the last, so a workspace with two scripts
     // silently lost one.
     const all = [spec("run", ["main.py"]), spec("run", ["tool.py"])];
-    assert.deepEqual(all.map((s) => labelFor(s, all)), ["run main.py", "run tool.py"]);
+    assert.deepEqual([...commandLabels(all).keys()].sort(), ["run main.py", "run tool.py"]);
+  });
+
+  test("two runtimes running the same filename both survive", () => {
+    // Found by probing. `python src/main.py` and `node src/main.py` shorten to
+    // the same label, and the map keying on it dropped one — the identical bug
+    // one level down from the gate collision this labelling was added to fix.
+    const all = [
+      { gate: "run" as const, kind: "acceptance" as const, cmd: "python", args: ["src/main.py"], timeoutMs: 1 },
+      { gate: "run" as const, kind: "acceptance" as const, cmd: "node", args: ["src/main.py"], timeoutMs: 1 },
+    ];
+    const labels = commandLabels(all);
+    assert.equal(labels.size, 2, "one command was swallowed");
+    assert.deepEqual(new Set([...labels.values()].map((s) => s.cmd)), new Set(["python", "node"]));
+  });
+
+  test("even byte-identical commands do not collapse", () => {
+    // A caller bug rather than something to expect, but losing one silently is
+    // worse than showing two.
+    const one = spec("run", ["main.py"]);
+    assert.equal(commandLabels([one, { ...one }]).size, 2);
+  });
+
+  test("every label maps back to the command it names", () => {
+    const all: CommandSpec[] = [spec("test", ["-m", "pytest"]), spec("run", ["a.py"]), spec("run", ["b.py"])];
+    for (const [label, resolved] of commandLabels(all)) {
+      assert.ok(all.includes(resolved), `${label} resolves to a command not in the list`);
+    }
   });
 
   test("every discovered command is reachable by its own label", async () => {
     const { commands } = await discoverRunnableScripts(
       workspace({ "": ["main.py", "helper.py", "other.py"] }),
     );
-    const labels = commands.map((c) => labelFor(c, commands));
-    assert.equal(new Set(labels).size, commands.length, "labels collide");
+    assert.equal(commandLabels(commands).size, commands.length, "labels collide");
   });
 
   test("the tool description names each command so the model can choose", async () => {

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { AgentHost } from "./agentHost.ts";
 import { ChatPanel, type PanelMessage, type PanelState } from "./chatPanel.ts";
+import { parseSavedArtifact } from "../../../src/agent/tools/mediaTools.ts";
 
 /**
  * Joins the host to the panel.
@@ -181,35 +182,29 @@ export class AgentController {
    * the user has to go and open. Since the point of generating it here was to
    * stay in the editor, it is rendered in the turn that made it.
    *
-   * The path is matched against what the media tool writes and is checked for a
-   * known extension before a URI is minted — the webview receives a
-   * `vscode-webview:` URI it cannot turn back into a filesystem path.
+   * `parseSavedArtifact` lives beside the tool that writes the message, so the
+   * format is one contract rather than a regex here and a string there. It also
+   * rejects anything that is not a workspace-relative path, so only a file the
+   * agent just wrote can become a URI.
    */
   private showArtifact(event: AgentEvent): void {
     if (event.type !== "tool_end" || !event.ok) return;
     if (event.name !== "generate_image" && event.name !== "generate_video") return;
 
     const folder = vscode.workspace.workspaceFolders?.[0];
-    if (folder === undefined) return;
+    const panel = this.panel;
+    if (folder === undefined || panel === null) return;
 
-    const relative = /^Saved (\S+) \(/.exec(event.detail)?.[1];
-    if (relative === undefined || relative.includes("..")) return;
+    const saved = parseSavedArtifact(event.detail);
+    if (saved === null) return;
 
-    const extension = /\.([a-z0-9]+)$/i.exec(relative)?.[1]?.toLowerCase() ?? "";
-    const kind = ["png", "jpg", "jpeg", "webp", "gif"].includes(extension)
-      ? "image"
-      : ["webm", "mp4"].includes(extension)
-        ? "video"
-        : null;
-    if (kind === null) return;
-
-    const uri = vscode.Uri.joinPath(folder.uri, ...relative.split("/"));
-    this.panel?.post({
+    const uri = vscode.Uri.joinPath(folder.uri, ...saved.path.split("/"));
+    panel.post({
       type: "artifact",
       callId: event.callId,
-      kind,
-      src: this.panel.webviewUri(uri),
-      path: relative,
+      kind: saved.kind,
+      src: panel.webviewUri(uri),
+      path: saved.path,
     });
   }
 

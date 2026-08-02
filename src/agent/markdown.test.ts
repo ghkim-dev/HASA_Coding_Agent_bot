@@ -117,6 +117,28 @@ describe("code blocks", () => {
   test("an empty fenced block does not vanish", () => {
     assert.equal(parseMarkdown("```\n```")[0]?.kind, "code");
   });
+
+  test("a sentence that merely opens with backticks is not a fence", () => {
+    // Found by the fuzzer. Taking the first word as the language and ignoring
+    // the rest of the line — which is what a strict parser does — turned this
+    // into an empty code block and lost every word on it.
+    const blocks = parseMarkdown("```assertion **retry** `timeout`");
+    assert.equal(blocks[0]?.kind, "paragraph");
+    const text = toPlainText(blocks);
+    assert.match(text, /assertion/);
+    assert.match(text, /retry/);
+    assert.match(text, /timeout/);
+  });
+
+  test("real fences still open, with and without a language", () => {
+    for (const opener of ["```", "```py", "```python", "~~~", "~~~ts", "   ```js"]) {
+      assert.equal(parseMarkdown(`${opener}\nbody\n\`\`\``)[0]?.kind, "code", opener);
+    }
+  });
+
+  test("trailing whitespace on a fence does not stop it opening", () => {
+    assert.equal(parseMarkdown("```py   \nbody\n```")[0]?.kind, "code");
+  });
 });
 
 describe("inline", () => {

@@ -72,6 +72,39 @@ export function createMediaTools(opts: MediaToolOptions): AgentTool[] {
 }
 
 /**
+ * Where a generated file ended up, read back out of the tool's own result.
+ *
+ * The panel needs the path so it can show the picture, and the only channel
+ * between a tool and the UI is the result string the model reads. So the format
+ * is a contract, and it lives here with the code that writes it rather than as
+ * a regex in the extension that nobody would think to update. Getting this
+ * wrong does not break the generation — it just silently stops showing it,
+ * which is the kind of bug that survives for months.
+ */
+const SAVED = /^Saved (\S+) \(/;
+
+const MEDIA_EXTENSIONS: Readonly<Record<string, "image" | "video">> = {
+  png: "image", jpg: "image", jpeg: "image", webp: "image", gif: "image",
+  webm: "video", mp4: "video",
+};
+
+export interface SavedArtifact {
+  path: string;
+  kind: "image" | "video";
+}
+
+export function parseSavedArtifact(content: string): SavedArtifact | null {
+  const path = SAVED.exec(content)?.[1];
+  // A path is workspace-relative by construction; anything else is not
+  // something to hand to a URI builder.
+  if (path === undefined || path.includes("..") || /^([a-zA-Z]:|[/\\])/.test(path)) return null;
+
+  const extension = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase() ?? "";
+  const kind = MEDIA_EXTENSIONS[extension];
+  return kind === undefined ? null : { path, kind };
+}
+
+/**
  * A filename from the prompt.
  *
  * Named after what was asked for rather than numbered, because a folder of

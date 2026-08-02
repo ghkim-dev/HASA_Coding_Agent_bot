@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Sandbox } from "../../core/sandbox.ts";
 import type { CatalogEntry } from "../../provider/hasa/hasaCatalog.ts";
 import type { MediaTransport } from "../../provider/hasa/hasaMedia.ts";
-import { createMediaTools, fileNameFor } from "./mediaTools.ts";
+import { createMediaTools, fileNameFor, parseSavedArtifact } from "./mediaTools.ts";
 import type { ToolContext } from "../types.ts";
 
 /**
@@ -281,5 +281,78 @@ describe("the sandbox still bounds it", () => {
     const [image] = tools(sandbox, { postJson: async () => ({ data: [{ b64_json: b64(PNG) }] }) });
     await image!.execute({ prompt: "apple" }, ctx);
     assert.equal(await readFile(join(sandbox.root, "assets/generated/apple.png"), "utf8"), "original");
+  });
+});
+
+/**
+ * The contract between the tool and the panel.
+ *
+ * The result string is the only channel a tool has to the UI, so its format is
+ * an interface. It had been a regex in the extension and a template string
+ * here, with nothing connecting them — a change to either would have stopped
+ * images appearing while every test still passed and the generation still
+ * worked. That is the kind of bug that survives for months.
+ */
+describe("reading back where a file was saved", () => {
+  test("the round trip works on a real tool result", async () => {
+    const sandbox = await workspace();
+    const [image] = tools(sandbox, { postJson: async () => ({ data: [{ b64_json: b64(PNG) }] }) });
+    const result = await image!.execute({ prompt: "a red apple" }, ctx);
+
+    const saved = parseSavedArtifact(result.content);
+    assert.equal(saved?.kind, "image");
+    assert.equal(saved?.path, "assets/generated/a-red-apple.png");
+    // The path the panel will build a URI from must be the file that exists.
+    await readFile(join(sandbox.root, saved!.path));
+  });
+
+  test("a video result round trips too", async () => {
+    const sandbox = await workspace();
+    const made = createMediaTools({
+      sandbox,
+      transport: {
+        postJson: async () => ({ job_id: "j", status: "COMPLETED", artifact_url: "/files/a.webm" }),
+        getJson: async () => ({}),
+        getBinary: async () => new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]),
+      },
+      imageModels: [], videoModels: [VIDEO_MODEL], videoSpecFor: async () => SPEC,
+    });
+    const result = await made[0]!.execute({ prompt: "a cat" }, ctx);
+    assert.equal(parseSavedArtifact(result.content)?.kind, "video");
+  });
+
+  test("a failed result yields nothing to show", () => {
+    assert.equal(parseSavedArtifact("generation failed: 503"), null);
+    assert.equal(parseSavedArtifact(""), null);
+  });
+
+  test("the withheld-video message is not mistaken for a saved file", () => {
+    // It says "was generated", not "Saved" — the panel must not try to render
+    // a file that was never written.
+    const message =
+      "The video was generated (job vid_1, 0.8s of footage) but the gateway would not serve the file";
+    assert.equal(parseSavedArtifact(message), null);
+  });
+
+  test("a path that escapes the workspace is refused", () => {
+    // Nothing should be able to talk the panel into building a URI for an
+    // arbitrary file, whatever ends up in a tool result.
+    for (const path of ["../secrets.png", "/etc/passwd.png", "C:\\Windows\\x.png", "a/../../b.png"]) {
+      assert.equal(parseSavedArtifact(`Saved ${path} (1 KB, m).`), null, path);
+    }
+  });
+
+  test("a file that is not media is refused", () => {
+    for (const path of ["notes.txt", "script.js", "archive.zip", "noextension"]) {
+      assert.equal(parseSavedArtifact(`Saved ${path} (1 KB, m).`), null, path);
+    }
+  });
+
+  test("every media extension the tools can produce is recognised", () => {
+    // imageExtension returns one of these, and a video artifact url yields the
+    // rest; an unrecognised one silently stops the picture from appearing.
+    for (const ext of ["png", "jpg", "webp", "webm", "mp4"]) {
+      assert.ok(parseSavedArtifact(`Saved assets/generated/x.${ext} (1 KB, m).`), ext);
+    }
   });
 });
