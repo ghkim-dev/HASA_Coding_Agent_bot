@@ -174,10 +174,50 @@ export class AgentController {
     this.panel?.post({ type: "notice", level: "info", text: summary });
   }
 
+  /**
+   * Shows a file the agent generated, rather than only naming it.
+   *
+   * An image whose only trace is the line "Saved assets/generated/x.png" is one
+   * the user has to go and open. Since the point of generating it here was to
+   * stay in the editor, it is rendered in the turn that made it.
+   *
+   * The path is matched against what the media tool writes and is checked for a
+   * known extension before a URI is minted — the webview receives a
+   * `vscode-webview:` URI it cannot turn back into a filesystem path.
+   */
+  private showArtifact(event: AgentEvent): void {
+    if (event.type !== "tool_end" || !event.ok) return;
+    if (event.name !== "generate_image" && event.name !== "generate_video") return;
+
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (folder === undefined) return;
+
+    const relative = /^Saved (\S+) \(/.exec(event.detail)?.[1];
+    if (relative === undefined || relative.includes("..")) return;
+
+    const extension = /\.([a-z0-9]+)$/i.exec(relative)?.[1]?.toLowerCase() ?? "";
+    const kind = ["png", "jpg", "jpeg", "webp", "gif"].includes(extension)
+      ? "image"
+      : ["webm", "mp4"].includes(extension)
+        ? "video"
+        : null;
+    if (kind === null) return;
+
+    const uri = vscode.Uri.joinPath(folder.uri, ...relative.split("/"));
+    this.panel?.post({
+      type: "artifact",
+      callId: event.callId,
+      kind,
+      src: this.panel.webviewUri(uri),
+      path: relative,
+    });
+  }
+
   private async send(prompt: string): Promise<void> {
     await this.push();
     const result = await this.host.send(prompt, (event: AgentEvent) => {
       this.panel?.post({ type: "event", event });
+      this.showArtifact(event);
     });
     if (result === null) {
       this.panel?.post({

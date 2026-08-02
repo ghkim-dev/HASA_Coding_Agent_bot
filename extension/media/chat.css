@@ -216,3 +216,27 @@ button.ghost { background: transparent; opacity: 0.8; }
 button.ghost:hover { background: var(--vscode-toolbar-hoverBackground); opacity: 1; }
 
 button:disabled { opacity: 0.45; cursor: default; }
+
+/*
+ * A generated image or clip, shown where it was made.
+ *
+ * Bounded rather than natural size: a 1024x1024 render would otherwise push the
+ * whole conversation off screen, and the point of showing it inline is that the
+ * user can glance at it without leaving the turn.
+ */
+.artifact { margin: 6px 0 10px; padding: 0; }
+.artifact img,
+.artifact video {
+  display: block;
+  max-width: min(420px, 100%);
+  max-height: 320px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-textCodeBlock-background);
+}
+.artifact figcaption {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.7;
+  font-family: var(--vscode-editor-font-family, monospace);
+}

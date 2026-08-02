@@ -11,7 +11,12 @@ import { ProviderError } from "../../../src/provider/errors.ts";
 import type { ModelListing, ProviderValidation } from "../../../src/provider/types.ts";
 import type { CommandSpec } from "../../../src/protocol/index.ts";
 import type { RuntimeGap } from "../../../src/agent/discoverCommands.ts";
+import { HasaCatalog } from "../../../src/provider/hasa/hasaCatalog.ts";
+import { createMediaTransport } from "../../../src/provider/hasa/hasaMediaTransport.ts";
+import type { AgentSessionOptions } from "../../../src/agent/session.ts";
 import { discoverCommands } from "./commands.ts";
+
+type MediaConfig = NonNullable<AgentSessionOptions["media"]>;
 
 /**
  * What can be run here, and what is missing.
@@ -62,6 +67,7 @@ export class AgentHost {
   private validation: ProviderValidation | null = null;
   private selectedModelId: string | null = null;
   private autoChoice: AutoModelChoice | null = null;
+  private catalog: HasaCatalog | null = null;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
 
@@ -134,6 +140,9 @@ export class AgentHost {
     this.session = null;
     this.validation = null;
     this.autoChoice = null;
+    // The catalogue is public and key-independent, but a new key may reach a
+    // different gateway, so it is re-read rather than carried across.
+    this.catalog = null;
   }
 
   // -------------------------------------------------------------------------
@@ -157,6 +166,48 @@ export class AgentHost {
       matrixPath: vscode.Uri.joinPath(home, "capability-matrix.json").fsPath,
     });
     return this.provider;
+  }
+
+  /**
+   * Image and video generation, when the gateway offers it.
+   *
+   * The catalogue decides which models exist and what they are, so nothing here
+   * names one. An empty catalogue — or one that cannot be reached — means the
+   * tools are simply not registered, and the chat path is unaffected.
+   */
+  private async mediaTools(): Promise<{ media?: MediaConfig }> {
+    const key = await this.apiKey();
+    if (key === null) return {};
+
+    const configured = vscode.workspace.getConfiguration("hasaAgent").get<string>("baseUrl", "").trim();
+    // The catalogue and the media endpoints hang off the origin, not off `/v1`.
+    const origin = (configured.length > 0 ? configured : "https://open.hasa.re.kr/v1").replace(/\/v1\/?$/, "");
+
+    const transport = createMediaTransport({ origin, apiKey: key });
+    this.catalog ??= new HasaCatalog(transport);
+
+    const [imageModels, videoModels] = await Promise.all([
+      this.catalog.byModality("image"),
+      this.catalog.byModality("video"),
+    ]);
+    if (imageModels.length === 0 && videoModels.length === 0) {
+      this.log.appendLine("[hasa] no image or video models in the catalogue");
+      return {};
+    }
+
+    this.log.appendLine(
+      `[hasa] media: image=[${imageModels.map((m) => m.id).join(", ")}] ` +
+        `video=[${videoModels.map((m) => m.id).join(", ")}]`,
+    );
+    const catalog = this.catalog;
+    return {
+      media: {
+        transport,
+        imageModels,
+        videoModels,
+        videoSpecFor: (id) => catalog.videoSpec(id),
+      },
+    };
   }
 
   async connectionState(): Promise<ConnectionState> {
@@ -278,6 +329,7 @@ export class AgentHost {
         .getConfiguration("hasaAgent")
         .get<"safe" | "balanced" | "auto">("approvalMode", "safe"),
       ...(await workspaceCommands(folder.uri.fsPath, this.log)),
+      ...(await this.mediaTools()),
       onEvent,
     });
     return this.session;

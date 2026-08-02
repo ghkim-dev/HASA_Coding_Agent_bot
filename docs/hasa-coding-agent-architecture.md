@@ -812,3 +812,74 @@ native tool calling을 쓴다.
 * `security-policy.md` — 키 취급·명령 allowlist·격리 (이 문서가 확장)
 * `evaluation-protocol.md` — 판정 사다리 (Z6의 재료)
 * `redesign-plan.md`, `implementation-plan.md` — Arena Phase 0~4 기록
+
+---
+
+## 13. 이미지·동영상 생성 (Z5)
+
+### 13.1 문서에 없는 endpoint를 어떻게 확인했는가
+
+`/docs`가 공개하는 endpoint는 다섯 개뿐이다: `/v1/models`, `/v1/chat/completions`,
+`/v1/embeddings`, `/rerank`, `/v1/agent/chat`. **이미지·동영상 생성은 문서에 없다.**
+
+§14는 endpoint를 추측해서 만들지 말라고 못박고 있다. 그래서 추측하지 않았다.
+게이트웨이 자신의 포털 코드(`/playground`, `/models`, `portal.js`)에서 읽어냈고,
+읽어낸 것을 실제 서비스에 대해 검증했다. 200과 예상한 본문으로 확인된 경로는
+추측이 아니다.
+
+| | 경로 | 확인 |
+|---|---|---|
+| 이미지 | `POST /v1/images/generations` | 200, 7.9초, 유효한 PNG 206KB |
+| 동영상 제출 | `POST /v1/videos/generations` | 200, `job_id` 반환 |
+| 작업 조회 | `GET /v1/jobs/{job_id}` | `COMPLETED` 100%, 18초 |
+| 아티팩트 | `GET /files/{name}` | **실패** — 아래 §13.3 |
+
+### 13.2 modality는 어디서 오는가
+
+`/v1/models`는 id만 준다. 그래서 "`Qwen-Image`는 이미지 모델인가?"를 OpenAI 호환
+표면만으로는 답할 수 없고, 손쉬운 우회는 이름을 보고 판단하는 것이다. §14가 금지하는
+바로 그 방법이고, 금지하는 이유가 이 카탈로그에 그대로 있다 — `Qwen-Image`와
+`qwen2.5-vl-72b`는 부분 문자열로는 둘 다 "image"인데 그림을 그리는 쪽은 하나뿐이다.
+
+게이트웨이는 `GET /api/catalog`에서 **인증 없이** `modality`를 공개한다. 이것이 유일한
+분류 근거다. 따라서 다음 달에 추가되는 모델도 확장 릴리스 없이 올바르게 라우팅된다.
+`video_spec`(fps, sizes, frame_align, max_frames)도 `GET /api/catalog/{name}`이 주므로
+모델별 파라미터 표를 코드에 두지 않는다. `mediaTools.ts`에 모델 id가 하나도 없다는
+것은 테스트로 강제한다(주석 제거 후 검사).
+
+카탈로그는 공개 endpoint이므로 **키를 보내지 않는다.** 필요 없는 곳에 자격증명을
+붙이는 것이 자격증명이 로그에 남는 경로다.
+
+### 13.3 동영상 아티팩트는 API 키로 받을 수 없다
+
+작업은 정상 완료된다(`COMPLETED`, `artifact_url: /files/vid_00052_.webm`). 그런데 그
+경로를 Bearer 키로 GET하면 **HTTP 200**에 `Content-Type: video/webm`, 본문은 22바이트
+`{"detail":"not found"}`가 온다. 존재하지 않는 파일명으로 요청해도 똑같다. 인증은
+통과하므로(키 없이는 401) 권한 문제가 아니라 API 키에 파일을 내주지 않는 것이다.
+플레이그라운드는 세션 쿠키 + CSRF로 접근한다.
+
+이 때문에 두 가지가 코드에 박혀 있다.
+
+1. `getBinary`는 **상태 코드를 믿지 않는다.** 200이어도 본문 첫 바이트가 `{`이면
+   null을 돌려준다. 그대로 저장했다면 어디서도 재생되지 않는 22바이트 `.webm`이 남는다.
+2. 완료된 작업의 파일을 받지 못한 경우를 **실패라고 말하지 않는다.** 작업은 실제로
+   돌았고 사용자는 그걸 확인할 수 있다. 실패했다고 하면 사용자가 옳고 우리가 틀리다.
+   대신 job id를 전달하고 브라우저 플레이그라운드에서 받을 수 있다고 알린다.
+   재시도도 막는다 — 같은 GPU 시간을 쓰고 같은 벽에 부딪힌다.
+
+게이트웨이가 `/files/`를 API 키에 열어주면 이 경로는 코드 변경 없이 동작한다.
+
+### 13.4 경계
+
+`hasaMedia.ts`는 `openai-compatible/wire.ts`와 같은 지위의 **두 번째 번역 계층**이다.
+이미지·동영상은 별도 프로토콜이고 `b64_json`·`job_id`·`artifact_url`은 chat 표면에
+속하지 않는다. 이것들을 `wire.ts`에 넣는 것이 오히려 위반이다.
+
+allow-list에 추가하는 것으로 끝내면 구멍이 되므로, chat 계층과 동일한 불변식을 새로
+세웠다: **미디어 wire 토큰은 `hasaMedia.ts` 밖에 나타날 수 없다.** 도구·호스트·패널은
+`ImageResult`와 `VideoJob`만 다룬다.
+
+생성 도구는 `write` risk다. 승인이 GPU 시간을 쓰기 **전에** 일어나고, 결과 파일은
+체크포인트로 되돌릴 수 있는 보통의 작업 공간 변경이 된다. 바이너리는
+`sandbox.writeBytes`로 쓴다 — `writeFile`을 거치면 UTF-8로 인코딩되어 0x7f 이상이
+전부 깨진다.

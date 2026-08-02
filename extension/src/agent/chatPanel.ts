@@ -51,7 +51,15 @@ export interface PanelState {
 export type HostMessage =
   | { type: "state"; state: PanelState }
   | { type: "event"; event: AgentEvent }
-  | { type: "notice"; level: "info" | "error"; text: string };
+  | { type: "notice"; level: "info" | "error"; text: string }
+  /**
+   * A file the agent generated, ready to show.
+   *
+   * Sent separately from the tool event because only the extension host can
+   * mint a `vscode-webview:` URI, and the webview must never be handed a
+   * filesystem path it could try to resolve itself.
+   */
+  | { type: "artifact"; callId: string; kind: "image" | "video"; src: string; path: string };
 
 export class ChatPanel {
   static active: ChatPanel | null = null;
@@ -79,7 +87,14 @@ export class ChatPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(extensionUri, "media")],
+        // The workspace is a resource root so a generated image can be shown
+        // where it was saved. Read-only and scoped to the folder the user
+        // already opened — the webview gets a `vscode-webview:` URI, never a
+        // path it could turn into a file read of its own.
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, "media"),
+          ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri),
+        ],
       },
     );
     ChatPanel.active = new ChatPanel(panel, extensionUri, onMessage);
@@ -88,6 +103,11 @@ export class ChatPanel {
 
   post(message: HostMessage): void {
     void this.panel.webview.postMessage(message);
+  }
+
+  /** Converts a workspace file into something the webview may load. */
+  webviewUri(uri: vscode.Uri): string {
+    return this.panel.webview.asWebviewUri(uri).toString();
   }
 
   reveal(): void {
@@ -114,7 +134,7 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource}; media-src ${webview.cspSource};">
 <link rel="stylesheet" href="${media("chat.css")}">
 <title>HASA Coding Agent</title>
 </head>

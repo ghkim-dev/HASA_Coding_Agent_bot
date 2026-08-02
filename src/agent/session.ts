@@ -5,6 +5,8 @@ import { nullLogger, type Logger } from "../hasa-client/logger.ts";
 import type { ProviderMessage } from "../provider/types.ts";
 import { ApprovalManager } from "./approval.ts";
 import type { RuntimeGap } from "./discoverCommands.ts";
+import { createMediaTools } from "./tools/mediaTools.ts";
+import type { MediaToolOptions } from "./tools/mediaTools.ts";
 import { CheckpointManager } from "./checkpoint.ts";
 import { AgentLoop } from "./loop.ts";
 import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
@@ -47,6 +49,13 @@ export interface AgentSessionOptions {
    * it" — the difference between a dead end and a next step.
    */
   runtimeGaps?: RuntimeGap[];
+  /**
+   * Image and video generation, when the gateway offers those models.
+   *
+   * Absent means the tools are not registered at all, which is the same rule
+   * the shell tools follow: a tool that cannot work should not be offered.
+   */
+  media?: Omit<MediaToolOptions, "sandbox">;
   /** Restricts writes to these path prefixes. Reads stay workspace-wide. */
   writeScope?: string[];
   budget?: Partial<AgentBudget>;
@@ -138,6 +147,9 @@ export class AgentSession {
         allowlist: this.opts.commands ?? [],
         isGitRepo: this.isGitRepo,
       }),
+      ...(this.opts.media === undefined
+        ? []
+        : createMediaTools({ ...this.opts.media, sandbox: this.sandbox })),
     ]);
     return all.withCeiling(definition.maxRisk);
   }

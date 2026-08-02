@@ -159,6 +159,20 @@ export class Sandbox {
     await writeFile(full, contents, "utf8");
   }
 
+  /**
+   * Writes bytes rather than text.
+   *
+   * Generated images and video are binary, and routing them through
+   * `writeFile` would encode them as UTF-8 and corrupt every byte above 0x7f.
+   * The path goes through the same `resolvePath(forWrite)` check, so the
+   * sandbox boundary is identical — only the encoding differs.
+   */
+  async writeBytes(relativePath: string, contents: Uint8Array): Promise<void> {
+    const full = await this.resolvePath(relativePath, { forWrite: true });
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, contents);
+  }
+
   async exists(relativePath: string): Promise<boolean> {
     try {
       const full = await this.resolvePath(relativePath);

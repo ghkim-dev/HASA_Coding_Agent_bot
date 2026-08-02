@@ -190,6 +190,37 @@ function flushRender(turn) {
   renderMarkdown(turn.body, turn.raw);
 }
 
+/**
+ * Renders a generated image or clip under the step that made it.
+ *
+ * The src is a vscode-webview: URI minted by the extension host; this file
+ * never sees a filesystem path and could not read one if it did.
+ */
+function showArtifact(message) {
+  const anchor = current && current.steps.get(message.callId);
+  const host = anchor ? anchor.parentNode : el.transcript;
+
+  const figure = document.createElement("figure");
+  figure.className = "artifact";
+
+  const media = document.createElement(message.kind === "video" ? "video" : "img");
+  media.src = message.src;
+  if (message.kind === "video") {
+    media.controls = true;
+    media.playsInline = true;
+  } else {
+    media.alt = message.path;
+  }
+
+  const caption = document.createElement("figcaption");
+  caption.textContent = message.path;
+  figure.append(media, caption);
+
+  if (anchor && anchor.nextSibling) host.insertBefore(figure, anchor.nextSibling);
+  else host.appendChild(figure);
+  scrollToEnd();
+}
+
 function notice(level, text) {
   const node = document.createElement("div");
   node.className = level === "error" ? "notice error" : "notice";
@@ -377,6 +408,7 @@ window.addEventListener("message", (e) => {
   if (message.type === "state") renderState(message.state);
   else if (message.type === "event") renderEvent(message.event);
   else if (message.type === "notice") notice(message.level, message.text);
+  else if (message.type === "artifact") showArtifact(message);
 });
 
 post({ type: "ready" });

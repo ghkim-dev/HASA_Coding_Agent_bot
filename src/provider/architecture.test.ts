@@ -149,8 +149,23 @@ describe("OpenAI wire shapes stay inside the translation layer (§27)", () => {
     "owned_by",
   ];
 
-  /** The translation layer itself, and the one adapter that feeds it. */
-  const ALLOWED = new Set(["openai-compatible/wire.ts", "hasa/hasaTransport.ts"]);
+  /**
+   * The translation layers, and the adapters that feed them.
+   *
+   * `hasa/hasaMedia.ts` is here for the same reason `wire.ts` is, not as an
+   * exemption from the rule. Image and video generation are a second protocol
+   * with their own shapes — `b64_json`, `job_id`, `artifact_url` — and they are
+   * not part of the OpenAI-compatible chat surface `wire.ts` translates.
+   * Putting them there would be the actual violation. The rule is that wire
+   * knowledge lives in declared translation files; this declares one, and
+   * `media wire shapes stay inside hasaMedia.ts` below holds it to the same
+   * standard the chat layer is held to.
+   */
+  const ALLOWED = new Set([
+    "openai-compatible/wire.ts",
+    "hasa/hasaTransport.ts",
+    "hasa/hasaMedia.ts",
+  ]);
 
   /**
    * Matches a token used as a *field* — read off an object, declared as a
@@ -183,6 +198,38 @@ describe("OpenAI wire shapes stay inside the translation layer (§27)", () => {
     assert.ok(wire !== undefined);
     for (const token of ["choices", "finish_reason", "tool_calls"]) {
       assert.ok(wire.text.includes(token), `wire.ts should handle ${token}`);
+    }
+  });
+
+  /**
+   * The media protocol gets the same treatment as the chat one.
+   *
+   * Without this, adding `hasaMedia.ts` to the allow-list above would have been
+   * a hole rather than a boundary: nothing would stop `job_id` from spreading
+   * into the tools, the host and the panel, which is exactly the sprawl the
+   * chat-side rule exists to prevent.
+   */
+  const MEDIA_TOKENS = ["b64_json", "job_id", "artifact_url", "gen_seconds"];
+
+  test("media wire shapes stay inside hasaMedia.ts", () => {
+    for (const file of production) {
+      if (file.name === "hasa/hasaMedia.ts") continue;
+      for (const token of MEDIA_TOKENS) {
+        assert.doesNotMatch(
+          file.text,
+          asField(token),
+          `${file.name} reads the media wire field "${token}". Translation belongs in ` +
+            `hasa/hasaMedia.ts so that everything above it deals in ImageResult and VideoJob.`,
+        );
+      }
+    }
+  });
+
+  test("the media translation layer does exist and does the work", () => {
+    const media = production.find((f) => f.name === "hasa/hasaMedia.ts");
+    assert.ok(media !== undefined, "hasaMedia.ts should be the media boundary");
+    for (const token of MEDIA_TOKENS) {
+      assert.ok(media.text.includes(token), `hasaMedia.ts should handle ${token}`);
     }
   });
 });
