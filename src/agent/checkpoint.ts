@@ -57,6 +57,25 @@ export class CheckpointManager {
   }
 
   /**
+   * Takes over a checkpoint another manager was holding.
+   *
+   * The stash lives in git; the ref that finds it again lives only here. So a
+   * manager built to replace one that already snapshotted the workspace starts
+   * with `taken === null` and reports "nothing to undo" — while the user's work
+   * sits in a stash nothing now knows how to reach. That is a silent loss of the
+   * one thing this class exists to protect.
+   *
+   * The caller is responsible for the two managers being on the same repository.
+   * Nothing else here can check that, and adopting a checkpoint from a different
+   * workspace would restore the wrong tree.
+   */
+  adopt(checkpoint: Checkpoint | null): void {
+    if (checkpoint === null) return;
+    this.taken = checkpoint;
+    this.log.info("checkpoint adopted", { ref: checkpoint.ref, baseCommit: checkpoint.baseCommit });
+  }
+
+  /**
    * True when this workspace can be protected at all.
    *
    * A non-git directory is not refused outright — the user may genuinely want

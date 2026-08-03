@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { AgentSession } from "../../../src/agent/session.ts";
 import { createModelFor } from "../../../src/agent/hasaModel.ts";
 import { chooseModel, protocolFor, type AutoModelChoice } from "../../../src/agent/autoModel.ts";
+import { modeCanWrite } from "../../../src/agent/modes.ts";
 import type { AgentEvent, AgentMode, AgentTurnResult, ApprovalRequest } from "../../../src/agent/types.ts";
 import type { HasaProvider } from "../../../src/provider/hasa/hasaProvider.ts";
 import { createHasaProvider } from "../../../src/provider/hasa/createProvider.ts";
@@ -23,7 +24,8 @@ import {
   titleFrom,
   type ConversationSummary,
 } from "../../../src/agent/conversationStore.ts";
-import type { Attachment } from "../../../src/agent/attachments.ts";
+import type { Attachment, AttachmentOutcome } from "../../../src/agent/attachments.ts";
+import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
 
 type MediaConfig = NonNullable<AgentSessionOptions["media"]>;
 
@@ -85,8 +87,10 @@ export class AgentHost {
   private validation: ProviderValidation | null = null;
   private selectedModelId: string | null = null;
   private autoChoice: AutoModelChoice | null = null;
-  /** The choice the live session was built on. Fixed for its lifetime. */
+  /** The choice the live session was built on. Fixed until it is rebuilt. */
   private sessionChoice: AutoModelChoice | null = null;
+  /** The mode the live session was built for. See `modelNeedsRevisiting`. */
+  private modeAtSession: AgentMode | null = null;
   private catalog: HasaCatalog | null = null;
   /** Why the last turn could not start, when the reason is worth showing. */
   private modelProblem: string | null = null;
@@ -178,6 +182,7 @@ export class AgentHost {
     this.validation = null;
     this.autoChoice = null;
     this.sessionChoice = null;
+    this.modeAtSession = null;
     // A different key is a different history. Dropping the store rather than
     // reusing it is what keeps one key's conversations out of another's.
     this.conversations = null;
@@ -375,6 +380,58 @@ export class AgentHost {
     return { ...listing, models };
   }
 
+  /**
+   * Turns an attached recording into text.
+   *
+   * The transcribing model is found in the catalogue by modality, so nothing
+   * here names one — the same rule the chat and media paths follow. A gateway
+   * with no speech model simply cannot do this, and says so rather than failing
+   * against a model id invented in the extension.
+   */
+  async transcribe(name: string, bytes: Uint8Array, signal?: AbortSignal): Promise<AttachmentOutcome> {
+    const catalog = await this.ensureCatalog();
+    const key = await this.apiKey();
+    if (catalog === null || key === null) {
+      return { ok: false, reason: "먼저 API Key를 입력해 주세요." };
+    }
+
+    const speech = (await catalog.byModality("audio"))[0];
+    if (speech === undefined) {
+      return { ok: false, reason: "이 게이트웨이에는 사용할 수 있는 음성 인식 모델이 없습니다." };
+    }
+
+    const configured = vscode.workspace.getConfiguration("hasaAgent").get<string>("baseUrl", "").trim();
+    const origin = (configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL).replace(/\/v1\/?$/, "");
+
+    try {
+      const result = await transcribeAudio(
+        createMediaTransport({ origin, apiKey: key }),
+        { model: speech.id, name, bytes },
+        signal,
+      );
+      const seconds = result.seconds;
+      return {
+        ok: true,
+        note: `음성 · ${result.text.length}자${seconds === null ? "" : ` · ${Math.round(seconds)}초`}`,
+        attachment: { kind: "audio", name, transcript: result.text, seconds },
+      };
+    } catch (err) {
+      if (err instanceof TranscriptionUnavailable) {
+        // Logged separately when only an operator can act: the same distinction
+        // the probe draws for tool calling, and for the same reason — a
+        // deployment problem read as a missing feature never gets fixed.
+        if (err.operatorAction) {
+          this.log.appendLine(`[hasa] OPERATOR ACTION — ${name}: ${err.message}`);
+        }
+        return { ok: false, reason: err.userMessage };
+      }
+      if ((err as { name?: string }).name === "AbortError") {
+        return { ok: false, reason: `${name} 음성 인식을 취소했습니다.` };
+      }
+      return { ok: false, reason: `${name} 을(를) 전사하지 못했습니다: ${describe(err)}` };
+    }
+  }
+
   /** Whether asking for a picture or a clip will actually produce one. */
   async canGenerateMedia(): Promise<boolean> {
     const catalog = await this.ensureCatalog();
@@ -418,19 +475,48 @@ export class AgentHost {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (folder === undefined) return null;
 
-    // Asked before the model is resolved, not after. Resolving can spend live
-    // inference requests measuring candidates, and every one of those was
-    // thrown away here: the session already exists, so it keeps the model it
-    // opened with. The cost was real and the answer was never used.
-    if (this.session !== null) {
+    // A live session keeps the model it opened with unless the mode now needs a
+    // different one. Asking first avoids re-resolving on every ordinary turn,
+    // which spent live inference requests measuring candidates and then threw
+    // the answer away.
+    if (this.session !== null && !this.modelNeedsRevisiting()) {
       this.session.setMode(this.mode);
       return this.session;
     }
 
     const choice = await this.resolveModel(provider);
     if (choice === null) return null;
-    // What is actually running, for a label that does not have to guess.
+
+    const previous = this.session;
+    if (
+      previous !== null &&
+      this.sessionChoice?.modelId === choice.modelId &&
+      this.sessionChoice.toolProtocol === choice.toolProtocol
+    ) {
+      // Revisiting produced the same answer. The mode changed; the model did not.
+      previous.setMode(this.mode);
+      this.modeAtSession = this.mode;
+      return previous;
+    }
+
+    // What moves to the replacement, and nothing else does. Rebuilding without
+    // these costs the user their conversation and their undo — and the undo is
+    // the quiet one: the stash stays in the repository, but the ref that finds
+    // it lives in the manager being discarded, so "되돌리기" would report nothing
+    // to revert while the work sat there unreachable.
+    const carried = previous === null ? [] : [...previous.history()];
+    const checkpoint = previous?.checkpoint ?? null;
+    if (previous !== null) {
+      this.log.appendLine(
+        `[hasa] rebuilding the session for ${this.mode} mode: ` +
+          `${this.sessionChoice?.modelId ?? "?"} → ${choice.modelId}` +
+          `${checkpoint === null ? "" : ", carrying the checkpoint"}` +
+          `${carried.length === 0 ? "" : `, ${carried.length} message(s)`}`,
+      );
+      this.session = null;
+    }
     this.sessionChoice = choice;
+    this.modeAtSession = this.mode;
 
     // The measured output ceiling, when there is one. Without it the gateway
     // applies its own default, and for a model with a small context that
@@ -458,9 +544,34 @@ export class AgentHost {
         .get<"safe" | "balanced" | "auto">("approvalMode", "safe"),
       ...(await workspaceCommands(folder.uri.fsPath, this.log)),
       ...(await this.mediaTools()),
+      checkpoint,
       onEvent,
     });
+    if (carried.length > 0) this.session.restore(carried);
     return this.session;
+  }
+
+  /**
+   * Whether the model this session opened with may no longer be the right one.
+   *
+   * Only two things can make it so, and re-resolving is not free — it can spend
+   * live inference requests measuring candidates — so it is asked rather than
+   * assumed.
+   *
+   * A hand-picked model is the plain case: the user chose it and the running
+   * session is not using it.
+   *
+   * A mode change matters in one direction. A model chosen for a mode that
+   * writes already satisfies one that only reads, so CODE → ASK keeps what it
+   * has. ASK → CODE does not: a chat-only model will accept the request and then
+   * describe the change instead of making it, which is the failure `autoModel`
+   * exists to prevent and which a reused session would walk straight into.
+   */
+  private modelNeedsRevisiting(): boolean {
+    if (this.selectedModelId !== null) return this.selectedModelId !== this.sessionChoice?.modelId;
+    if (this.sessionChoice === null || this.modeAtSession === null) return true;
+    if (this.modeAtSession === this.mode) return false;
+    return modeCanWrite(this.mode) && !modeCanWrite(this.modeAtSession);
   }
 
   /** The model to use, and how it will be asked to call tools. */

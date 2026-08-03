@@ -4,10 +4,12 @@ import { AgentHost } from "./agentHost.ts";
 import { ChatPanel, type PanelMessage, type PanelState } from "./chatPanel.ts";
 import { parseSavedArtifact } from "../../../src/agent/tools/mediaTools.ts";
 import {
-  imageTypeFor,
+  attachmentFor,
   looksSensitive,
   type Attachment,
+  type AttachmentOutcome,
 } from "../../../src/agent/attachments.ts";
+import { AUDIO_EXTENSIONS, isAudioFile } from "../../../src/provider/hasa/hasaAudio.ts";
 
 /**
  * Whether a frame may reach the gateway for the model catalogue.
@@ -292,14 +294,21 @@ export class AgentController {
    */
   private async attach(source: "file" | "workspace"): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.[0];
-    const picked =
-      source === "workspace" && folder !== undefined
-        ? await vscode.window.showOpenDialog({
-            canSelectMany: true,
-            defaultUri: folder.uri,
-            openLabel: "첨부",
-          })
-        : await vscode.window.showOpenDialog({ canSelectMany: true, openLabel: "첨부" });
+    // Named so the dialog says what can be attached. "모든 파일" stays first
+    // because source files have every extension there is, and a filter that
+    // hides the user's own code would be a worse dialog than no filter.
+    const filters: Record<string, string[]> = {
+      "모든 파일": ["*"],
+      문서: ["pdf", "docx", "docm", "xlsx", "xlsm", "pptx", "pptm", "hwpx", "hwp"],
+      이미지: ["png", "jpg", "jpeg", "webp", "gif"],
+      음성: [...AUDIO_EXTENSIONS],
+    };
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      openLabel: "첨부",
+      filters,
+      ...(source === "workspace" && folder !== undefined ? { defaultUri: folder.uri } : {}),
+    });
     if (picked === undefined) return;
 
     for (const uri of picked) {
@@ -317,39 +326,46 @@ export class AgentController {
 
       try {
         const bytes = await vscode.workspace.fs.readFile(uri);
-        const mediaType = imageTypeFor(name);
         this.staleId += 1;
         const id = `a${this.staleId}`;
 
-        if (mediaType !== null) {
-          this.staged.push({
-            id,
-            name,
-            note: `${Math.max(1, Math.round(bytes.byteLength / 1024))} KB`,
-            attachment: { kind: "image", name, mediaType, base64: Buffer.from(bytes).toString("base64") },
-          });
-          continue;
-        }
+        // Sound is the one kind that cannot be decided locally: it has to be
+        // transcribed, which is a request, which can fail in ways worth
+        // explaining. Everything else — image, document, plain text — is
+        // settled by `attachmentFor` in src/, where the tests are.
+        const outcome = isAudioFile(name)
+          ? await this.transcribe(name, bytes)
+          : attachmentFor(name, bytes);
 
-        const text = Buffer.from(bytes).toString("utf8");
-        // A file full of replacement characters is a binary the model cannot
-        // read; inlining it would spend the context window on noise.
-        const replacements = (text.match(/�/g) ?? []).length;
-        if (replacements > text.length / 100) {
-          void vscode.window.showWarningMessage(`${name} 은(는) 텍스트 파일이 아니라 첨부하지 않았습니다.`);
+        if (!outcome.ok) {
+          void vscode.window.showWarningMessage(outcome.reason);
           continue;
         }
-        this.staged.push({
-          id,
-          name,
-          note: `${text.split("\n").length}줄`,
-          attachment: { kind: "text", name, text },
-        });
+        this.staged.push({ id, name, note: outcome.note, attachment: outcome.attachment });
       } catch (err) {
         this.fail(err);
       }
     }
     await this.push();
+  }
+
+  /**
+   * Turns a recording into its transcript, with progress.
+   *
+   * Done when the file is attached rather than when the message is sent, so the
+   * user learns immediately that a 40-minute recording is being processed — and,
+   * more to the point, learns immediately when it cannot be. A failure at send
+   * time would arrive attached to a question they had already asked.
+   */
+  private async transcribe(name: string, bytes: Uint8Array): Promise<AttachmentOutcome> {
+    return vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `${name} 음성을 인식하는 중…`, cancellable: true },
+      async (_progress, token) => {
+        const controller = new AbortController();
+        token.onCancellationRequested(() => controller.abort());
+        return this.host.transcribe(name, bytes, controller.signal);
+      },
+    );
   }
 
   /** Reopens a stored conversation and redraws the transcript from it. */

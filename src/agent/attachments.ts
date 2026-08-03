@@ -1,5 +1,6 @@
 import type { ProviderContentPart, ProviderUserMessage } from "../provider/types.ts";
 import type { Tristate } from "../provider/types.ts";
+import { documentKindFor, extractDocument, UnreadableDocument } from "./documents.ts";
 
 /**
  * Files the user attaches to a message.
@@ -32,7 +33,7 @@ export interface ImageAttachment {
   base64: string;
 }
 
-export type Attachment = TextAttachment | ImageAttachment;
+export type Attachment = TextAttachment | ImageAttachment | AudioAttachment;
 
 export interface AttachmentLimits {
   /** Per text file, after which it is truncated with a visible marker. */
@@ -101,6 +102,78 @@ export function imageTypeFor(name: string): string | null {
     case "gif": return "image/gif";
     default: return null;
   }
+}
+
+/**
+ * Sound the user attached, with what the gateway made of it.
+ *
+ * The transcript is the attachment: a chat model cannot hear, so what reaches
+ * it is text either way. The file name and duration ride along because "the
+ * recording says X" is a claim about a file, and the model should be able to
+ * name which one.
+ */
+export interface AudioAttachment {
+  kind: "audio";
+  name: string;
+  transcript: string;
+  /** Seconds, when the gateway reported them. */
+  seconds: number | null;
+}
+
+export type AttachmentOutcome =
+  | { ok: true; attachment: Attachment; note: string }
+  | { ok: false; reason: string };
+
+/**
+ * What a file becomes when it is attached.
+ *
+ * Four routes, decided by the bytes rather than by the extension where they
+ * disagree: an image goes as an image, a document is extracted to text, sound
+ * is transcribed elsewhere and arrives here already text, and everything else
+ * is read as text and refused if it turns out not to be.
+ *
+ * The decision lives here rather than in the extension for the reason the whole
+ * `src/` boundary exists — `pnpm test` can reach this, and it cannot reach a
+ * VS Code host. See `docs/hasa-coding-agent-architecture.md` §22.
+ */
+export function attachmentFor(name: string, bytes: Uint8Array): AttachmentOutcome {
+  const mediaType = imageTypeFor(name);
+  if (mediaType !== null) {
+    return {
+      ok: true,
+      note: `${Math.max(1, Math.round(bytes.byteLength / 1024))} KB`,
+      attachment: {
+        kind: "image",
+        name,
+        mediaType,
+        base64: Buffer.from(bytes).toString("base64"),
+      },
+    };
+  }
+
+  if (documentKindFor(name) !== null) {
+    try {
+      const document = extractDocument(name, Buffer.from(bytes));
+      const lines = document.text.split("\n").length;
+      return {
+        ok: true,
+        note: document.note === null ? `${lines}줄` : `${lines}줄 · ${document.note}`,
+        attachment: { kind: "text", name, text: document.text },
+      };
+    } catch (err) {
+      if (err instanceof UnreadableDocument) return { ok: false, reason: err.userMessage };
+      throw err;
+    }
+  }
+
+  const text = Buffer.from(bytes).toString("utf8");
+  // A file full of replacement characters is a binary the model cannot read;
+  // inlining it would spend the context window on noise.
+  const replacements = (text.match(/�/g) ?? []).length;
+  if (replacements > text.length / 100) {
+    return { ok: false, reason: `${name} 은(는) 텍스트 파일이 아니라 첨부하지 않았습니다.` };
+  }
+  return { ok: true, note: `${text.split("\n").length}줄`, attachment: { kind: "text", name, text } };
 }
 
 export interface ComposeOptions {
@@ -184,11 +257,17 @@ export function composeUserMessage(
     }
 
     const cap = Math.min(limits.maxTextChars, budget);
-    let text = attachment.text;
+    // Sound arrives as its transcript, labelled so the model does not quote it
+    // as if it were a written document. Everything after this point is text and
+    // is treated identically, which is the point of transcribing at attach time.
+    let text =
+      attachment.kind === "audio"
+        ? `[음성 전사${attachment.seconds === null ? "" : `, ${Math.round(attachment.seconds)}초`}]\n${attachment.transcript}`
+        : attachment.text;
     if (text.length > cap) {
       // Cut with a marker rather than silently: the model must know it is
       // reading part of a file, or it will reason about code that is not there.
-      text = `${text.slice(0, cap)}\n…[${attachment.name} truncated at ${cap} of ${attachment.text.length} characters]`;
+      text = `${text.slice(0, cap)}\n…[${attachment.name} truncated at ${cap} of ${text.length} characters]`;
       truncated.push(attachment.name);
     }
     budget -= text.length;

@@ -56,7 +56,7 @@ export interface PanelState {
    */
   canGenerateMedia: boolean;
   /** Files staged for the next message. Names only — no contents cross over. */
-  attachments: Array<{ id: string; name: string; kind: "text" | "image"; note: string }>;
+  attachments: Array<{ id: string; name: string; kind: "text" | "image" | "audio"; note: string }>;
   /** Past conversations for the key in use. */
   history: Array<{ id: string; title: string; updatedAt: number; messageCount: number }>;
   openConversationId: string | null;

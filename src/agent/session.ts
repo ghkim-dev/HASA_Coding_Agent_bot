@@ -8,7 +8,7 @@ import { ApprovalManager } from "./approval.ts";
 import type { RuntimeGap } from "./discoverCommands.ts";
 import { createMediaTools } from "./tools/mediaTools.ts";
 import type { MediaToolOptions } from "./tools/mediaTools.ts";
-import { CheckpointManager } from "./checkpoint.ts";
+import { CheckpointManager, type Checkpoint } from "./checkpoint.ts";
 import { AgentLoop } from "./loop.ts";
 import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
@@ -65,6 +65,15 @@ export interface AgentSessionOptions {
   vision?: Tristate;
   /** Restricts writes to these path prefixes. Reads stay workspace-wide. */
   writeScope?: string[];
+  /**
+   * A snapshot taken by a session this one replaces.
+   *
+   * Only the extension host passes this, and only when it rebuilds a session to
+   * change model mid-conversation. Without it the new session reports "nothing
+   * to undo" while the previous one's stash is still in the repository with
+   * nobody holding its ref.
+   */
+  checkpoint?: Checkpoint | null;
   budget?: Partial<AgentBudget>;
   logger?: Logger;
   onEvent?: (event: AgentEvent) => void;
@@ -116,7 +125,21 @@ export class AgentSession {
     // the prompt says is impossible, and both have to be settled before the
     // model is shown anything.
     session.isGitRepo = await session.checkpoints.available();
+    // Adopted after `available()`, which opens the repository. Before it, there
+    // is nothing to revert *with*, and the adopted checkpoint would be held by a
+    // manager that cannot use it.
+    if (opts.checkpoint != null) session.checkpoints.adopt(opts.checkpoint);
     return session;
+  }
+
+  /**
+   * The snapshot this session is holding, so a replacement can take it over.
+   *
+   * Exposed for one caller: rebuilding the session to change model. See
+   * `checkpoints.adopt` for why handing this across matters.
+   */
+  get checkpoint(): Checkpoint | null {
+    return this.checkpoints.current;
   }
 
   get currentMode(): AgentMode {

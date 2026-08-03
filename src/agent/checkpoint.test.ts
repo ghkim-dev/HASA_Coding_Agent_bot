@@ -240,3 +240,80 @@ describe("release and changed files", () => {
     assert.deepEqual(await manager(dir).changedFiles(), []);
   });
 });
+
+/**
+ * Handing the snapshot to a replacement.
+ *
+ * The extension rebuilds the session when the mode needs a different model, and
+ * a new session builds a new manager. The stash is in git; the ref that finds it
+ * again is only ever in memory. So without this the user's work survives in a
+ * stash nothing can reach, and the button says there is nothing to undo — the
+ * worst shape a bug in this file can take, because it is silent.
+ */
+describe("handing a checkpoint to a replacement manager", () => {
+  async function dirtyRepoWithCheckpoint(): Promise<{
+    root: string;
+    taken: NonNullable<Awaited<ReturnType<CheckpointManager["ensure"]>>>;
+  }> {
+    const fixture = await repo({ "src/a.ts": "export const a = 1;\n" });
+    const first = manager(fixture.root);
+    await first.available();
+    // Work the user had in progress before the agent touched anything.
+    await writeFile(join(fixture.root, "src/a.ts"), "export const a = 2;\n");
+    const taken = await first.ensure();
+    assert.ok(taken !== null, "a dirty tree should produce a checkpoint");
+    // And now the agent's own write, which is what undo has to remove.
+    await writeFile(join(fixture.root, "src/a.ts"), "export const a = 999;\n");
+    return { root: fixture.root, taken };
+  }
+
+  test("the replacement can revert what the original stashed", async () => {
+    const { root, taken } = await dirtyRepoWithCheckpoint();
+
+    const second = manager(root);
+    await second.available();
+    second.adopt(taken);
+
+    assert.equal(await second.revert(), true);
+    assert.equal(
+      await readFile(join(root, "src/a.ts"), "utf8"),
+      "export const a = 2;\n",
+      "the user's in-progress work should be back, not the committed version",
+    );
+  });
+
+  test("without adopting it, the replacement reports nothing to undo", async () => {
+    // Written down because it is the bug, and because nothing about git makes
+    // this recoverable on its own: the stash is still there and unreachable.
+    const { root } = await dirtyRepoWithCheckpoint();
+
+    const second = manager(root);
+    await second.available();
+
+    assert.equal(await second.revert(), false);
+    assert.equal(
+      await readFile(join(root, "src/a.ts"), "utf8"),
+      "export const a = 999;\n",
+      "the agent's write is still there, and the user has no way back",
+    );
+  });
+
+  test("adopting nothing leaves a fresh manager fresh", async () => {
+    // A session rebuilt before the agent wrote anything has no snapshot to pass,
+    // and that must not be mistaken for one.
+    const fixture = await repo();
+    const cp = manager(fixture.root);
+    await cp.available();
+    cp.adopt(null);
+    assert.equal(cp.current, null);
+    assert.equal(await cp.revert(), false);
+  });
+
+  test("an adopted checkpoint is the one reported as current", async () => {
+    const { root, taken } = await dirtyRepoWithCheckpoint();
+    const second = manager(root);
+    await second.available();
+    second.adopt(taken);
+    assert.deepEqual(second.current, taken);
+  });
+});

@@ -1,4 +1,5 @@
 import type { MediaTransport } from "./hasaMedia.ts";
+import type { AudioTransport } from "./hasaAudio.ts";
 import type { CatalogPort } from "./hasaCatalog.ts";
 
 /**
@@ -44,7 +45,7 @@ function briefly(text: string): string {
 
 export function createMediaTransport(
   opts: HasaMediaTransportOptions,
-): MediaTransport & CatalogPort {
+): MediaTransport & CatalogPort & AudioTransport {
   const doFetch = opts.fetchImpl ?? fetch;
   const origin = opts.origin.replace(/\/+$/, "");
   const timeoutMs = opts.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -105,6 +106,28 @@ export function createMediaTransport(
       const text = await res.text();
       if (!res.ok) throw new HasaHttpError(res.status, `${res.status}: ${briefly(text)}`);
       return text.length === 0 ? {} : JSON.parse(text);
+    },
+
+    /**
+     * Multipart, for the transcription endpoint.
+     *
+     * The status is returned rather than thrown on, unlike everything else
+     * here, and that is deliberate: `hasaAudio.ts` has to tell a 503 that means
+     * "the gateway has no ffmpeg" from a 503 that means "try again", and it
+     * cannot do that from an error message. No `Content-Type` is set, because
+     * `fetch` derives it from the `FormData` along with the multipart boundary,
+     * and a hand-written one loses the boundary and produces a 400.
+     */
+    async postForm(path, form, signal) {
+      const res = await request(path, { method: "POST", headers: authed(), body: form }, signal);
+      const text = await res.text();
+      let body: unknown = {};
+      try {
+        body = text.length === 0 ? {} : JSON.parse(text);
+      } catch {
+        body = { detail: briefly(text) };
+      }
+      return { status: res.status, body };
     },
 
     /**
