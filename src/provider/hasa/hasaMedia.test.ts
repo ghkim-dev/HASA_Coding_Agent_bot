@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   MediaUnavailable,
+  MIN_VIDEO_FRAMES,
   estimateSeconds,
   framesFor,
   generateImage,
@@ -316,8 +317,12 @@ describe("frame counts the gateway will accept", () => {
     sizes: ["832x480"], audio: false, gen_time_per_sec: 22.7, default_seconds: 1.5,
   })!;
 
+  const ltx = readVideoSpec({
+    fps: 24, max_seconds: 10, max_frames: 240, frame_align: 8, dim_align: 1,
+    sizes: ["768x512"], audio: true, gen_time_per_sec: 11.6, default_seconds: 5,
+  })!;
+
   test("rounds to the model's alignment", () => {
-    // Off-alignment counts are rejected by the gateway, so they are never sent.
     for (const seconds of [0.5, 1, 1.5, 2, 3.3, 7]) {
       assert.equal(framesFor(wan, seconds) % wan.frameAlign, 0, `${seconds}s`);
     }
@@ -327,9 +332,33 @@ describe("frame counts the gateway will accept", () => {
     assert.ok(framesFor(wan, 600) <= wan.maxFrames);
   });
 
-  test("never asks for zero frames", () => {
-    assert.ok(framesFor(wan, 0) >= wan.frameAlign);
-    assert.ok(framesFor(wan, -5) >= wan.frameAlign);
+  test("never asks for fewer frames than the gateway accepts", () => {
+    // The bug this replaced: the floor was `frameAlign`, so a model aligned to
+    // 4 was sent `length: 4` and answered
+    //   422 Input should be greater than or equal to 5
+    // for any clip under about a third of a second. Measured against the live
+    // gateway on 2026-08-03; `LTX-2` (aligned to 8) never hit it, which is what
+    // made it look model-specific.
+    for (const seconds of [0, -5, 0.001, 0.05, 0.1, 0.2, 0.3]) {
+      assert.ok(framesFor(wan, seconds) >= MIN_VIDEO_FRAMES, `wan at ${seconds}s`);
+      assert.ok(framesFor(ltx, seconds) >= MIN_VIDEO_FRAMES, `ltx at ${seconds}s`);
+    }
+  });
+
+  test("the floor is still aligned, so the model's own step is respected", () => {
+    // 5 and 6 are accepted by the gateway despite `frame_align: 4`, so the
+    // minimum could have been sent raw. Rounding up keeps the published
+    // preference instead of quietly discarding it.
+    assert.equal(framesFor(wan, 0), 8, "ceil(5/4)*4");
+    assert.equal(framesFor(ltx, 0), 8, "ceil(5/8)*8");
+    assert.equal(framesFor(wan, 0) % wan.frameAlign, 0);
+    assert.equal(framesFor(ltx, 0) % ltx.frameAlign, 0);
+  });
+
+  test("a normal request is unchanged by the floor", () => {
+    // The fix must not inflate ordinary clips: only the ones that were refused.
+    assert.equal(framesFor(wan, 1.5), 24);
+    assert.equal(framesFor(ltx, 5), 120);
   });
 
   test("estimates cost for a warning, not for a timeout", () => {

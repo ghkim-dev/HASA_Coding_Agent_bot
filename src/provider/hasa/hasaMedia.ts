@@ -196,15 +196,43 @@ export function readJob(payload: unknown): VideoJob | null {
 }
 
 /**
+ * The shortest `length` the gateway will accept, for every video model.
+ *
+ * Not published in `video_spec` — the catalogue carries `fps`, `frame_align`
+ * and `max_frames` but nothing about a floor. It is API-level validation rather
+ * than a property of any model, measured on 2026-08-03 against `Wan2.1-T2V`:
+ * `length: 4` answers `422 Input should be greater than or equal to 5`, and
+ * 5, 6 and 8 are all accepted.
+ */
+export const MIN_VIDEO_FRAMES = 5;
+
+/**
  * A frame count this model will accept.
  *
- * The gateway rejects counts off its alignment, so seconds are rounded to the
- * nearest legal frame rather than passed through and refused.
+ * Two constraints, and they are not the same kind of thing.
+ *
+ * `frame_align` is the model's preferred step, published by the catalogue, and
+ * the gateway does *not* enforce it — `length: 5` and `length: 6` were both
+ * accepted by a model advertising `frame_align: 4`. `MIN_VIDEO_FRAMES` is a
+ * rule, and breaking it is a 422 before any GPU is touched.
+ *
+ * The floor used to be `frame_align` itself, which conflated the two. A model
+ * aligned to 8 got 8 and survived; a model aligned to 4 got 4 and was refused
+ * for every clip shorter than about a third of a second. `Wan2.1-T2V` and
+ * `Wan2.2-T2V` failed exactly that way and `LTX-2` did not, which is why it
+ * looked like a model problem rather than an arithmetic one.
+ *
+ * When the two disagree the minimum wins, raised to the next aligned multiple
+ * so the model's preference survives as well.
  */
 export function framesFor(spec: VideoSpec, seconds: number): number {
   const wanted = Math.round(seconds * spec.fps);
   const aligned = Math.max(spec.frameAlign, Math.round(wanted / spec.frameAlign) * spec.frameAlign);
-  return Math.min(aligned, spec.maxFrames);
+  const floor = Math.ceil(MIN_VIDEO_FRAMES / spec.frameAlign) * spec.frameAlign;
+  // `maxFrames` is clamped first, then the floor is re-applied: a model whose
+  // ceiling sits below the gateway's floor cannot produce a legal clip at all,
+  // and sending the floor at least lets the gateway say so.
+  return Math.max(floor, Math.min(Math.max(aligned, floor), spec.maxFrames));
 }
 
 /** Roughly how long this will take, for a message rather than for a timeout. */
