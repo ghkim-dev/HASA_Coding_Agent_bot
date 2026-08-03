@@ -11,7 +11,7 @@ import { ProviderError } from "../../../src/provider/errors.ts";
 import type { ModelListing, ProviderValidation } from "../../../src/provider/types.ts";
 import type { CommandSpec } from "../../../src/protocol/index.ts";
 import type { RuntimeGap } from "../../../src/agent/discoverCommands.ts";
-import { HasaCatalog, canConverse } from "../../../src/provider/hasa/hasaCatalog.ts";
+import { HasaCatalog, canConverse, offerForConversation } from "../../../src/provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../../../src/provider/hasa/hasaMediaTransport.ts";
 import { HASA_DEFAULT_BASE_URL } from "../../../src/provider/hasa/defaults.ts";
 import type { AgentSessionOptions } from "../../../src/agent/session.ts";
@@ -59,6 +59,15 @@ async function workspaceCommands(
  */
 
 export const HASA_SECRET_KEY = "hasaArena.apiKey";
+
+/** Modality names as a Korean-speaking user would recognise them. */
+const MODALITY_KO: Readonly<Record<string, string>> = {
+  image: "이미지",
+  video: "동영상",
+  audio: "음성",
+  embeddings: "임베딩",
+  rerank: "리랭킹",
+};
 
 export interface ConnectionState {
   hasApiKey: boolean;
@@ -336,10 +345,26 @@ export class AgentHost {
     const catalog = await this.ensureCatalog();
     if (catalog === null) return listing;
 
-    const modalities = new Map((await catalog.all()).map((e) => [e.id, e.modality]));
-    const models = listing.models.filter((m) => canConverse(modalities.get(m.id) ?? "unknown"));
-    const hidden = listing.models.length - models.length;
-    if (hidden > 0) this.log.appendLine(`[hasa] ${hidden} model(s) hidden from the picker: not conversational`);
+    const entries = new Map((await catalog.all()).map((e) => [e.id, e]));
+    const models = listing.models.filter((m) => offerForConversation(entries.get(m.id)));
+
+    // Named rather than counted. "2 model(s) hidden" is what the log said while
+    // the picker was offering an audio model that 404s and one the catalogue had
+    // already marked uncallable; knowing which two, and why, is the difference
+    // between a line you can act on and a line you scroll past.
+    for (const m of listing.models) {
+      if (models.includes(m)) continue;
+      const entry = entries.get(m.id);
+      const why =
+        entry === undefined
+          ? "not in the catalogue"
+          : !canConverse(entry.modality)
+            ? `${entry.modality} models use their own endpoint`
+            : !entry.available
+              ? "the catalogue lists it as unavailable"
+              : "this key class may not call it";
+      this.log.appendLine(`[hasa] ${m.id} hidden from the picker: ${why}`);
+    }
     return { ...listing, models };
   }
 
@@ -433,13 +458,24 @@ export class AgentHost {
       // nothing about what went wrong. Refusing here costs a request and buys
       // an error the user can act on.
       const catalog = await this.ensureCatalog();
-      const modality = (await catalog?.modalityOf(this.selectedModelId)) ?? "unknown";
-      if (!canConverse(modality)) {
-        this.modelProblem =
-          `${this.selectedModelId} 은(는) ${modality === "image" ? "이미지" : modality === "video" ? "동영상" : modality} ` +
-          "전용 모델이라 대화에 쓸 수 없습니다. ✨ Auto 로 두고 원하는 것을 말씀하시면 " +
-          "필요할 때 알아서 사용합니다.";
-        this.log.appendLine(`[hasa] refused ${this.selectedModelId}: modality ${modality} cannot converse`);
+      const entry = (await catalog?.entry(this.selectedModelId)) ?? null;
+      if (!offerForConversation(entry)) {
+        // Two reasons, and the user can act on only one of them, so they are not
+        // given the same sentence. A dedicated-endpoint model is reachable —
+        // through the tools, by asking for what they want. A model the gateway
+        // will not serve is not reachable at all.
+        const modality = entry?.modality ?? "unknown";
+        this.modelProblem = !canConverse(modality)
+          ? `${this.selectedModelId} 은(는) ${MODALITY_KO[modality] ?? modality} ` +
+            "전용 모델이라 대화에 쓸 수 없습니다. ✨ Auto 로 두고 원하는 것을 말씀하시면 " +
+            "필요할 때 알아서 사용합니다."
+          : `${this.selectedModelId} 은(는) 지금 사용할 수 없습니다` +
+            `${entry?.available === false ? " (게이트웨이가 중지 상태로 표시)" : " (이 API Key에 권한 없음)"}. ` +
+            "✨ Auto 로 두시면 사용 가능한 모델을 고릅니다.";
+        this.log.appendLine(
+          `[hasa] refused ${this.selectedModelId}: modality=${modality} ` +
+            `available=${String(entry?.available)} callable=${String(entry?.callable)}`,
+        );
         return null;
       }
       // A hand-picked model still needs the right protocol, and the capability

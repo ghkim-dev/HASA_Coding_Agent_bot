@@ -12,7 +12,14 @@ import {
   readJob,
   type MediaTransport,
 } from "./hasaMedia.ts";
-import { canConverse, parseCatalog, readVideoSpec, HasaCatalog } from "./hasaCatalog.ts";
+import {
+  canConverse,
+  offerForConversation,
+  parseCatalog,
+  readVideoSpec,
+  HasaCatalog,
+  type CatalogEntry,
+} from "./hasaCatalog.ts";
 
 /**
  * Image and video generation.
@@ -519,5 +526,100 @@ describe("models that cannot converse", () => {
     // A model in one and not the other must not disappear.
     const catalog = new HasaCatalog({ fetchJson: async () => [] });
     assert.equal(canConverse(await catalog.modalityOf("brand-new-model")), true);
+  });
+
+  test("an audio model is not a conversation model", () => {
+    // Reported from a running picker, which offered `whisper-large-v3`. The
+    // catalogue calls it available and callable, and /v1/chat/completions
+    // answers 404 for it — measured 2026-08-03. Speech has its own endpoint, the
+    // same as image and video.
+    assert.equal(canConverse("audio"), false);
+  });
+});
+
+/**
+ * Which models the picker may offer.
+ *
+ * A screenshot of the running extension showed `whisper-large-v3` and `tts-ko`
+ * in the model list. Neither can hold a conversation: the first 404s on chat,
+ * and the second is catalogued `unavailable` with `callable: false` and answers
+ * `403 model_not_on_key`. Modality alone did not catch either.
+ */
+describe("offering a model for conversation", () => {
+  const entry = (over: Partial<CatalogEntry> = {}): CatalogEntry => ({
+    id: "m",
+    modality: "chat",
+    title: null,
+    available: true,
+    callable: true,
+    videoSpec: null,
+    ...over,
+  });
+
+  test("an ordinary chat model is offered", () => {
+    assert.equal(offerForConversation(entry()), true);
+  });
+
+  test("a modality with its own endpoint is not", () => {
+    for (const modality of ["image", "video", "embeddings", "rerank", "audio"] as const) {
+      assert.equal(offerForConversation(entry({ modality })), false, modality);
+    }
+  });
+
+  test("a model the catalogue calls unavailable is not offered", () => {
+    // `tts-ko`. Selecting it produced 403 for a model the gateway had already
+    // said was not running — an error the user could do nothing with.
+    assert.equal(offerForConversation(entry({ available: false })), false);
+  });
+
+  test("a model this key may not call is not offered", () => {
+    assert.equal(offerForConversation(entry({ callable: false })), false);
+  });
+
+  test("vision and safety models are still offered", () => {
+    // The rule stays the inverse of a deny-list: `granite-guardian` is
+    // catalogued `safety` and measured chat=true, and excluding it would hide a
+    // model that works.
+    assert.equal(offerForConversation(entry({ modality: "vision" })), true);
+    assert.equal(offerForConversation(entry({ modality: "safety" })), true);
+    assert.equal(offerForConversation(entry({ modality: "unknown" })), true);
+  });
+
+  test("a model missing from the catalogue is offered, not hidden", () => {
+    // Degrading to "offer it" is recoverable. Degrading to "hide it" empties the
+    // picker whenever the portal API is down, with no explanation.
+    assert.equal(offerForConversation(null), true);
+    assert.equal(offerForConversation(undefined), true);
+  });
+
+  test("the live catalogue reduces to exactly the models that answer chat", async () => {
+    // Every row as the gateway returned it on 2026-08-03.
+    const catalog = new HasaCatalog({
+      fetchJson: async () => [
+        { name: "qwen3-coder", modality: "chat", status: "available", callable: true },
+        { name: "exaone-4.0-32b", modality: "chat", status: "available", callable: true },
+        { name: "qwen2.5-vl-72b", modality: "vision", status: "available", callable: true },
+        { name: "granite-guardian-3.1-8b", modality: "safety", status: "available", callable: true },
+        { name: "whisper-large-v3", modality: "audio", status: "available", callable: true },
+        { name: "tts-ko", modality: "audio", status: "unavailable", callable: false },
+        { name: "bge-m3", modality: "embeddings", status: "available", callable: true },
+        { name: "bge-reranker-v2-m3", modality: "rerank", status: "available", callable: true },
+        { name: "Qwen-Image", modality: "image", status: "available", callable: true },
+        { name: "Wan2.1-T2V", modality: "video", status: "available", callable: true },
+        { name: "wan2.2-i2v", modality: "video", status: "unavailable", callable: false },
+      ],
+    });
+    const all = await catalog.all();
+    const offered = all.filter((e) => offerForConversation(e)).map((e) => e.id);
+
+    assert.deepEqual(offered, [
+      "qwen3-coder",
+      "exaone-4.0-32b",
+      "qwen2.5-vl-72b",
+      "granite-guardian-3.1-8b",
+    ]);
+    for (const hidden of ["whisper-large-v3", "tts-ko"]) {
+      assert.ok(!offered.includes(hidden), `${hidden} was in the picker and cannot converse`);
+    }
   });
 });

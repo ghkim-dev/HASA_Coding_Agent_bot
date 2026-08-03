@@ -50,12 +50,19 @@ const KNOWN: ReadonlySet<string> = new Set([
  * `/v1/chat/completions`. That "everything else" matters — `granite-guardian`
  * is catalogued as `safety` and answers chat perfectly well, so a list of
  * modalities that *may* converse would have excluded a model that does.
+ *
+ * `audio` was in that "everything else" and should not have been. The picker
+ * offered `whisper-large-v3`, which the catalogue calls available and callable,
+ * and `/v1/chat/completions` answers 404 for it — measured 2026-08-03. A
+ * speech model is reached the same way an image model is: not by selecting it
+ * and typing.
  */
 const DEDICATED_ENDPOINT: ReadonlySet<Modality> = new Set<Modality>([
   "image",
   "video",
   "embeddings",
   "rerank",
+  "audio",
 ]);
 
 /**
@@ -73,6 +80,34 @@ const DEDICATED_ENDPOINT: ReadonlySet<Modality> = new Set<Modality>([
  */
 export function canConverse(modality: Modality): boolean {
   return !DEDICATED_ENDPOINT.has(modality);
+}
+
+/**
+ * Whether the model picker should offer this model for conversation.
+ *
+ * Three ways to be excluded, and they are three different claims:
+ *
+ *   - the modality has an endpoint of its own, so chat would 404;
+ *   - the catalogue says the model is not `available`, so it is announced
+ *     rather than running;
+ *   - the catalogue says this key class may not call it.
+ *
+ * Only the first was being checked. `tts-ko` is catalogued `unavailable` and
+ * `callable: false` and was offered anyway — selecting it produced
+ * `403 model_not_on_key`, a permissions error for a model the gateway had
+ * already said was not callable. The media path has always consulted both
+ * fields (`byModality`); the conversation path did not, and that asymmetry was
+ * the bug rather than any single missing check.
+ *
+ * A model with no catalogue entry is offered. The picker's list comes from
+ * `/v1/models` and the catalogue only annotates it, so a model present in one
+ * and absent from the other must not vanish — and an unreachable catalogue must
+ * degrade to offering everything rather than to an empty picker.
+ */
+export function offerForConversation(entry: CatalogEntry | null | undefined): boolean {
+  if (entry === null || entry === undefined) return true;
+  if (!canConverse(entry.modality)) return false;
+  return entry.available && entry.callable;
 }
 
 export interface CatalogEntry {
