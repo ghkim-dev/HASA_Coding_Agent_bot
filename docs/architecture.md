@@ -290,7 +290,9 @@ interface Scheduler {
 
 1. 스케줄러 인스턴스는 **앱 부팅 시 1회** 생성되어 DI로 주입된다. `route()` 내부 생성은 lint 규칙으로 금지한다.
 2. 제한은 **2단계**다 — 전역 동시 인플라이트 상한, 그리고 **모델별 큐**의 상한. HASA는 GPU 백엔드 공유이므로 모델별 제한이 실효적이다.
-3. `429` 수신 시 **`Retry-After` 헤더를 우선 준수**하고, 헤더가 없을 때만 exponential backoff + full jitter. 해당 모델 큐 전체를 일시 정지(circuit half-open)시켜 재시도 폭풍을 막는다.
+3. `429` 수신 시 **`Retry-After` 헤더를 우선 준수**하고, 헤더가 없을 때만 exponential backoff + **equal jitter**. 해당 모델 큐 전체를 일시 정지(circuit half-open)시켜 재시도 폭풍을 막는다.
+
+   대기는 지수 구간의 **위쪽 절반**에서 뽑는다(`exp/2 + rnd()·exp/2`). full jitter(`rnd()·exp`)는 무리를 완벽히 분산시키지만 0에 가까운 대기를 허용하고, 2026-08-03 실제로 그렇게 됐다 — 게이트웨이가 아직 로드하지 못한 모델에 재시도 3회가 228ms·75ms·3ms 간격으로 나가 560ms 만에 예산을 소진했다. 3밀리초 안에 바뀔 수 있는 것은 없으므로 셋 다 실패가 예정돼 있었다. 절반 구간도 상수가 아니므로 분산은 유지되고, 포기하는 것은 재시도가 애초에 도움이 될 수 없던 범위뿐이다.
 4. `503`(GPU backend unavailable)은 재시도 대상이지만 `403`(model access denied)·`404`(unregistered model)는 **재시도하지 않고** 후보를 즉시 제외 처리한다.
 5. 모든 잡은 `AbortSignal`을 받는다. Run 취소 시 전파된다.
 

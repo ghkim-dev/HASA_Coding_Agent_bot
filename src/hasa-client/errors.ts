@@ -94,8 +94,30 @@ export function parseRetryAfter(header: string | null | undefined, nowMs: number
   return Math.max(0, date - nowMs);
 }
 
-/** Exponential backoff with full jitter, capped. */
+/**
+ * Exponential backoff with equal jitter, capped.
+ *
+ * The wait is drawn from the *upper half* of the exponential window rather than
+ * from all of it: `exp/2 + rnd() * exp/2` instead of `rnd() * exp`.
+ *
+ * Full jitter — the whole window — spreads a herd perfectly, and that spread is
+ * the point when many callers fail at the same instant and would otherwise come
+ * back together. But a window open at the bottom also permits a wait of very
+ * nearly nothing, and on 2026-08-03 it produced one: three retries against a
+ * model the gateway had not finished loading went out after 228ms, 75ms and
+ * 3ms, spending the entire retry budget inside 560ms. Every one of them was
+ * certain to fail, because nothing could have changed in three milliseconds.
+ *
+ * Half a window still randomises, so a herd is still broken up — what is given
+ * up is only the part of the range where retrying was never going to help. The
+ * floor grows with the window (250ms, 500ms, 1s …), so three retries now wait
+ * at least 1.75s in total rather than possibly none at all.
+ *
+ * This applies only where the server offered no advice of its own. A response
+ * carrying `Retry-After` is honoured verbatim — see `withRetry` in client.ts.
+ */
 export function backoffMs(attempt: number, baseMs = 500, capMs = 30_000, rnd = Math.random): number {
   const exp = Math.min(capMs, baseMs * 2 ** attempt);
-  return Math.floor(rnd() * exp);
+  const half = exp / 2;
+  return Math.floor(half + rnd() * half);
 }

@@ -65,7 +65,42 @@ describe("backoffMs", () => {
     assert.ok(max(10) <= 30_000);
   });
 
-  test("full jitter can return zero", () => {
-    assert.equal(backoffMs(5, 500, 30_000, () => 0), 0);
+  test("the unluckiest draw still leaves the server time to change", () => {
+    // This replaced "full jitter can return zero", and the replacement is the
+    // whole point of the change. A zero-length wait is a retry that asks the
+    // same question before anything could have answered it differently —
+    // observed against a model the gateway was still loading, where three
+    // retries went out inside 560ms and all three were certain to fail.
+    for (const attempt of [0, 1, 2, 5, 12]) {
+      assert.ok(backoffMs(attempt, 500, 30_000, () => 0) > 0, `attempt ${attempt} waited nothing`);
+    }
+  });
+
+  test("the shortest wait is half the window, and it grows with the window", () => {
+    const shortest = (attempt: number): number => backoffMs(attempt, 500, 30_000, () => 0);
+    assert.deepEqual([shortest(0), shortest(1), shortest(2)], [250, 500, 1_000]);
+  });
+
+  test("three retries wait at least 1.75s in total", () => {
+    // Stated as a total because that is what a model needs in order to load:
+    // the individual waits matter less than whether the budget survives to the
+    // point where the answer could differ.
+    const worstCase = [0, 1, 2].reduce((sum, a) => sum + backoffMs(a, 500, 30_000, () => 0), 0);
+    assert.equal(worstCase, 1_750);
+  });
+
+  test("it still randomises, so a herd is still broken up", () => {
+    // Half a window is narrower than a whole one, but it is not a constant —
+    // and a constant is what would re-synchronise every caller that failed
+    // together.
+    const draws = new Set(
+      Array.from({ length: 64 }, (_, i) => backoffMs(1, 500, 30_000, () => i / 64)),
+    );
+    assert.ok(draws.size > 16, `only ${draws.size} distinct waits; jitter has collapsed`);
+  });
+
+  test("the cap bounds the top without collapsing the bottom onto it", () => {
+    assert.ok(backoffMs(20, 500, 30_000, () => 0.999999) <= 30_000);
+    assert.equal(backoffMs(20, 500, 30_000, () => 0), 15_000);
   });
 });

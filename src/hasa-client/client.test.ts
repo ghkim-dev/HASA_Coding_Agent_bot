@@ -117,7 +117,10 @@ describe("HasaClient", () => {
     );
     assert.equal(mock.stats.byModel.get("m/down"), before + 3, "1 attempt + 2 retries");
     assert.equal(waits.length, 2);
-    assert.ok(waits.every((w) => w >= 0), "backoff used when no Retry-After header is present");
+    // `>= 0` held for any number at all. Equal jitter makes the real claim
+    // checkable: a computed backoff always leaves the gateway time to recover.
+    assert.ok(waits.every((w) => w > 0), "backoff used when no Retry-After header is present");
+    assert.deepEqual(waits, [375, 750], "equal jitter, drawn at random() === 0.5");
   });
 
   test("400 from a too-large max_tokens is reported, not retried", async () => {
