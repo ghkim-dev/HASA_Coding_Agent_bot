@@ -70,8 +70,16 @@ function truncate(text: string): string {
   return text.length > MAX_CAPTURE ? `${text.slice(0, MAX_CAPTURE)}\n…[truncated]` : text;
 }
 
-/** Rejects a command that could not have come from the task specification. */
-export function assertRunnable(spec: CommandSpec, allowlist: CommandSpec[]): void {
+/**
+ * The checks that hold whether or not a command was declared in advance.
+ *
+ * Split out because the interactive agent has no task specification to declare
+ * anything: what stands between it and the machine is the user's approval, not
+ * a list written before the conversation started. These checks are the part
+ * that still applies — a plain executable name, arguments that cannot corrupt a
+ * log, and nothing on the denylist.
+ */
+export function assertSafeCommand(spec: CommandSpec): void {
   if (SHELL_METACHARACTERS.test(spec.cmd)) {
     throw new CommandRejected(
       "metacharacter",
@@ -89,6 +97,12 @@ export function assertRunnable(spec: CommandSpec, allowlist: CommandSpec[]): voi
       throw new CommandRejected("denylisted", line);
     }
   }
+}
+
+/** Rejects a command that could not have come from the task specification. */
+export function assertRunnable(spec: CommandSpec, allowlist: CommandSpec[]): void {
+  assertSafeCommand(spec);
+  const line = `${spec.cmd} ${spec.args.join(" ")}`;
   const matched = allowlist.some(
     (a) =>
       a.cmd === spec.cmd &&
@@ -139,7 +153,32 @@ export async function runCommand(
   opts: RunCommandOptions,
 ): Promise<CommandOutcome> {
   assertRunnable(spec, allowlist);
+  return spawnChecked(spec, opts);
+}
 
+/**
+ * Runs a command the user approved rather than one a specification declared.
+ *
+ * The same execution path, the same `shell: false`, the same denylist, and the
+ * same environment built by allowlist so the HASA key cannot reach it. What is
+ * absent is the allowlist match, and it is absent on purpose: an interactive
+ * agent is asked to install a package and run the file it just wrote, and
+ * neither was in a list written before the conversation began. The gate that
+ * replaces it is the approval prompt — which is what README's
+ * "명령 실행 — 확인" has described all along.
+ *
+ * The Arena keeps `runCommand`. An unattended run *has* a specification, and a
+ * candidate free to run anything is not a candidate that can be compared.
+ */
+export async function runApprovedCommand(
+  spec: CommandSpec,
+  opts: RunCommandOptions,
+): Promise<CommandOutcome> {
+  assertSafeCommand(spec);
+  return spawnChecked(spec, opts);
+}
+
+async function spawnChecked(spec: CommandSpec, opts: RunCommandOptions): Promise<CommandOutcome> {
   const started = Date.now();
   return new Promise<CommandOutcome>((resolvePromise) => {
     const child = spawn(spec.cmd, spec.args, {

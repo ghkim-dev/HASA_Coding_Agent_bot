@@ -1,6 +1,12 @@
 import type { CommandSpec } from "../../protocol/index.ts";
-import { CommandRejected, candidateEnv, runCommand } from "../../core/commands.ts";
+import {
+  CommandRejected,
+  candidateEnv,
+  runApprovedCommand,
+  type CommandOutcome,
+} from "../../core/commands.ts";
 import { GitRepo } from "../../core/git.ts";
+import { parseCommandLine, UnparsableCommand, type ParsedCommandLine } from "../commandLine.ts";
 import type { AgentTool, ToolResult } from "../types.ts";
 
 /**
@@ -44,8 +50,161 @@ export interface ShellToolOptions {
 export function createShellTools(opts: ShellToolOptions): AgentTool[] {
   const tools: AgentTool[] = [];
   if (opts.isGitRepo !== false) tools.push(gitDiff(opts));
-  if (opts.allowlist.length > 0) tools.push(executeCommand(opts));
+  // Always offered. It used to appear only when the project declared scripts,
+  // which meant a folder holding one Python file had no way to run it, no way
+  // to install what it imports, and — because the prompt then said so — a model
+  // that told the user, correctly and uselessly, that it could not help.
+  tools.push(runCommandTool(opts));
   return tools;
+}
+
+/** How long a command may run before it is killed, and the ceiling on asking for more. */
+const DEFAULT_TIMEOUT_MS = 300_000;
+const MAX_TIMEOUT_MS = 900_000;
+
+function suggestions(allowlist: readonly CommandSpec[]): string {
+  const byLabel = commandLabels(allowlist);
+  if (byLabel.size === 0) return "";
+  const lines = [...byLabel.values()].map((c) => `\`${[c.cmd, ...c.args].join(" ")}\``);
+  return ` This project declares: ${lines.join(", ")}.`;
+}
+
+/**
+ * Running things, which is most of what makes an agent useful.
+ *
+ * The command arrives as one line and is split here, never by a shell — see
+ * `commandLine.ts`. What keeps it safe is not a list of permitted commands but
+ * the approval prompt: `risk: "execute"` means Safe and Balanced both stop and
+ * ask, which is the behaviour README has always documented. The denylist in
+ * `core/commands.ts` stays as the second layer it was designed to be.
+ */
+function runCommandTool(opts: ShellToolOptions): AgentTool {
+  return {
+    name: "run_command",
+    risk: "execute",
+    description:
+      "Run a command in the workspace — install a dependency, run a script, run the tests. " +
+      "One command per call, given as a single line; there is no shell, so pipes, redirection " +
+      "and && are not available. The user approves it before it runs. " +
+      "Use it to check your work: a change you have not run is a change you are guessing about." +
+      suggestions(opts.allowlist),
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description:
+            "The command line, e.g. `pip install transformers` or `python train.py --epochs 1`.",
+        },
+        timeout_seconds: {
+          type: "number",
+          description: `How long to allow. Default ${DEFAULT_TIMEOUT_MS / 1000}, maximum ${MAX_TIMEOUT_MS / 1000}. Raise it for a large install.`,
+        },
+      },
+      required: ["command"],
+      additionalProperties: false,
+    },
+    summarize: (args) => `\`${str(args, "command")}\` 을(를) 실행합니다`,
+    async execute(args, ctx): Promise<ToolResult> {
+      const line = str(args, "command").trim();
+      let parsed: ParsedCommandLine;
+      try {
+        parsed = parseCommandLine(line);
+      } catch (err) {
+        if (err instanceof UnparsableCommand) return { ok: false, content: err.guidance };
+        throw err;
+      }
+
+      const seconds = typeof args["timeout_seconds"] === "number" ? args["timeout_seconds"] : 0;
+      const timeoutMs = Math.min(
+        MAX_TIMEOUT_MS,
+        Math.max(1_000, seconds > 0 ? Math.round(seconds * 1000) : DEFAULT_TIMEOUT_MS),
+      );
+
+      try {
+        const outcome = await runApprovedCommand(
+          { gate: gateFor(parsed), kind: "regression", cmd: parsed.cmd, args: parsed.args, timeoutMs },
+          { cwd: opts.workspaceRoot, signal: ctx.signal, env: candidateEnv() },
+        );
+        // A binary that does not exist comes back as a resolved outcome with
+        // ENOENT on stderr, not as a thrown error, so it is read here. Left as
+        // the raw spawn text it says "[spawn error] spawn foo ENOENT", which
+        // tells a model nothing about what to do next.
+        if (outcome.exitCode === null && /ENOENT/.test(outcome.stderr)) {
+          return {
+            ok: false,
+            content:
+              `\`${parsed.cmd}\` is not installed, or is not on this machine's PATH. ` +
+              "Check before assuming it is there; if it is genuinely missing, say so plainly " +
+              "and tell the user how to install it rather than trying another spelling.",
+          };
+        }
+        return { ok: outcome.exitCode === 0, content: report(line, outcome) };
+      } catch (err) {
+        // A refusal is a result, not an exception. The model learns the boundary
+        // and tries something legal; throwing would end the turn and teach it
+        // nothing.
+        if (err instanceof CommandRejected) {
+          return {
+            ok: false,
+            content:
+              err.reason === "denylisted"
+                ? `refused: \`${line}\` is on the blocked list — it deletes, publishes, or reaches the network. ` +
+                  "Ask the user to run it themselves if it is really what they want."
+                : `refused: ${err.message}`,
+          };
+        }
+        if ((err as { code?: string }).code === "ENOENT") {
+          return {
+            ok: false,
+            content:
+              `\`${parsed.cmd}\` is not installed, or is not on this machine's PATH. ` +
+              "Check what is available before assuming, and tell the user plainly if it is missing.",
+          };
+        }
+        throw err;
+      }
+    },
+  };
+}
+
+/**
+ * Which gate this command belongs to, for the log and the transcript.
+ *
+ * Labelling only — nothing is permitted or refused on the strength of it. The
+ * gates already included `install`, which is worth noticing: the vocabulary
+ * anticipated an agent that installs things long before there was a tool that
+ * could.
+ */
+function gateFor(parsed: ParsedCommandLine): CommandSpec["gate"] {
+  const line = [parsed.cmd, ...parsed.args].join(" ").toLowerCase();
+  if (/\b(install|add|sync|restore)\b/.test(line)) return "install";
+  if (/\btest\b|pytest|vitest|jest/.test(line)) return "test";
+  if (/\bbuild\b|\bcompile\b/.test(line)) return "build";
+  if (/\blint\b|ruff|eslint|flake8/.test(line)) return "lint";
+  if (/\btsc\b|typecheck|mypy/.test(line)) return "typecheck";
+  return "run";
+}
+
+/**
+ * What the model gets back.
+ *
+ * Both streams, tail-first, and the exit code stated rather than implied. A tool
+ * result that shows only stdout hides the stack trace that explains the failure,
+ * and a model reading "it did not work" without it will guess.
+ */
+function report(line: string, outcome: CommandOutcome): string {
+  const tail = (text: string): string => text.split("\n").slice(-MAX_OUTPUT_LINES).join("\n").trim();
+  const head = `$ ${line}\nexit ${outcome.exitCode ?? "null"}${outcome.timedOut ? " (timed out)" : ""} in ${outcome.durationMs}ms`;
+  const parts = [
+    head,
+    tail(outcome.stdout) ? `stdout:\n${tail(outcome.stdout)}` : "",
+    tail(outcome.stderr) ? `stderr:\n${tail(outcome.stderr)}` : "",
+  ].filter(Boolean);
+  if (outcome.exitCode !== 0 && !tail(outcome.stdout) && !tail(outcome.stderr)) {
+    parts.push("(no output)");
+  }
+  return parts.join("\n");
 }
 
 /**
@@ -97,74 +256,6 @@ export function commandLabels(allowlist: readonly CommandSpec[]): Map<string, Co
   }
 
   return out;
-}
-
-function describeAllowlist(byLabel: Map<string, CommandSpec>): string {
-  return [...byLabel]
-    .map(([label, c]) => `"${label}" (${[c.cmd, ...c.args].join(" ")})`)
-    .join(", ");
-}
-
-function executeCommand(opts: ShellToolOptions): AgentTool {
-  // Keyed by plain string: the model sends whatever it likes, and narrowing the
-  // key type would only move the check from runtime to a cast.
-  const byGate = commandLabels(opts.allowlist);
-  return {
-    name: "execute_command",
-    risk: "execute",
-    description:
-      `Run one of this workspace's commands: ${describeAllowlist(byGate)}. ` +
-      "Nothing else can be run. Use it to check your work — a change that has not been built, tested " +
-      "or run is a change you are guessing about.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: {
-          type: "string",
-          enum: [...byGate.keys()],
-          description: "Which declared command to run.",
-        },
-      },
-      required: ["command"],
-      additionalProperties: false,
-    },
-    summarize: (args) => {
-      const spec = byGate.get(str(args, "command"));
-      if (spec === undefined) return `${str(args, "command")} 명령을 실행합니다`;
-      return `\`${[spec.cmd, ...spec.args].join(" ")}\` 을(를) 실행합니다`;
-    },
-    async execute(args, ctx): Promise<ToolResult> {
-      const gate = str(args, "command");
-      const spec = byGate.get(gate);
-      if (spec === undefined) {
-        return {
-          ok: false,
-          content: `"${gate}" is not one of this project's commands. Available: ${[...byGate.keys()].join(", ")}`,
-        };
-      }
-      try {
-        const outcome = await runCommand(spec, opts.allowlist, {
-          cwd: opts.workspaceRoot,
-          signal: ctx.signal,
-          env: candidateEnv(),
-        });
-        const tail = (text: string): string =>
-          text.split("\n").slice(-MAX_OUTPUT_LINES).join("\n").trim();
-        const parts = [
-          `exit ${outcome.exitCode ?? "null"}${outcome.timedOut ? " (timed out)" : ""} in ${outcome.durationMs}ms`,
-          tail(outcome.stdout) ? `stdout:\n${tail(outcome.stdout)}` : "",
-          tail(outcome.stderr) ? `stderr:\n${tail(outcome.stderr)}` : "",
-        ].filter(Boolean);
-        return { ok: outcome.exitCode === 0, content: parts.join("\n") };
-      } catch (err) {
-        // A refusal is a result, not an exception. The model learns the
-        // boundary and tries something legal; throwing would end the turn and
-        // teach it nothing.
-        if (err instanceof CommandRejected) return { ok: false, content: `refused: ${err.message}` };
-        throw err;
-      }
-    },
-  };
 }
 
 function gitDiff(opts: ShellToolOptions): AgentTool {

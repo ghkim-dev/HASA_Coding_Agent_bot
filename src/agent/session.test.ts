@@ -309,10 +309,15 @@ describe("history", () => {
 });
 
 describe("what the workspace cannot do is said out loud", () => {
-  test("a project with no runnable scripts says so, and says what to do instead", async () => {
-    // Observed in use: asked to run the file it had just written, the model
-    // answered "I will run it and show you the result" seven times. It had no
-    // tool that runs anything, and no way to notice that.
+  test("a project with no declared scripts can still run things", async () => {
+    // This asserted the opposite, and the opposite was the bug. A folder with no
+    // package.json got no command tool at all, and the prompt told the model to
+    // say it could not run anything — so asked to install a dependency and run
+    // the file it had just written, it explained at length that it was unable
+    // to. It was not unable; it had been disarmed and then told to apologise.
+    //
+    // What gates a command now is the approval prompt, which is what the README
+    // has always documented: 명령 실행 — 확인.
     const fixture = await repo();
     const model = scripted([turn({ text: "ok" })]);
     const session = await AgentSession.open({
@@ -325,11 +330,12 @@ describe("what the workspace cannot do is said out loud", () => {
     await session.send("실행해줘", never);
 
     const system = String(session.history().find((m) => m.role === "system")?.content);
-    assert.match(system, /cannot run programs/i);
-    assert.match(system, /command they can run themselves/i);
+    assert.doesNotMatch(system, /cannot run programs/i, "the prompt must not disclaim a tool that exists");
+    const offered = (model.seen[0] as { tools?: Array<{ name: string }> }).tools ?? [];
+    assert.ok(offered.some((t) => t.name === "run_command"), "run_command should be offered regardless");
   });
 
-  test("a project with scripts gets the command tool and no such warning", async () => {
+  test("a project with scripts is told about them, and still gets the same tool", async () => {
     const fixture = await repo();
     const model = scripted([turn({ text: "ok" })]);
     const session = await AgentSession.open({
@@ -344,8 +350,31 @@ describe("what the workspace cannot do is said out loud", () => {
 
     const system = String(session.history().find((m) => m.role === "system")?.content);
     assert.doesNotMatch(system, /cannot run programs/i);
+    const offered = (model.seen[0] as { tools?: Array<{ name: string; description?: string }> }).tools ?? [];
+    const run = offered.find((t) => t.name === "run_command");
+    assert.ok(run !== undefined);
+    // Declared scripts become a suggestion rather than a restriction: knowing
+    // the project runs `pnpm run test` is useful, being unable to run anything
+    // else is not.
+    assert.match(String(run.description), /pnpm run test/);
+  });
+
+  test("ASK is still given nothing that runs", async () => {
+    // The capability boundary is the mode, not the workspace. Loosening what
+    // CODE may do must not loosen what ASK may do.
+    const fixture = await repo();
+    const model = scripted([turn({ text: "ok" })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      mode: "ask",
+      logger: nullLogger,
+    });
+    await session.send("이거 뭐야?", never);
+
     const offered = (model.seen[0] as { tools?: Array<{ name: string }> }).tools ?? [];
-    assert.ok(offered.some((t) => t.name === "execute_command"));
+    assert.ok(!offered.some((t) => t.name === "run_command"));
   });
 
   test("a git repository is offered a diff tool and no warning about undo", async () => {

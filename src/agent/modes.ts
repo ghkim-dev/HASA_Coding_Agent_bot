@@ -43,9 +43,19 @@ export const MODE_DEFINITIONS: Record<AgentMode, ModeDefinition> = {
 
 You implement changes. Find the relevant code, make the change, and check it.
 
+Checking it means running it. You have \`run_command\`, and it is not a last resort:
+install what the code imports, run the file, read the error, fix it, run it again. A
+dependency that is missing is something to install, not something to tell the user
+about. The user approves each command before it runs, so proposing one is always
+better than describing one.
+
+Two failures to avoid, both seen in use. Do not say you are unable to run or install
+things — you are, and saying otherwise leaves the user to do it themselves. And do not
+report that something works when you only wrote it; run it, and if it fails, say what
+failed.
+
 When you are done, say in two or three sentences what you changed and why. Name the
-files. If you ran something to verify it, say what and what happened; if you did not,
-say that instead.`,
+files. Say what you ran and what it printed; if you could not run it, say why.`,
   },
 
   architect: {
@@ -73,8 +83,13 @@ in which files, in what order, and what could go wrong. Concrete beats complete.
 You find causes. Reproduce the problem before you theorise about it, and prefer
 evidence from the repository over a plausible story.
 
+Reproducing means running it. \`run_command\` is how — run the failing thing, read the
+actual error, install whatever is missing to get that far. A stack trace you have read
+beats any amount of reasoning about what the code looks like.
+
 Say what the cause is and what the evidence for it was. If you fixed it, say how you
-know. If you could not reproduce it, say that rather than guessing at a fix.`,
+know — which command, and what it printed. If you could not reproduce it, say that
+rather than guessing at a fix.`,
   },
 
   ask: {
@@ -135,9 +150,8 @@ export function workspaceNote(available: {
 
   if (!available.canRunCommands) {
     limits.push(
-      "- You cannot run programs, tests or any command in this workspace, so no such tool exists.\n" +
-        "  If asked to run something, say plainly that you cannot, and tell the user the exact\n" +
-        "  command they can run themselves in a terminal.",
+      "- This mode has no tool that runs anything. If asked to run something, say plainly that\n" +
+        "  this mode cannot, and tell the user the exact command they could run themselves.",
     );
   }
   if (!available.isGitRepo) {

@@ -187,10 +187,20 @@ describe("the command still goes through the same gate", () => {
   });
 
   test("the tool is risk-gated as execute, so approval still applies", async () => {
+    // The approval gate is now the *only* gate on what may run, so this is the
+    // load-bearing assertion in this file rather than a formality.
     const { commands } = await discoverRunnableScripts(workspace({ "": ["calculator.py"] }));
     const tools = createShellTools({ workspaceRoot: "/w", allowlist: commands, isGitRepo: false });
-    const run = tools.find((t) => t.name === "execute_command");
+    const run = tools.find((t) => t.name === "run_command");
     assert.equal(run?.risk, "execute");
+  });
+
+  test("it is offered even when the workspace declares nothing", async () => {
+    // The bug: no declared scripts meant no tool, in exactly the folders where
+    // a user is most likely to ask for one — a fresh directory with a single
+    // file they want run.
+    const tools = createShellTools({ workspaceRoot: "/w", allowlist: [], isGitRepo: false });
+    assert.ok(tools.some((t) => t.name === "run_command"));
   });
 });
 
@@ -243,11 +253,21 @@ describe("naming the commands", () => {
     assert.equal(commandLabels(commands).size, commands.length, "labels collide");
   });
 
-  test("the tool description names each command so the model can choose", async () => {
+  test("the tool description names what the project declares, as a suggestion", async () => {
+    // Discovery still earns its keep — it tells the model what this workspace
+    // is for. What changed is that the list no longer bounds what may be run,
+    // so it is offered rather than enforced.
     const { commands } = await discoverRunnableScripts(workspace({ "": ["main.py", "helper.py"] }));
     const tools = createShellTools({ workspaceRoot: "/w", allowlist: commands, isGitRepo: false });
-    const description = tools.find((t) => t.name === "execute_command")?.description ?? "";
+    const description = tools.find((t) => t.name === "run_command")?.description ?? "";
     assert.match(description, /main\.py/);
     assert.match(description, /helper\.py/);
+  });
+
+  test("with nothing declared, the description promises nothing and still works", async () => {
+    const tools = createShellTools({ workspaceRoot: "/w", allowlist: [], isGitRepo: false });
+    const description = tools.find((t) => t.name === "run_command")?.description ?? "";
+    assert.doesNotMatch(description, /This project declares/);
+    assert.match(description, /install a dependency/i);
   });
 });

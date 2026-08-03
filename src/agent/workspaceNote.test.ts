@@ -40,11 +40,13 @@ describe("a missing interpreter", () => {
     assert.match(note, /the code is fine/i);
   });
 
-  test("comes before the generic cannot-run line", () => {
+  test("comes before the generic no-tool line", () => {
     // Order matters: the specific fixable fact should be the one the model
-    // reaches for first.
+    // reaches for first. The generic line now describes a *mode* without a
+    // run tool rather than a workspace where running is impossible, because
+    // running is no longer impossible.
     const specific = note.indexOf("Python");
-    const generic = note.indexOf("You cannot run programs");
+    const generic = note.indexOf("no tool that runs anything");
     assert.ok(specific !== -1 && generic !== -1);
     assert.ok(specific < generic, "the actionable line should come first");
   });
