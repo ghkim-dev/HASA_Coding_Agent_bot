@@ -205,6 +205,22 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
         problem: `"${name}" is not a tool. Available tools: ${[...byName.keys()].join(", ")}.`,
       };
     }
+
+    const cut = unterminatedAttempt(text, tools);
+    if (cut !== null) {
+      return {
+        call: null,
+        // The markup is removed rather than shown. A user who asked for a video
+        // should not be handed a fragment of the agent's own syntax, which is
+        // what a bare `<tool_call>` in the reply looked like.
+        text: text.slice(0, cut.start).trim(),
+        problem: cut.known
+          ? `${cut.name} was opened but never closed — the reply ended mid-call, ` +
+            "most likely at the output limit. Write the whole call again and keep the values short."
+          : `"${cut.name}" is not a tool, and it was left unclosed. ` +
+            `Available tools: ${[...byName.keys()].join(", ")}. Use the XML format described above.`,
+      };
+    }
     return { call: null, text, problem: null };
   }
 
@@ -249,6 +265,66 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
 /** Prose only: whatever the model wrote around the call. */
 function strip(text: string, block: { start: number; end: number }): string {
   return (text.slice(0, block.start) + text.slice(block.end)).trim();
+}
+
+/**
+ * A call that was started and never finished.
+ *
+ * `extractBlock` needs both tags, so an opening tag with no closing one is
+ * invisible to it: `chosen` stays null, the "invented tool" check needs a closed
+ * pair and finds none, and the whole reply — markup included — is handed to the
+ * user as prose. Reported from a running session, where the visible answer was a
+ * bare `<tool_call>`; the model had been cut off mid-call, was told nothing, and
+ * spent the following turns insisting it could not generate video.
+ *
+ * Both shapes are worth catching. A truncated call to a *real* tool is the
+ * common one and the fix is for the model to write it again more briefly. An
+ * unclosed tag that is not a tool at all is the Qwen family reaching for the
+ * `<tool_call>` format it was trained on; naming it is what lets the model
+ * switch to the format this prompt actually asked for.
+ *
+ * The earliest attempt wins, for the same reason the earliest tool tag does.
+ *
+ * Only a tag that *begins a line* counts. The format writes a call as a block,
+ * so that is where a real one starts; a model saying "use the <read_file> tool"
+ * mid-sentence is talking, not calling. Getting this wrong in the lenient
+ * direction costs one correction the model can ignore. Getting it wrong in the
+ * strict direction is the bug being fixed.
+ */
+function startsLine(text: string, index: number): boolean {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const ch = text[i];
+    if (ch === "\n") return true;
+    if (ch !== " " && ch !== "\t" && ch !== "\r") return false;
+  }
+  return true;
+}
+
+function unterminatedAttempt(
+  text: string,
+  tools: readonly ToolDescriptor[],
+): { name: string; start: number; known: boolean } | null {
+  let best: { name: string; start: number; known: boolean } | null = null;
+  const consider = (name: string, start: number, known: boolean): void => {
+    if (!startsLine(text, start)) return;
+    if (best === null || start < best.start) best = { name, start, known };
+  };
+
+  for (const tool of tools) {
+    const open = text.indexOf(`<${tool.name}>`);
+    // A close *after* the open means `extractBlock` already had it, and this
+    // function is only reached when it did not.
+    if (open !== -1 && text.lastIndexOf(`</${tool.name}>`) < open) consider(tool.name, open, true);
+  }
+
+  const known = new Set(tools.map((t) => t.name));
+  for (const match of text.matchAll(/<([a-z][a-z0-9_]{2,})>/gi)) {
+    const name = match[1];
+    if (name === undefined || known.has(name) || !looksLikeToolAttempt(name)) continue;
+    if (text.includes(`</${name}>`)) continue;
+    consider(name, match.index, false);
+  }
+  return best;
 }
 
 /**

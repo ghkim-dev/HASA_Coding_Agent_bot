@@ -85,6 +85,8 @@ export class AgentHost {
   private validation: ProviderValidation | null = null;
   private selectedModelId: string | null = null;
   private autoChoice: AutoModelChoice | null = null;
+  /** The choice the live session was built on. Fixed for its lifetime. */
+  private sessionChoice: AutoModelChoice | null = null;
   private catalog: HasaCatalog | null = null;
   /** Why the last turn could not start, when the reason is worth showing. */
   private modelProblem: string | null = null;
@@ -113,7 +115,11 @@ export class AgentHost {
 
   get modelLabel(): string {
     if (this.selectedModelId !== null) return this.selectedModelId;
-    return this.autoChoice === null ? "✨ Auto" : `✨ Auto · ${this.autoChoice.modelId}`;
+    // The running model wins over the next candidate. A session keeps the model
+    // it opened with, so after a mode change `autoChoice` held a fresh pick that
+    // nothing was using — and the label named a model that was not answering.
+    const running = this.sessionChoice ?? this.autoChoice;
+    return running === null ? "✨ Auto" : `✨ Auto · ${running.modelId}`;
   }
 
   selectModel(modelId: string | null): void {
@@ -171,6 +177,7 @@ export class AgentHost {
     this.session = null;
     this.validation = null;
     this.autoChoice = null;
+    this.sessionChoice = null;
     // A different key is a different history. Dropping the store rather than
     // reusing it is what keeps one key's conversations out of another's.
     this.conversations = null;
@@ -411,13 +418,19 @@ export class AgentHost {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (folder === undefined) return null;
 
-    const choice = await this.resolveModel(provider);
-    if (choice === null) return null;
-
+    // Asked before the model is resolved, not after. Resolving can spend live
+    // inference requests measuring candidates, and every one of those was
+    // thrown away here: the session already exists, so it keeps the model it
+    // opened with. The cost was real and the answer was never used.
     if (this.session !== null) {
       this.session.setMode(this.mode);
       return this.session;
     }
+
+    const choice = await this.resolveModel(provider);
+    if (choice === null) return null;
+    // What is actually running, for a label that does not have to guess.
+    this.sessionChoice = choice;
 
     // The measured output ceiling, when there is one. Without it the gateway
     // applies its own default, and for a model with a small context that
@@ -490,7 +503,13 @@ export class AgentHost {
     }
     if (this.autoChoice !== null) return this.autoChoice;
 
-    const listing = await provider.listModels();
+    // The same list the picker offers, not the raw catalogue. Auto ranked every
+    // model `/v1/models` returned, and an unmeasured one is a candidate rather
+    // than a disqualification — so the image, audio and embedding models were
+    // all selectable, and picking one meant every turn answering 404 before the
+    // agent ran. The picker had been taught to hide them; Auto had not, which is
+    // how the two came to disagree about what this key can talk to.
+    const listing = (await this.conversationModels()) ?? (await provider.listModels());
     const choice = await chooseModel({
       models: listing.models,
       mode: this.mode,

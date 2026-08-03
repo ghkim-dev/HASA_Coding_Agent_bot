@@ -311,6 +311,22 @@ describe("the real catalogue, per mode", () => {
     }
   });
 
+  test("an unmeasured model of any kind is a candidate, so the caller must filter", async () => {
+    // Not a flaw in the ranking — a fresh install has measured nothing, and
+    // refusing every unmeasured model would refuse every model. But it means
+    // `chooseModel` cannot be the thing that keeps an image or audio model out
+    // of CODE: it has no idea what modality is, and should not.
+    //
+    // The catalogue knows, and the caller consults it. This test exists so that
+    // the coupling is written down rather than assumed: Auto in the extension
+    // is fed `conversationModels()`, the same list the picker shows, because
+    // ranking alone would happily return `Qwen-Image`.
+    const unmeasured = [model("Qwen-Image"), model("whisper-large-v3"), model("tts-ko")];
+    const choice = await chooseModel({ models: unmeasured, mode: "code" });
+    assert.ok(choice !== null, "ranking does not rule these out on its own");
+    assert.equal(choice.confidence, "unverified");
+  });
+
   test("every reason is written for the user", async () => {
     for (const mode of AGENT_MODES) {
       const choice = await chooseModel({ models: REAL_CATALOGUE, mode });

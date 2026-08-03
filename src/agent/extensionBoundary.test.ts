@@ -305,6 +305,53 @@ describe("opening the panel fetches the model list once", () => {
 });
 
 /**
+ * Auto and the picker agree about what this key can talk to.
+ *
+ * They did not. The picker consults the catalogue and hides models with an
+ * endpoint of their own; Auto ranked whatever `/v1/models` returned, and an
+ * unmeasured model is deliberately a candidate rather than a disqualification —
+ * so `Qwen-Image`, `whisper-large-v3` and `bge-m3` were all selectable. Picking
+ * one meant every turn answering 404 before the agent ran, which is one of the
+ * ways "sometimes it works" happens.
+ *
+ * `chooseModel` cannot fix this itself: it ranks measured capability and has no
+ * notion of modality, which is the right shape for it. So the guarantee is that
+ * its caller hands it the filtered list, and that is what is checked here.
+ */
+describe("the model Auto may choose is one the picker would offer", () => {
+  const host = hostFiles.find((f) => f.name.includes("agentHost"));
+
+  /** `resolveModel` alone — the rule is about what it feeds `chooseModel`. */
+  function resolveBody(): string {
+    assert.ok(host !== undefined, "agentHost should be present");
+    const start = host.text.indexOf("private async resolveModel(");
+    assert.notEqual(start, -1, "agentHost should still have resolveModel");
+    const end = host.text.indexOf("async send(", start);
+    assert.notEqual(end, -1, "send() should still follow resolveModel");
+    return host.text.slice(start, end);
+  }
+
+  test("it is given the conversation models, not the raw catalogue", () => {
+    const body = resolveBody();
+    assert.match(
+      body,
+      /conversationModels\(\)/,
+      "resolveModel must rank the list the picker offers, not everything /v1/models returned",
+    );
+  });
+
+  test("the filtered list is what reaches chooseModel", () => {
+    // A `conversationModels()` call that the ranking then ignores would pass the
+    // test above and none of the point of it.
+    const body = resolveBody();
+    const filtered = body.indexOf("conversationModels()");
+    const ranked = body.indexOf("chooseModel(");
+    assert.notEqual(ranked, -1, "resolveModel should still call chooseModel");
+    assert.ok(filtered < ranked, "the list must be filtered before it is ranked");
+  });
+});
+
+/**
  * Model output cannot become markup.
  *
  * The panel gained the ability to display images. The rule that keeps that from

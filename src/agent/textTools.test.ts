@@ -275,9 +275,50 @@ describe("calls that cannot be used", () => {
   });
 
   test("an unclosed call is not half-applied", () => {
-    const { call, problem } = parseToolCall("<read_file>\n<path>a.ts</path>", tools);
+    const { call } = parseToolCall("<read_file>\n<path>a.ts</path>", tools);
     assert.equal(call, null);
-    assert.equal(problem, null, "an unfinished thought is not an error");
+  });
+
+  test("an unclosed call is reported rather than passed off as an answer", () => {
+    // This replaced "an unfinished thought is not an error". It is one: a reply
+    // cut off at the output limit leaves a call that never ran, and saying
+    // nothing meant the model saw no result, concluded it was incapable, and
+    // told the user so — for several turns — while the raw markup sat in the
+    // transcript. Reported from a running session.
+    const { call, text, problem } = parseToolCall("Reading it now.\n<read_file>\n<path>a.ts</path>", tools);
+    assert.equal(call, null);
+    assert.match(String(problem), /read_file was opened but never closed/);
+    assert.match(String(problem), /output limit/);
+    assert.equal(text, "Reading it now.", "the markup is not shown to the user");
+  });
+
+  test("an unclosed tag that is not a tool is named, not leaked", () => {
+    // `<tool_call>` is the format the Qwen family was trained on. Truncated, it
+    // matched nothing and was printed to the user verbatim — the reported bug.
+    const { call, text, problem } = parseToolCall("\n<tool_call>", tools);
+    assert.equal(call, null);
+    assert.match(String(problem), /"tool_call" is not a tool/);
+    assert.match(String(problem), /read_file/, "the real tools are listed so it can switch");
+    assert.equal(text, "");
+  });
+
+  test("a tool named in prose is still just prose", () => {
+    // The rule is "begins a line", because that is where the format puts a call.
+    // Without it every sentence mentioning a tool draws a correction.
+    for (const text of [
+      "I will use the <read_file> tool next.",
+      "Call <apply_patch> when you know the path.",
+    ]) {
+      const { call, problem } = parseToolCall(text, tools);
+      assert.equal(call, null, text);
+      assert.equal(problem, null, text);
+    }
+  });
+
+  test("a complete call is unaffected by any of this", () => {
+    const { call, problem } = parseToolCall("<read_file>\n<path>a.ts</path>\n</read_file>", tools);
+    assert.equal(problem, null);
+    assert.equal(call?.name, "read_file");
   });
 });
 
