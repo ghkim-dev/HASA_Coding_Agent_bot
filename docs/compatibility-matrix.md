@@ -305,3 +305,84 @@ exaone-4.0-32b → "The current temperature in Seoul is -17.5°C."
 타이포그래피 차이만으로 한쪽을 탈락시키는 판정이 Phase 2의 승자 결정에 쓰이면 조용히 틀린 결론을 낸다. 각 결함에 회귀 테스트를 붙였다 (mock 프로필: `minTokensForContent`, `toolsServerDisabled`, `toolsRejectAuto`, `typographicOutput`).
 
 부수적으로, round-trip의 두 번째 호출에서 불필요한 `tools` 재전송을 제거했다 — tool 결과를 읽고 답하기만 하면 되는데, `tools`를 다시 보내면 §8.3 같은 게이트웨이에서 400이 난다.
+
+---
+
+## 9. 실측 매트릭스 (2026-08-03 실행, 다른 키)
+
+§8과 **다른 키**로 다시 측정했다. 카탈로그가 19개에서 21개로 늘었고, 무엇보다 §8에서 13개를 403으로 막던 권한 제약이 거의 사라져 이 키는 12개 모델에 실제로 추론할 수 있다. 같은 게이트웨이라도 키가 바뀌면 결론이 바뀐다는 §1의 전제를 두 번째로 확인한 셈이다.
+
+`pnpm probe` — `GET /v1/models`가 반환한 21개 전체.
+
+### 9.1 자격이 확인된 모델 (12개)
+
+| modelId | chat | stream | tools | tools_roundtrip | json_object | 자격 |
+|---|---|---|---|---|---|---|
+| `qwen3-coder` | pass | pass | **pass** | pass | pass | response, **coding**, judge |
+| `llama-3.3-70b` | pass | pass | **pass** | pass | pass | response, **coding**, judge |
+| `exaone-4.0-32b` | pass | pass | **pass** | pass | pass | response, **coding**, judge |
+| `gpt-oss-20b` | pass | pass | **pass** | pass | pass | response, **coding**, judge |
+| `gpt-oss-120b` | pass | pass | **pass** | pass | pass | response, **coding**, judge |
+| `kanana-2-30b-a3b` | pass | pass | fail¹ | skipped | pass | response, patch, judge |
+| `hyperclovax-seed-32b` | pass | pass | fail¹ | skipped | pass | response, patch, judge |
+| `midm-2.0-base` | pass | pass | fail¹ | skipped | pass | response, patch, judge |
+| `qwen2.5-coder-32b` | pass | pass | fail¹ | skipped | pass | response, patch, judge |
+| `qwen2.5-vl-72b` | pass | pass | fail¹ | skipped | pass | response, patch, judge |
+| `granite-guardian-3.1-8b` | pass | pass | fail¹ | skipped | pass | response, patch, judge |
+| `solar-pro` | pass | pass | fail¹ | skipped | pass | response, judge |
+
+¹ §8.3과 같은 게이트웨이 설정 문제이며, 이번에는 **7개 모델**에서 관측됐다. 플래그가 켜지면 coding 자격 모델이 5개에서 12개로 늘어난다. 모델 능력의 문제가 아니다.
+
+`granite-guardian-3.1-8b`는 §8에서 503으로 판정 불가(`unknown`)였으나 이번에는 전 항목이 측정됐다. `unknown`을 `fail`로 기록하지 않은 §6 규칙이 실제로 값을 한 셈이다.
+
+### 9.2 chat 불가 (9개) — 대부분 정상
+
+| 원인 | 모델 | 판단 |
+|---|---|---|
+| `404` on `/chat/completions` | `whisper-large-v3`, `bge-m3`, `bge-reranker-v2-m3` | 정상 — 음성·임베딩·리랭커 |
+| `404` on `/chat/completions` | `Qwen-Image`, `Wan2.1-T2V`, `Wan2.2-T2V`, `LTX-2` | 정상 — 전용 생성 엔드포인트를 쓴다 (§10) |
+| `403 model_not_on_key` | `wan2.2-i2v`, `tts-ko` | 이 키에 권한 없음 |
+
+### 9.3 카탈로그가 같은 모델을 두 번 반환한다
+
+`GET /v1/models`가 **22개 레코드로 21개 모델**을 반환했다. `wan2.2-i2v`가 두 번 실려 있다.
+
+`HasaModelRegistry`는 이를 제거하고 있었으나 **아무 기록도 남기지 않았고**, probe CLI는 제거조차 하지 않았다. 그 결과 클라이언트 로그는 22, 피커는 21을 말했고 요약은 `12/22 usable`로 출력됐다 — 분모가 틀렸다. 양쪽 모두 중복을 제거하되 **무엇을 제거했는지 경고로 남기도록** 고쳤다. 중복 카탈로그를 고칠 수 있는 것은 운영자뿐이고, 아무도 말해주지 않으면 고칠 수 없다.
+
+> **운영자 조치:** `/v1/models` 응답에서 `wan2.2-i2v` 중복 항목을 제거할 것.
+
+---
+
+## 10. 이미지·동영상 생성 (2026-08-03 실측)
+
+생성 모델은 `/v1/chat/completions`가 아니라 전용 엔드포인트를 쓰므로 §9의 `chat: 404`는 실패가 아니다. 실제로 동작하는지는 따로 확인해야 하고, 확인했다.
+
+| 모델 | modality | 결과 |
+|---|---|---|
+| `Qwen-Image` | image | **OK** — 512x512, 271KB PNG, 4초 |
+| `LTX-2` | video | **OK** — mp4, `LOADING → GENERATING → COMPLETED` |
+| `Wan2.1-T2V` | video | **처음엔 422**, 수정 후 OK |
+| `Wan2.2-T2V` | video | **처음엔 422**, 수정 후 OK |
+| `wan2.2-i2v` | video | 카탈로그가 `unavailable`, 키에도 권한 없음 |
+
+### 10.1 `framesFor`가 정렬 단위를 최소값으로 착각하고 있었다
+
+짧은 클립 요청에서 Wan 계열만 실패했다:
+
+```
+422 {"detail":[{"type":"greater_than_equal","loc":["body","length"],
+     "msg":"Input should be greater than or equal to 5","input":4,"ctx":{"ge":5}}]}
+```
+
+`framesFor`의 하한이 `spec.frameAlign`이었다. `LTX-2`는 `frame_align: 8`이라 8을 만들어 우연히 통과했고, Wan 계열은 `frame_align: 4`라 4를 만들어 거부됐다. **모델 문제로 보였지만 산술 문제였다.**
+
+`length`의 최소값 5는 `video_spec` 어디에도 없다. 카탈로그는 `fps`, `frame_align`, `max_frames`를 싣지만 하한은 싣지 않는다. 직접 측정해 확정했다 (`Wan2.1-T2V`):
+
+| `length` | 응답 |
+|---|---|
+| 4 | `422 greater_than_equal, ge: 5` |
+| 5 | `200` |
+| 6 | `200` |
+| 8 | `200` |
+
+**정렬은 서버가 강제하지 않는다** — `frame_align: 4`인 모델이 5와 6을 받아들였다. 즉 둘은 성격이 다르다: 정렬은 카탈로그가 publish한 *선호*, 최소값은 위반하면 GPU를 만지기도 전에 422가 나는 *규칙*. `MIN_VIDEO_FRAMES = 5`를 두고, 충돌 시 최소값을 정렬 단위로 올림해 양쪽을 모두 지키게 했다.

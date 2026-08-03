@@ -41,7 +41,7 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 | Phase | 범위 | 상태 |
 |---|---|---|
 | -1 | 환경 부트스트랩 (Node 24, 워크스페이스) | 완료 |
-| 0 | capability probe CLI | 완료 — 실제 HASA 19개 모델 측정 완료 |
+| 0 | capability probe CLI | 완료 — 최근 실측 2026-08-03, 21개 모델 중 12개 응답비교·5개 coding 자격 |
 | 1 | Response Compare 모드 + 오케스트레이터 | 완료 |
 | 2 | Code Candidate 모드 (worktree, 게이트, apply) | 완료 |
 | 3 | VS Code Extension | 완료 (타입검사·빌드 검증. UI 동작은 수동 확인 필요) |
