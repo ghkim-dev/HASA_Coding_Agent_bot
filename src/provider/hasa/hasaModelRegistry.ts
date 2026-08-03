@@ -45,22 +45,48 @@ interface MemoryEntry {
 }
 
 /**
+ * What a picker is allowed to be shown, and what had to be dropped to get there.
+ */
+interface UsableRecords {
+  records: TransportModelRecord[];
+  /** Ids the catalogue listed more than once. First-seen order, each named once. */
+  duplicated: string[];
+  /** Entries with no id. They have no name to report, so they are counted. */
+  blank: number;
+}
+
+/**
  * What a picker is allowed to be shown.
  *
  * A blank id addresses nothing and would render as an empty row; a duplicate is
  * a gateway misconfiguration, but a list showing the same model twice is our
  * bug rather than theirs. Ids are filtered, never rewritten — trimming one
  * would produce an id that does not resolve.
+ *
+ * What was dropped comes back with the list rather than vanishing. Correcting
+ * the gateway in silence leaves two counts that disagree — the client logs
+ * `listed models {count: 22}` and the picker shows 21 — with nothing to say
+ * which is wrong or why. Worse, the only person who can repair a duplicated
+ * catalogue entry is the operator, and they cannot repair what no one reports.
  */
-function usable(records: readonly TransportModelRecord[]): TransportModelRecord[] {
+function usable(records: readonly TransportModelRecord[]): UsableRecords {
   const seen = new Set<string>();
   const out: TransportModelRecord[] = [];
+  const duplicated: string[] = [];
+  let blank = 0;
   for (const record of records) {
-    if (record.id.trim().length === 0 || seen.has(record.id)) continue;
+    if (record.id.trim().length === 0) {
+      blank += 1;
+      continue;
+    }
+    if (seen.has(record.id)) {
+      if (!duplicated.includes(record.id)) duplicated.push(record.id);
+      continue;
+    }
     seen.add(record.id);
     out.push(record);
   }
-  return out;
+  return { records: out, duplicated, blank };
 }
 
 export class HasaModelRegistry {
@@ -96,7 +122,29 @@ export class HasaModelRegistry {
   }
 
   private fromCache(entry: CachedModelList): ProviderModel[] {
-    return usable(entry.models).map((m) => this.toModel(m));
+    // Not reported: what is on disk was already cleaned before it was written,
+    // and a warning here would name the gateway's mistake a second time, at a
+    // moment when the gateway is usually unreachable and nothing can be done.
+    return usable(entry.models).records.map((m) => this.toModel(m));
+  }
+
+  /**
+   * Says so when the catalogue needed correcting.
+   *
+   * `warn` rather than `info`: a gateway listing one model twice is not a normal
+   * state, and this line is what an operator needs in order to go and fix the
+   * deployment. Emitted on every refresh rather than once per process, because a
+   * catalogue that has been repaired then stops producing it — and that silence
+   * is the confirmation.
+   */
+  private reportCatalogueDefects(received: number, cleaned: UsableRecords): void {
+    if (cleaned.duplicated.length === 0 && cleaned.blank === 0) return;
+    this.log.warn("gateway catalogue had entries a picker cannot show", {
+      received,
+      kept: cleaned.records.length,
+      ...(cleaned.duplicated.length > 0 ? { duplicated: cleaned.duplicated } : {}),
+      ...(cleaned.blank > 0 ? { blank: cleaned.blank } : {}),
+    });
   }
 
   async list(opts: ModelListOptions = {}): Promise<ModelListing> {
@@ -155,7 +203,10 @@ export class HasaModelRegistry {
       if (opts.timeoutMs !== undefined) transportOpts.timeoutMs = opts.timeoutMs;
       if (opts.maxRetries !== undefined) transportOpts.maxRetries = opts.maxRetries;
 
-      const records = usable(await this.transport.listModelRecords(transportOpts));
+      const received = await this.transport.listModelRecords(transportOpts);
+      const cleaned = usable(received);
+      this.reportCatalogueDefects(received.length, cleaned);
+      const records = cleaned.records;
       const models = records.map((r) => this.toModel(r));
       const nowMs = this.now();
       const fetchedAt = new Date(nowMs).toISOString();

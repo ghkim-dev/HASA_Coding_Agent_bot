@@ -7,6 +7,7 @@ import type {
   TransportModelRecord,
   TransportRequestOptions,
 } from "../openai-compatible/openaiCompatibleProvider.ts";
+import type { Logger } from "../../hasa-client/logger.ts";
 import { MemoryModelCache, cacheScope, type ModelCacheStore } from "../modelCache.ts";
 import { ProviderError } from "../errors.ts";
 import { HasaModelRegistry } from "./hasaModelRegistry.ts";
@@ -53,7 +54,7 @@ const OK = async (): Promise<TransportModelRecord[]> => [
 
 function makeRegistry(
   stub: Stub,
-  opts: { cache?: ModelCacheStore; now?: () => number; ttlMs?: number } = {},
+  opts: { cache?: ModelCacheStore; now?: () => number; ttlMs?: number; logger?: Logger } = {},
 ): HasaModelRegistry {
   return new HasaModelRegistry({
     transport: stub.transport,
@@ -61,7 +62,26 @@ function makeRegistry(
     ...(opts.cache === undefined ? {} : { cache: opts.cache }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
     ...(opts.ttlMs === undefined ? {} : { ttlMs: opts.ttlMs }),
+    ...(opts.logger === undefined ? {} : { logger: opts.logger }),
   });
+}
+
+interface CapturedLog {
+  level: "warn";
+  msg: string;
+  fields: Record<string, unknown>;
+}
+
+/** Collects `warn` lines so a test can assert what an operator would be told. */
+function capturingLogger(into: CapturedLog[]): Logger {
+  const logger: Logger = {
+    debug: () => {},
+    info: () => {},
+    warn: (msg, fields) => into.push({ level: "warn", msg, fields: fields ?? {} }),
+    error: () => {},
+    child: () => logger,
+  };
+  return logger;
 }
 
 describe("HasaModelRegistry", () => {
@@ -75,6 +95,61 @@ describe("HasaModelRegistry", () => {
     assert.equal(listing.warning, null);
     assert.equal(listing.models[0]?.ownedBy, "hasa");
     assert.equal(listing.models[1]?.ownedBy, null);
+  });
+
+  test("a duplicated id is shown once and reported to whoever can fix it", async () => {
+    // Observed against the live gateway: `GET /v1/models` answered with 22
+    // records for 21 distinct models. Dropping the extra is right; dropping it
+    // in silence left the client logging 22 and the picker showing 21, with no
+    // way to tell which count was the bug.
+    const seen: CapturedLog[] = [];
+    const stub = stubTransport(async () => [
+      { id: "exaone-4.0-32b", ownedBy: "hasa" },
+      { id: "gpt-oss-20b", ownedBy: null },
+      { id: "exaone-4.0-32b", ownedBy: "hasa" },
+    ]);
+    const listing = await makeRegistry(stub, { logger: capturingLogger(seen) }).list();
+
+    assert.deepEqual(listing.models.map((m) => m.id), ["exaone-4.0-32b", "gpt-oss-20b"]);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0]?.fields["received"], 3);
+    assert.equal(seen[0]?.fields["kept"], 2);
+    assert.deepEqual(seen[0]?.fields["duplicated"], ["exaone-4.0-32b"]);
+    assert.equal(seen[0]?.fields["blank"], undefined, "nothing was blank, so nothing to say about it");
+  });
+
+  test("an id repeated three times is named once, not twice", async () => {
+    const seen: CapturedLog[] = [];
+    const stub = stubTransport(async () => [
+      { id: "solar-pro", ownedBy: null },
+      { id: "solar-pro", ownedBy: null },
+      { id: "solar-pro", ownedBy: null },
+    ]);
+    await makeRegistry(stub, { logger: capturingLogger(seen) }).list();
+
+    assert.deepEqual(seen[0]?.fields["duplicated"], ["solar-pro"]);
+    assert.equal(seen[0]?.fields["kept"], 1);
+  });
+
+  test("an entry with no id is counted, because it has no name to report", async () => {
+    const seen: CapturedLog[] = [];
+    const stub = stubTransport(async () => [
+      { id: "solar-pro", ownedBy: null },
+      { id: "   ", ownedBy: null },
+    ]);
+    const listing = await makeRegistry(stub, { logger: capturingLogger(seen) }).list();
+
+    assert.deepEqual(listing.models.map((m) => m.id), ["solar-pro"]);
+    assert.equal(seen[0]?.fields["blank"], 1);
+    assert.equal(seen[0]?.fields["duplicated"], undefined);
+  });
+
+  test("a clean catalogue says nothing at all", async () => {
+    // The silence is the signal: an operator who fixes the duplicate should see
+    // this warning stop, and that only works if a healthy list is quiet.
+    const seen: CapturedLog[] = [];
+    await makeRegistry(stubTransport(OK), { logger: capturingLogger(seen) }).list();
+    assert.deepEqual(seen, []);
   });
 
   test("capabilities default to unknown until something measures them", async () => {

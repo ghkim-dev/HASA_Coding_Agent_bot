@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import type { CapabilityMatrix, CapabilityName, ModelReport } from "../protocol/index.ts";
 import { HasaClient, DEFAULT_BASE_URL } from "../hasa-client/client.ts";
 import { HasaError } from "../hasa-client/errors.ts";
-import { createLogger } from "../hasa-client/logger.ts";
+import { createLogger, type Logger } from "../hasa-client/logger.ts";
 import { registerSecret } from "../hasa-client/redact.ts";
 import { runProbes } from "./runner.ts";
 import { SERVER_TOOLING_DISABLED_CODE } from "./probes.ts";
@@ -181,20 +181,64 @@ function assertUsableModelIds(models: string[]): void {
   );
 }
 
-async function resolveModels(args: Args, client: HasaClient): Promise<string[]> {
-  if (args.models && args.models.length > 0) {
-    assertUsableModelIds(args.models);
-    return args.models;
+/**
+ * The same id, named once.
+ *
+ * Both sources can repeat one. `--models a,a` is a typo; a catalogue that lists
+ * the same model twice is a gateway misconfiguration, and the live gateway did
+ * exactly that on 2026-08-03 — `GET /v1/models` answered 22 records for 21
+ * models, `wan2.2-i2v` twice.
+ *
+ * Probing the repeat is not merely redundant. It spends real inference requests
+ * to overwrite an answer with itself, and the duplicate then reaches the matrix,
+ * where it gives one model two rows in the summary and inflates the denominator
+ * of "12/22 usable" — a count that should have read 12/21.
+ *
+ * Reported rather than silently corrected, for the reason in
+ * `src/provider/hasa/hasaModelRegistry.ts`: the only person who can repair a
+ * duplicated catalogue is the operator, and they cannot repair what no one says.
+ */
+export function dedupeModelIds(ids: readonly string[]): { ids: string[]; duplicated: string[] } {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const duplicated: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) {
+      if (!duplicated.includes(id)) duplicated.push(id);
+      continue;
+    }
+    seen.add(id);
+    out.push(id);
   }
-  const fromEnv = (process.env["HASA_MODELS"] ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (fromEnv.length > 0) {
-    assertUsableModelIds(fromEnv);
-    return fromEnv;
+  return { ids: out, duplicated };
+}
+
+async function resolveModels(args: Args, client: HasaClient, log: Logger): Promise<string[]> {
+  const requested = await (async (): Promise<string[]> => {
+    if (args.models && args.models.length > 0) {
+      assertUsableModelIds(args.models);
+      return args.models;
+    }
+    const fromEnv = (process.env["HASA_MODELS"] ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (fromEnv.length > 0) {
+      assertUsableModelIds(fromEnv);
+      return fromEnv;
+    }
+    return client.listModels();
+  })();
+
+  const { ids, duplicated } = dedupeModelIds(requested);
+  if (duplicated.length > 0) {
+    log.warn("a model was listed more than once; probing it once", {
+      received: requested.length,
+      probing: ids.length,
+      duplicated,
+    });
   }
-  return client.listModels();
+  return ids;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -251,7 +295,7 @@ export async function main(argv: string[]): Promise<number> {
   });
 
   try {
-    const models = await resolveModels(args, client);
+    const models = await resolveModels(args, client, log);
     if (models.length === 0) {
       process.stderr.write("no models to probe\n");
       return 1;
