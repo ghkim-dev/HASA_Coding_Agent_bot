@@ -9,6 +9,14 @@ import {
   type Attachment,
 } from "../../../src/agent/attachments.ts";
 
+/**
+ * Whether a frame may reach the gateway for the model catalogue.
+ *
+ * Only one caller says no, and only once: the frame drawn on open, before
+ * `validate()` fetches the same list. Every other frame wants the catalogue.
+ */
+type CatalogueLoad = "with-catalogue" | "without-catalogue";
+
 /** A file staged for the next message, with what the panel needs to show it. */
 interface StagedAttachment {
   id: string;
@@ -51,13 +59,22 @@ export class AgentController {
       void this.handle(message).catch((err) => this.fail(err));
     });
     this.panel.reveal();
-    await this.push();
+
     // Checking the key on open rather than on first message: a user who typed
     // a wrong key should learn it now, not after writing a request.
-    if ((await this.host.connectionState()).hasApiKey) {
-      await this.host.validate();
+    if (!(await this.host.connectionState()).hasApiKey) {
       await this.push();
+      return;
     }
+
+    // Drawn without the catalogue, because `validate()` is about to fetch it.
+    // Loading it here spent a `GET /v1/models` whose answer the push below
+    // replaced about 200ms later — two round trips to draw one list. It also
+    // made the first frame wait on a request the user was not waiting for; now
+    // the panel appears at once and the model picker fills in behind it.
+    await this.push("without-catalogue");
+    await this.host.validate();
+    await this.push();
   }
 
   dispose(): void {
@@ -79,8 +96,12 @@ export class AgentController {
 
   // -------------------------------------------------------------------------
 
-  private async state(): Promise<PanelState> {
-    const listing = await this.host.conversationModels();
+  private async state(catalogue: CatalogueLoad = "with-catalogue"): Promise<PanelState> {
+    const withCatalogue = catalogue === "with-catalogue";
+    // The two things here that reach the gateway. Everything below is local, so
+    // a frame drawn without them is still a complete frame — mode, history,
+    // staged files and connection state all appear.
+    const listing = withCatalogue ? await this.host.conversationModels() : null;
     const changed = await this.host.changedFiles();
     return {
       connection: await this.host.connectionState(),
@@ -94,7 +115,7 @@ export class AgentController {
         usable: m.capabilities.chat === true,
       })),
       anyVerified: (listing?.models ?? []).some((m) => m.capabilities.chat !== "unknown"),
-      canGenerateMedia: await this.host.canGenerateMedia(),
+      canGenerateMedia: withCatalogue ? await this.host.canGenerateMedia() : false,
       attachments: this.staged.map((s) => ({
         id: s.id,
         name: s.name,
@@ -110,8 +131,8 @@ export class AgentController {
     };
   }
 
-  private async push(): Promise<void> {
-    this.panel?.post({ type: "state", state: await this.state() });
+  private async push(catalogue: CatalogueLoad = "with-catalogue"): Promise<void> {
+    this.panel?.post({ type: "state", state: await this.state(catalogue) });
   }
 
   private fail(err: unknown): void {

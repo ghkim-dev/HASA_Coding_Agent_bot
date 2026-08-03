@@ -757,3 +757,59 @@ describe("orderValidationCandidates", () => {
     assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b));
   });
 });
+
+describe("HasaProvider — validate always asks the gateway", () => {
+  /** Counts catalogue fetches, with a TTL long enough that a cache hit would show. */
+  function counting(): { provider: HasaProvider; fetches: () => number } {
+    let fetches = 0;
+    const provider = new HasaProvider({
+      apiKey: "hasa-live-key-0123456789abcdef",
+      transport: {
+        baseUrl: "https://open.hasa.re.kr/v1",
+        listModelRecords: async () => {
+          fetches += 1;
+          return [record("m/ok")];
+        },
+        chat: async () => reply("pong"),
+        streamChunks: async function* () {
+          throw new Error("not used");
+        },
+      },
+      cache: new MemoryModelCache(),
+      modelCacheTtlMs: 600_000,
+      logger: nullLogger,
+    });
+    return { provider, fetches: () => fetches };
+  }
+
+  test("a fresh cache does not stop it fetching", async () => {
+    // Not an oversight, and not safe to optimise away: a list served from cache
+    // is not evidence the gateway answered, and `validate()` exists to answer
+    // exactly that question. The extension's panel depends on this — it skips
+    // loading the catalogue on its first frame precisely because this call is
+    // about to fetch one. See src/agent/extensionBoundary.test.ts.
+    const { provider, fetches } = counting();
+
+    await provider.listModels();
+    assert.equal(fetches(), 1);
+
+    const validation = await provider.validate();
+    assert.equal(fetches(), 2, "validate() must go to the network even inside the TTL");
+    assert.equal(validation.endpointReachable, true);
+    assert.equal(validation.credentialValid, true);
+  });
+
+  test("and the list it fetched is left warm for the caller after it", async () => {
+    // The other half of the saving: the frame drawn after validation reuses
+    // what validation fetched rather than making a third request.
+    const { provider, fetches } = counting();
+
+    await provider.validate();
+    const after = fetches();
+    const listing = await provider.listModels();
+
+    assert.equal(fetches(), after, "the list validate() fetched should still be warm");
+    assert.equal(listing.source, "cache");
+    assert.deepEqual(listing.models.map((m) => m.id), ["m/ok"]);
+  });
+});

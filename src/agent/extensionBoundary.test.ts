@@ -259,6 +259,52 @@ describe("the extension does not re-declare provider configuration (§8)", () =>
 });
 
 /**
+ * The panel does not pay for the same list twice.
+ *
+ * Opening the chat panel made two `GET /v1/models` calls about 200ms apart: the
+ * first frame loaded the catalogue, and `validate()` — which must bypass the
+ * cache, because a list served from disk is not evidence the gateway answered —
+ * fetched it again immediately. The second answer replaced the first, so the
+ * cost bought nothing, and the first frame waited on a round trip to show a list
+ * that was about to be thrown away.
+ *
+ * Checked by reading, for the reason at the top of this file. The ordering is
+ * the whole fix, and an edit that restores the eager frame would otherwise cost
+ * a request per panel open and be invisible until someone read a gateway log.
+ */
+describe("opening the panel fetches the model list once", () => {
+  const controller = hostFiles.find((f) => f.name.includes("agent/controller"));
+
+  /** `open()` alone — the rule is about its ordering, not the whole file. */
+  function openBody(): string {
+    assert.ok(controller !== undefined, "the controller should be present");
+    const start = controller.text.indexOf("async open(");
+    assert.notEqual(start, -1, "controller should still have an open()");
+    const end = controller.text.indexOf("dispose()", start);
+    assert.notEqual(end, -1, "dispose() should still follow open()");
+    return controller.text.slice(start, end);
+  }
+
+  test("the frame drawn before validation skips the catalogue", () => {
+    assert.match(
+      openBody(),
+      /push\(\s*["']without-catalogue["']\s*\)/,
+      "open() must draw its first authenticated frame without loading the catalogue",
+    );
+  });
+
+  test("it skips it before validating, not after", () => {
+    // Backwards, this is not an optimisation but a blank model picker: the
+    // catalogue-free frame would be the last thing the panel is told.
+    const body = openBody();
+    const skipped = body.search(/push\(\s*["']without-catalogue["']\s*\)/);
+    const validated = body.indexOf("host.validate()");
+    assert.notEqual(validated, -1, "open() should still validate the key");
+    assert.ok(skipped < validated, "the catalogue-free frame belongs before validate(), not after");
+  });
+});
+
+/**
  * Model output cannot become markup.
  *
  * The panel gained the ability to display images. The rule that keeps that from
