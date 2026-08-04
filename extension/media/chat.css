@@ -137,6 +137,12 @@ select {
 .step .icon { width: 1.2em; flex-shrink: 0; }
 .step.denied, .step.blocked { color: var(--vscode-testing-iconFailed); opacity: 1; }
 .step.failed { color: var(--vscode-editorWarning-foreground); opacity: 1; }
+/*
+ * The live line. Full opacity and the accent colour, because it is the one
+ * thing on screen answering "is this still working?" — the question a user has
+ * while everything else on the turn is already history.
+ */
+.step.activity { opacity: 1; color: var(--vscode-textLink-foreground); }
 
 .notice {
   padding: 8px 12px;

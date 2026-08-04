@@ -160,9 +160,64 @@ function openAgentTurn() {
   // The raw text is kept because Markdown cannot be rendered incrementally:
   // a `**` is only emphasis once its partner arrives, so each delta re-renders
   // from the accumulated source rather than appending to the DOM.
-  current = { node, body, steps: new Map(), raw: "", frame: 0 };
+  // A live line at the bottom of the turn saying what is happening now.
+  //
+  // Without it the panel showed prose, then nothing, and a user could not tell
+  // a model thinking for forty seconds from a request that had died — which is
+  // exactly what was reported. The elapsed seconds are the part that carries
+  // that: a number that keeps moving is the difference between "slow" and
+  // "stuck", and no amount of spinner animation says it.
+  const activity = document.createElement("div");
+  activity.className = "step activity";
+  const spinner = document.createElement("span");
+  spinner.className = "icon";
+  spinner.textContent = "◐";
+  const label = document.createElement("span");
+  activity.append(spinner, label);
+  node.appendChild(activity);
+
+  current = {
+    node,
+    body,
+    steps: new Map(),
+    raw: "",
+    frame: 0,
+    activity,
+    activityLabel: label,
+    activitySpinner: spinner,
+    startedAt: Date.now(),
+    what: "생각하는 중",
+    ticker: 0,
+  };
+  startTicking(current);
   scrollToEnd();
   return current;
+}
+
+const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
+
+/** Keeps the activity line moving, so a long step reads as slow rather than dead. */
+function startTicking(turn) {
+  let frame = 0;
+  turn.ticker = setInterval(() => {
+    frame = (frame + 1) % SPINNER_FRAMES.length;
+    turn.activitySpinner.textContent = SPINNER_FRAMES[frame];
+    const seconds = Math.round((Date.now() - turn.startedAt) / 1000);
+    turn.activityLabel.textContent = seconds < 2 ? turn.what : `${turn.what} · ${seconds}초`;
+  }, 250);
+}
+
+function setActivity(turn, what) {
+  turn.what = what;
+  turn.startedAt = Date.now();
+  turn.activityLabel.textContent = what;
+  turn.node.appendChild(turn.activity); // stays last, below whatever just landed
+}
+
+function stopTicking(turn) {
+  if (turn.ticker !== 0) clearInterval(turn.ticker);
+  turn.ticker = 0;
+  turn.activity.remove();
 }
 
 function stepLine(icon, text, className) {
@@ -334,10 +389,15 @@ function renderEvent(event) {
       scheduleRender(turn);
       break;
 
+    case "step":
+      setActivity(turn, "생각하는 중");
+      break;
+
     case "tool_start": {
       const line = stepLine("·", event.summary);
       turn.steps.set(event.callId, line);
-      turn.node.appendChild(line);
+      turn.node.insertBefore(line, turn.activity);
+      setActivity(turn, event.summary);
       break;
     }
 
@@ -370,18 +430,22 @@ function renderEvent(event) {
     }
 
     case "checkpoint":
-      turn.node.appendChild(stepLine("↩", event.detail));
+      turn.node.insertBefore(stepLine("↩", event.detail), turn.activity);
       break;
 
     case "done":
       // The summary is the model's own words when it produced them, so an empty
       // body is filled rather than duplicated.
       if (turn.raw.trim().length === 0) turn.raw = event.summary;
+      stopTicking(turn);
       flushRender(turn);
       current = null;
       break;
 
     case "error":
+      // Stopped before the notice: a spinner still turning under an error
+      // message is the panel contradicting itself.
+      stopTicking(turn);
       notice("error", event.message);
       current = null;
       break;

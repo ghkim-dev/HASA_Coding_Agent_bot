@@ -618,3 +618,72 @@ describe("events", () => {
     assert.ok(end.detail.length <= 200);
   });
 });
+
+/**
+ * A turn that promised work and did none.
+ *
+ * From a transcript: "이제 코드를 실행해보겠습니다." — and then nothing. The loop
+ * treated the announcement as the answer and ended the turn, so the user asked
+ * again, got the same sentence, and asked a third time. Nothing ever ran.
+ */
+describe("announcing work without doing it", () => {
+  test("the turn continues instead of ending on a promise", async () => {
+    const tool = fakeTool({ name: "run_command" });
+    const h = harness({
+      model: scripted([
+        turn({ text: "이제 코드를 실행해보겠습니다." }),
+        turn({ toolCalls: [{ id: "c1", name: "run_command", arguments: {}, rawArguments: "{}", argumentsValid: true }] }),
+        turn({ text: "실행했고 통과했습니다." }),
+      ]),
+      tools: [tool],
+    });
+
+    const result = await h.loop.run(h.messages, never);
+    assert.equal(result.reason, "finished");
+    assert.equal(tool.executions, 1, "the promised work should actually happen");
+    assert.match(result.summary, /통과/);
+  });
+
+  test("the model is told what went wrong, in a message it can act on", async () => {
+    const h = harness({ model: scripted([turn({ text: "파일을 수정하겠습니다." }), turn({ text: "수정했습니다." })]) });
+    await h.loop.run(h.messages, never);
+
+    const nudge = h.messages.find((m) => m.role === "user" && String(m.content).includes("no tool was called"));
+    assert.ok(nudge !== undefined, "the model should be told its announcement did nothing");
+    assert.match(String(nudge.content), /If you were actually finished/i, "and allowed to say it was done");
+  });
+
+  test("asked once, never twice", async () => {
+    // A model that keeps promising is not argued with. Two identical nudges
+    // would be a loop the user watches without being able to stop.
+    const model = scripted([turn({ text: "실행해보겠습니다." })]);
+    const h = harness({ model });
+    const result = await h.loop.run(h.messages, never);
+
+    assert.equal(result.reason, "finished");
+    assert.equal(model.calls, 2, "one nudge, then the turn ends whatever it says");
+  });
+
+  test("a turn that already did work is never nudged", async () => {
+    // The structural half of the check. Promising more after doing something is
+    // an ordinary turn in progress.
+    const tool = fakeTool({ name: "read_file" });
+    const model = scripted([
+      turn({ toolCalls: [{ id: "c1", name: "read_file", arguments: {}, rawArguments: "{}", argumentsValid: true }] }),
+      turn({ text: "이제 수정하겠습니다." }),
+    ]);
+    const h = harness({ model, tools: [tool] });
+    await h.loop.run(h.messages, never);
+
+    assert.equal(model.calls, 2, "no third call: the turn ended on its own terms");
+  });
+
+  test("an ordinary answer is not interrupted", async () => {
+    const model = scripted([turn({ text: "이 파일은 사용자 인증을 담당합니다." })]);
+    const h = harness({ model });
+    const result = await h.loop.run(h.messages, never);
+
+    assert.equal(model.calls, 1);
+    assert.equal(result.summary, "이 파일은 사용자 인증을 담당합니다.");
+  });
+});
