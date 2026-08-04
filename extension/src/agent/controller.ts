@@ -405,8 +405,12 @@ export class AgentController {
       this.panel?.post({ type: "notice", level: "error", text: "대화를 열지 못했습니다." });
       return;
     }
-    const messages = await this.host.openConversationMessages();
-    this.panel?.post({ type: "transcript", turns: transcriptOf(messages) });
+    // The events, not a re-reading of the model's prompt array. `transcriptOf`
+    // could only recover user and assistant prose — it skipped every tool
+    // message and never looked at `toolCalls` — and the plan, the reasoning,
+    // the file changes and the termination were never in that array to begin
+    // with. The panel folds these through the same reducer it uses live.
+    this.panel?.post({ type: "transcript", events: [...this.host.recordedEvents()] });
     await this.push();
   }
 
@@ -509,25 +513,3 @@ export class AgentController {
  * like a colleague's summary applies just as much when it is reopened a week
  * later.
  */
-function transcriptOf(messages: readonly unknown[]): Array<{ role: "user" | "assistant"; text: string }> {
-  const turns: Array<{ role: "user" | "assistant"; text: string }> = [];
-  for (const raw of messages) {
-    if (raw === null || typeof raw !== "object") continue;
-    const message = raw as { role?: unknown; content?: unknown };
-    if (message.role !== "user" && message.role !== "assistant") continue;
-
-    const text =
-      typeof message.content === "string"
-        ? message.content
-        : Array.isArray(message.content)
-          ? message.content
-              .filter((p): p is { type: "text"; text: string } =>
-                p !== null && typeof p === "object" && (p as { type?: unknown }).type === "text")
-              .map((p) => p.text)
-              .join("\n")
-          : "";
-    if (text.trim().length === 0) continue;
-    turns.push({ role: message.role, text });
-  }
-  return turns;
-}

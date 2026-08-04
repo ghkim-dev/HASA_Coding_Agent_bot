@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { MODE_DEFINITIONS } from "../../../src/agent/modes.ts";
+import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
 import type { ConnectionState } from "./agentHost.ts";
 
 /**
@@ -90,7 +91,16 @@ export type HostMessage =
    */
   | { type: "artifact"; callId: string; kind: "image" | "video"; src: string; path: string }
   /** Redraw the transcript from a conversation the user reopened. */
-  | { type: "transcript"; turns: Array<{ role: "user" | "assistant"; text: string }> };
+  /**
+   * A whole conversation, as semantic events.
+   *
+   * Was `{role, text}[]`, which is a projection — and a lossy one, made by the
+   * host, of a structure the host had already thrown most of away. Sending the
+   * events lets the panel project them with the same reducer it uses for a live
+   * turn, which is what makes a reopened conversation look like the one that
+   * was there.
+   */
+  | { type: "transcript"; events: SessionEvent[] };
 
 export class ChatPanel {
   static active: ChatPanel | null = null;

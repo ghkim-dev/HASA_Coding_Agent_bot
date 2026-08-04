@@ -623,9 +623,17 @@ describe("image and video generation in a session", () => {
  * mode it was saved in.
  */
 describe("attachments in a session", () => {
+  /**
+   * The user message the model was sent, which is what these tests are about.
+   *
+   * Not `messages.at(-1)`: the loop hands the model the live array and keeps
+   * mutating it, so the captured request grows an assistant message the moment
+   * the turn finishes. Reading the last element was reading the future.
+   */
   const lastMessage = (model: { seen: unknown[] }): { role: string; content: unknown } => {
     const request = model.seen.at(-1) as { messages: Array<{ role: string; content: unknown }> };
-    return request.messages.at(-1)!;
+    const user = [...request.messages].reverse().find((m) => m.role === "user");
+    return user ?? request.messages.at(-1)!;
   };
 
   test("an attached file reaches the model in the same message as the question", async () => {

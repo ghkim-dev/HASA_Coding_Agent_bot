@@ -32,6 +32,9 @@ import {
   type ConversationSummary,
 } from "../../../src/agent/conversationStore.ts";
 import type { Attachment, AttachmentOutcome } from "../../../src/agent/attachments.ts";
+import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
+import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
+import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
 import type { Logger } from "../../../src/hasa-client/logger.ts";
 
@@ -152,6 +155,17 @@ export class AgentHost {
   private conversations: ConversationStore | null = null;
   /** The conversation being written to, so a turn appends rather than forks. */
   private conversationId: string | null = null;
+  /**
+   * The conversation's semantic events, in order.
+   *
+   * Held alongside the model's messages rather than derived from them: a
+   * `ProviderMessage` array has no room for a plan, a reasoning summary, a file
+   * change or the reason a run stopped, which is exactly what reopening a
+   * conversation used to lose.
+   */
+  private recorded: SessionEvent[] = [];
+  /** Turn counter, so event ids are unique and ordered within a conversation. */
+  private turnOrdinal = 0;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
   /**
@@ -286,6 +300,8 @@ export class AgentHost {
     // reusing it is what keeps one key's conversations out of another's.
     this.conversations = null;
     this.conversationId = null;
+    this.recorded = [];
+    this.turnOrdinal = 0;
     // The catalogue is public and key-independent, but a new key may reach a
     // different gateway, so it is re-read rather than carried across.
     this.catalog = null;
@@ -798,10 +814,27 @@ export class AgentHost {
     // makes "it will end" true rather than mostly true.
     const wholeTurn = setTimeout(() => controller.abort(new Error("turn timed out")), TURN_CEILING_MS);
 
+    // Every turn is recorded as it runs, not reconstructed afterwards. The
+    // recorder is the one place that decides what is worth keeping, and both
+    // the live panel and a reopened conversation are projections of what it
+    // wrote — which is what stops the two disagreeing.
+    this.conversationId ??= newConversationId(Date.now(), Math.random);
+    const recorder = new TurnRecorder({ turnId: `${this.conversationId}-${this.turnOrdinal++}` });
+    this.recorded.push(...recorder.userMessage(prompt, attachments.map((a) => ({ name: a.name, kind: a.kind }))));
+
+    const forward = (event: AgentEvent): void => {
+      this.recorded.push(...recorder.record(event));
+      onEvent(event);
+    };
+
     try {
       this.phase("준비하는 중");
-      const session = await this.ensureSession(onEvent);
+      const session = await this.ensureSession(forward);
       if (session === null) return null;
+      // Installed every turn, not only when the session is built. A session
+      // reused from a previous turn — or reopened from history, which built one
+      // with a no-op sink — would otherwise send this turn's events nowhere.
+      session.setEventSink(forward);
       if (controller.signal.aborted) {
         onEvent({
           type: "error",
@@ -815,6 +848,7 @@ export class AgentHost {
       this.phase("생각하는 중");
       return await session.send(prompt, controller.signal, attachments);
     } finally {
+      // The turn's own events are already in `this.recorded` via `forward`.
       clearTimeout(wholeTurn);
       this.running = null;
       this.phase = null;
@@ -838,8 +872,22 @@ export class AgentHost {
     this.session?.keep();
   }
 
+  /**
+   * Files this conversation changed.
+   *
+   * Taken from what the tools reported, with git used only to widen it. It used
+   * to be git alone — `git status --porcelain` through the checkpoint manager —
+   * which meant a workspace that is not a repository showed nothing at all: the
+   * agent wrote four files and the review card stayed empty, because the only
+   * thing being asked had no opinion about a plain folder.
+   *
+   * Git still contributes. It catches what a command changed, which no tool
+   * reported and no event could know.
+   */
   async changedFiles(): Promise<string[]> {
-    return (await this.session?.changedFiles()) ?? [];
+    const reported = reduceSession(this.recorded).changedFiles.map((f) => f.path);
+    const fromGit = (await this.session?.changedFiles()) ?? [];
+    return [...new Set([...reported, ...fromGit])].sort();
   }
 
   // -------------------------------------------------------------------------
@@ -885,8 +933,18 @@ export class AgentHost {
     if (session === null) return false;
     session.restore(stored.messages);
     this.conversationId = stored.id;
-    this.log.appendLine(`[hasa] opened conversation ${id}`);
+    // The events come back with the conversation, so the next turn appends to
+    // what the user is looking at rather than starting a log that disagrees
+    // with the screen. The turn counter continues past what is already there.
+    this.recorded = [...(stored.events ?? [])];
+    this.turnOrdinal = new Set(this.recorded.map((e) => e.turnId)).size;
+    this.log.appendLine(`[hasa] opened conversation ${id} (${this.recorded.length} events)`);
     return true;
+  }
+
+  /** The conversation as the user saw it, for the panel to project. */
+  recordedEvents(): readonly SessionEvent[] {
+    return this.recorded;
   }
 
   /** The messages of the open conversation, for redrawing the panel. */
@@ -926,6 +984,9 @@ export class AgentHost {
         createdAt: now,
         updatedAt: now,
         messages,
+        // Both halves. The messages are what the model reads next turn; the
+        // events are what the user saw, and neither reconstructs the other.
+        events: this.recorded,
       });
     } catch (err) {
       // A history that cannot be written must not lose the answer on screen.
@@ -935,6 +996,8 @@ export class AgentHost {
 
   newConversation(): void {
     this.session?.clearHistory();
+    this.recorded = [];
+    this.turnOrdinal = 0;
     // A new id, so the next turn starts a new file rather than overwriting the
     // conversation the user just moved away from.
     this.conversationId = null;

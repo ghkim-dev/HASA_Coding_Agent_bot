@@ -15,6 +15,7 @@
  */
 
 import { parseMarkdown } from "../../src/agent/markdown.ts";
+import { reduceSession } from "../../src/agent/sessionView.ts";
 
 const vscode = acquireVsCodeApi();
 
@@ -228,14 +229,17 @@ function openAgentTurn() {
  * happening" is a question asked at arbitrary moments, and an answer that has
  * scrolled away is not an answer.
  */
-function renderPlan(turn, steps, current) {
-  if (!turn.plan) {
-    turn.plan = document.createElement("div");
-    turn.plan.className = "plan";
-    turn.node.insertBefore(turn.plan, turn.body);
-  }
-  turn.plan.textContent = "";
-
+/**
+ * The plan as an element, built once and used by both paths.
+ *
+ * Every step is rendered. The data layer keeps all of them — a plan longer than
+ * the display limit used to be cut at the source, so the steps past it were
+ * gone rather than hidden — and if a limit is ever wanted it belongs here,
+ * where it is a display decision that can be undone by scrolling.
+ */
+function planBlock(steps, current) {
+  const plan = document.createElement("div");
+  plan.className = "plan";
   for (const [index, step] of steps.entries()) {
     const position = index + 1;
     const done = position < current;
@@ -249,8 +253,30 @@ function renderPlan(turn, steps, current) {
     const label = document.createElement("span");
     label.textContent = step;
     line.append(mark, label);
-    turn.plan.appendChild(line);
+    plan.appendChild(line);
   }
+  return plan;
+}
+
+/** A reasoning summary, collapsed: it is context, not the answer. */
+function reasoningBlock(block) {
+  const details = document.createElement("details");
+  details.className = "reasoning";
+  const summary = document.createElement("summary");
+  summary.textContent = block.phase ? `${PHASE_LABEL[block.phase] ?? block.phase} 과정 보기` : "생각한 내용 보기";
+  const body = document.createElement("div");
+  body.textContent = block.summary;
+  details.append(summary, body);
+  return details;
+}
+
+const PHASE_LABEL = { analysis: "분석", planning: "계획", execution: "실행", verification: "검증" };
+
+function renderPlan(turn, steps, current) {
+  const plan = planBlock(steps, current);
+  if (turn.plan) turn.plan.replaceWith(plan);
+  else turn.node.insertBefore(plan, turn.body);
+  turn.plan = plan;
 
   // The current step is also what the activity line should be counting against:
   // "생각하는 중" is true and useless once there is a plan saying what for.
@@ -275,7 +301,7 @@ function renderPlan(turn, steps, current) {
  * the user's machine wrote, which is exactly the kind of thing that must never
  * become markup.
  */
-function attachOutput(turn, line, output, open) {
+function outputBlock(output, open) {
   const block = document.createElement("details");
   block.className = "tool-output";
   block.open = open === true;
@@ -288,8 +314,11 @@ function attachOutput(turn, line, output, open) {
   const pre = document.createElement("pre");
   pre.textContent = output;
   block.appendChild(pre);
+  return block;
+}
 
-  line.insertAdjacentElement("afterend", block);
+function attachOutput(turn, line, output, open) {
+  line.insertAdjacentElement("afterend", outputBlock(output, open));
   scrollToEnd();
 }
 
@@ -462,23 +491,91 @@ function renderHistory(state) {
 }
 
 /** Redraws the whole transcript from a conversation that was reopened. */
-function renderTranscript(turns) {
+/**
+ * Draws a whole conversation from its events.
+ *
+ * This used to take `{role, text}[]` — a projection the host had already made,
+ * from an array that never held the plan, the reasoning, the tool steps, the
+ * file changes or the reason a run stopped. So reopening a conversation showed
+ * prose and nothing else, and no amount of care in here could have recovered
+ * what was not sent.
+ *
+ * It now folds the events through `reduceSession`, the same reducer a live turn
+ * uses, and renders the result. One projection, one renderer: a live turn and a
+ * reopened one cannot disagree because there is nothing left to disagree.
+ */
+function renderTranscript(events) {
   el.transcript.textContent = "";
   current = null;
-  for (const turn of turns) {
-    if (turn.role === "user") {
-      addUserTurn(turn.text);
-      continue;
-    }
-    const node = document.createElement("div");
-    node.className = "turn agent";
-    const body = document.createElement("div");
-    body.className = "body";
-    renderMarkdown(body, turn.text);
-    node.appendChild(body);
-    el.transcript.appendChild(node);
-  }
+  const view = reduceSession(events ?? []);
+  for (const turn of view.turns) renderTurn(turn);
   scrollToEnd();
+}
+
+/** One turn of a projected conversation, block by block, in order. */
+function renderTurn(turn) {
+  if (turn.role === "user") {
+    const text = turn.blocks.filter((b) => b.kind === "text").map((b) => b.text).join("\n");
+    if (text.trim().length > 0) addUserTurn(text);
+    return;
+  }
+
+  const node = document.createElement("div");
+  node.className = "turn agent";
+
+  for (const block of turn.blocks) {
+    switch (block.kind) {
+      case "text": {
+        const body = document.createElement("div");
+        body.className = "body";
+        renderMarkdown(body, block.text);
+        node.appendChild(body);
+        break;
+      }
+      case "reasoning":
+        node.appendChild(reasoningBlock(block));
+        break;
+      case "plan":
+        node.appendChild(planBlock(block.steps, block.current));
+        break;
+      case "tool": {
+        const line = stepLine(markFor(block.status), block.summary, classFor(block.status));
+        node.appendChild(line);
+        if (block.output) {
+          const output = outputBlock(block.output, block.status !== "success");
+          node.appendChild(output);
+        }
+        if (block.meta?.truncated) node.appendChild(stepLine("…", truncationNote(block.meta), "muted"));
+        break;
+      }
+      case "notice":
+        node.appendChild(stepLine(block.level === "error" ? "✕" : "!", block.text, block.level === "error" ? "failed" : "muted"));
+        break;
+    }
+  }
+
+  if (turn.termination !== undefined && turn.termination.tone !== "ok") {
+    node.appendChild(
+      stepLine("!", [turn.termination.label, turn.termination.detail].filter(Boolean).join(" — "), "failed"),
+    );
+  }
+  el.transcript.appendChild(node);
+}
+
+/** The mark for a finished call. Never a string comparison in the caller. */
+function markFor(status) {
+  if (status === undefined) return "·";
+  return status === "success" ? "✓" : status === "denied" || status === "blocked" ? "✕" : "!";
+}
+
+function classFor(status) {
+  if (status === undefined || status === "success") return undefined;
+  return status === "denied" || status === "blocked" ? "denied" : "failed";
+}
+
+function truncationNote(meta) {
+  const of = meta.originalLength ? ` (전체 ${meta.originalLength}자 중 일부)` : "";
+  return `결과가 잘렸습니다${of}`;
 }
 
 function notice(level, text) {
@@ -518,6 +615,16 @@ function renderEvent(event) {
       // nothing to say about it while the clock climbed.
       setActivity(turn, event.label);
       break;
+
+    case "reasoning": {
+      // Emitted by the loop and thrown away here, for as long as the event has
+      // existed. Collapsed, because it is context rather than the answer and a
+      // reader should meet the answer first.
+      const block = reasoningBlock({ summary: event.delta });
+      turn.node.insertBefore(block, turn.activity);
+      openProse(turn);
+      break;
+    }
 
     case "plan":
       renderPlan(turn, event.steps, event.current);

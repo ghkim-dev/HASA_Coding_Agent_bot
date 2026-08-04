@@ -107,6 +107,14 @@ export class AgentSession {
   /** Decided once at open: whether undo and diffs are possible at all. */
   private isGitRepo = false;
   private lastAttachmentProblem: string | null = null;
+  /**
+   * Where events go. Replaceable, because a sink belongs to a turn.
+   *
+   * Seeded from the options so an existing caller that passes `onEvent` once
+   * keeps working, and overridden per turn by anything that has somewhere
+   * better to send them.
+   */
+  private eventSink: ((event: AgentEvent) => void) | null = null;
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -126,6 +134,11 @@ export class AgentSession {
       root,
       ...(opts.writeScope ? { writeScope: opts.writeScope } : {}),
     });
+    this.eventSink = opts.onEvent ?? null;
+  }
+
+  private emit(event: AgentEvent): void {
+    this.eventSink?.(event);
   }
 
   /**
@@ -175,6 +188,21 @@ export class AgentSession {
     this.approvals.setMode(mode);
   }
 
+  /**
+   * Where this session's events go, from now on.
+   *
+   * The sink used to be fixed at construction, and `openConversation` built its
+   * session with `() => {}` because it had no turn to report into yet. That sink
+   * then stayed for the life of the session — so reopening a past conversation
+   * left the panel permanently silent: every later turn ran, wrote files and
+   * finished, and the user watched nothing happen.
+   *
+   * A sink belongs to a turn, not to a session, which is what this makes true.
+   */
+  setEventSink(onEvent: ((event: AgentEvent) => void) | null): void {
+    this.eventSink = onEvent;
+  }
+
   /** Tools the user has said "always" to, for showing what is standing. */
   grantedTools(): string[] {
     return this.approvals.grantedTools();
@@ -214,7 +242,7 @@ export class AgentSession {
       ...(this.opts.web?.enabled === false ? [] : createWebTools(this.opts.web)),
       // Also every mode. ARCHITECT plans for a living, and a user watching ASK
       // read six files deserves the same answer to "what is it doing".
-      createPlanTool({ onPlan: (event) => this.opts.onEvent?.(event) }),
+      createPlanTool({ onPlan: (event) => this.emit(event) }),
     ]);
     return all.withCeiling(definition.maxRisk);
   }
@@ -265,7 +293,9 @@ export class AgentSession {
       systemPrompt: definition.systemPrompt,
       ...(this.opts.budget ? { budget: this.opts.budget } : {}),
       ...(this.opts.logger ? { logger: this.opts.logger } : {}),
-      ...(this.opts.onEvent ? { onEvent: this.opts.onEvent } : {}),
+      // Bound late, so a sink installed after the session was built is the one
+      // that receives this turn.
+      onEvent: (event) => this.emit(event),
     });
 
     this.log.info("agent turn", { mode: this.mode, approval: this.approvals.currentMode });

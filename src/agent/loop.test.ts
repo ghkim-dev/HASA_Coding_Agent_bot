@@ -132,10 +132,17 @@ describe("finishing", () => {
     assert.equal(result.reason, "finished");
     assert.equal(tool.executions, 1);
     assert.equal(result.toolCalls, 1);
-    // The transcript has to carry the assistant turn and its tool result, or
-    // the next turn re-asks for what it already knows.
+    // The transcript has to carry the assistant turn, its tool result, and the
+    // answer that followed — or the next turn re-asks for what it already
+    // knows, and a saved conversation holds questions with no answers.
+    //
+    // That last message used to be missing. The final reply of every turn is
+    // produced on the no-more-tool-calls path, and that path returned without
+    // pushing it, so `messages` — which is what gets persisted — ended at the
+    // tool result.
     const roles = h.messages.map((m) => m.role);
-    assert.deepEqual(roles, ["system", "user"].slice(0, 1).concat(["assistant", "tool"]));
+    assert.deepEqual(roles, ["system", "assistant", "tool", "assistant"]);
+    assert.equal(h.messages.at(-1)?.content, "Done.");
   });
 
   test("token usage is accumulated across turns", async () => {

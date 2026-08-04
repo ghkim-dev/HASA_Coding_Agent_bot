@@ -1,5 +1,7 @@
 import type { ProviderMessage } from "../provider/types.ts";
 import { fingerprint } from "../hasa-client/redact.ts";
+import { SESSION_SCHEMA_VERSION, type SessionEvent } from "./sessionEvents.ts";
+import { readSession, writeSession } from "./sessionLog.ts";
 
 /**
  * Conversations, remembered between sessions and kept apart per key.
@@ -31,6 +33,18 @@ export interface StoredConversation {
   createdAt: number;
   updatedAt: number;
   messages: ProviderMessage[];
+  /**
+   * What the user saw, as opposed to what the model was told.
+   *
+   * Added in v2. `messages` is the model's conversation and stays exactly as it
+   * was — it is what the next turn is built from, and rebuilding it out of
+   * events would feed the model a different conversation than it had. The
+   * events are the other half: the plan, the reasoning summaries, the tool
+   * steps as a person saw them, the files that changed and why the run stopped.
+   * None of those fit in a `ProviderMessage`, which is why reopening a
+   * conversation used to lose all of them.
+   */
+  events?: SessionEvent[];
 }
 
 export interface ConversationSummary {
@@ -96,23 +110,27 @@ export function newConversationId(now: number, random: () => number): string {
   return `${now.toString(36)}-${suffix}`;
 }
 
+/**
+ * Reads a conversation of either generation.
+ *
+ * The version check and the v1 migration live in `sessionLog.ts`, so this class
+ * stays about files and directories and that one stays about formats. A v1 file
+ * — the ones already on disk — comes back with events derived from its
+ * messages: its text and its tool calls, and honestly nothing else, because
+ * nothing else was ever written down.
+ */
 function parse(raw: string): StoredConversation | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (value === null || typeof value !== "object") return null;
-    const record = value as Record<string, unknown>;
-    if (typeof record["id"] !== "string" || !isValidId(record["id"])) return null;
-    if (!Array.isArray(record["messages"])) return null;
-    return {
-      id: record["id"],
-      title: typeof record["title"] === "string" ? record["title"] : "새 대화",
-      createdAt: typeof record["createdAt"] === "number" ? record["createdAt"] : 0,
-      updatedAt: typeof record["updatedAt"] === "number" ? record["updatedAt"] : 0,
-      messages: record["messages"] as ProviderMessage[],
-    };
-  } catch {
-    return null;
-  }
+  const loaded = readSession(raw);
+  if (loaded === null || !isValidId(loaded.session.id)) return null;
+  const { session } = loaded;
+  return {
+    id: session.id,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messages: session.messages as ProviderMessage[],
+    events: session.events,
+  };
 }
 
 export class ConversationStore {
@@ -177,7 +195,15 @@ export class ConversationStore {
 
     await this.port.writeFile(
       `${this.dir}/${conversation.id}.json`,
-      `${JSON.stringify({ ...conversation, messages }, null, 2)}\n`,
+      writeSession({
+        version: SESSION_SCHEMA_VERSION,
+        id: conversation.id,
+        title: conversation.title,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+        events: conversation.events ?? [],
+        messages,
+      }),
     );
     await this.prune();
   }

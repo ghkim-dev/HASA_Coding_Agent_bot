@@ -1,6 +1,6 @@
 import { AddressRefused } from "../web/address.ts";
 import { FetchFailed, fetchPage, searchWeb, type WebClientOptions } from "../web/client.ts";
-import type { AgentTool, ToolResult } from "../types.ts";
+import type { AgentTool, ToolResult, TruncationMeta } from "../types.ts";
 
 /**
  * Looking things up.
@@ -133,11 +133,29 @@ function webFetch(opts: WebToolOptions): AgentTool {
 
       try {
         const fetched = await fetchPage(url, opts);
-        let text = fetched.page.text;
-        const cut = text.length > MAX_PAGE_CHARS;
+        const whole = fetched.page.text;
+        let text = whole;
+        // Two ways a page arrives incomplete, and they are different facts: the
+        // client stopped reading bytes at the transport cap, or the text was
+        // longer than a prompt should carry. Both were being discarded — the
+        // client computed `truncated` and this function ignored it — so a model
+        // read half a page and answered as if it had read the page.
+        const cut = whole.length > MAX_PAGE_CHARS;
         if (cut) {
-          text = `${text.slice(0, MAX_PAGE_CHARS)}\n…[cut at ${MAX_PAGE_CHARS} of ${fetched.page.text.length} characters]`;
+          text = `${text.slice(0, MAX_PAGE_CHARS)}\n…[cut at ${MAX_PAGE_CHARS} of ${whole.length} characters]`;
         }
+        const meta: TruncationMeta | undefined =
+          cut || fetched.truncated
+            ? {
+                truncated: true,
+                originalLength: whole.length,
+                returnedLength: Math.min(whole.length, MAX_PAGE_CHARS),
+                reason: fetched.truncated ? "max_bytes" : "max_chars",
+                hint: fetched.truncated
+                  ? "The response was larger than the fetch limit, so this is the beginning of it. Do not treat it as the whole page."
+                  : `Only the first ${MAX_PAGE_CHARS} characters are here. Do not treat it as the whole page.`,
+              }
+            : undefined;
         if (text.trim().length === 0) {
           return {
             ok: false,
@@ -145,7 +163,10 @@ function webFetch(opts: WebToolOptions): AgentTool {
           };
         }
         const heading = fetched.page.title === null ? fetched.url : `${fetched.page.title} — ${fetched.url}`;
-        return { ok: true, content: quarantine(heading, text) };
+        // The note goes to the model inside the content as well as to the panel
+        // as metadata: the panel can render a badge, and the model reads prose.
+        const body = meta === undefined ? text : `${text}\n\n[${meta.hint}]`;
+        return { ok: true, content: quarantine(heading, body), ...(meta === undefined ? {} : { meta }) };
       } catch (err) {
         return refusalFrom(err) ?? { ok: false, content: `Could not read ${url}: ${(err as Error).message}` };
       }

@@ -70,8 +70,31 @@ export interface ToolResult {
   ok: boolean;
   /** What the model is told. Truncated by the tool, not by the loop. */
   content: string;
-  /** Workspace-relative paths this call changed. */
+  /**
+   * Workspace-relative paths this call changed.
+   *
+   * Kept as bare paths for every existing caller. `changes` is the richer form
+   * — what kind of change, and what a rename came from — and a tool that sets
+   * it does not need to set this as well.
+   */
   changedFiles?: string[];
+  /**
+   * What this call did to the workspace, said by the thing that did it.
+   *
+   * The source of truth for the changed-file list. It used to be `git status`,
+   * which is empty in a folder that is not a repository — so an agent could
+   * write four files and the panel would show none of them.
+   */
+  changes?: FileChange[];
+  /**
+   * What was left out of `content`, when anything was.
+   *
+   * Silent truncation is the failure this exists to prevent: a model handed the
+   * first half of a page has no way to know it was a half, and will answer as
+   * though it read the whole thing. The tool that cut it says so, here, and the
+   * text the model sees says so too.
+   */
+  meta?: TruncationMeta;
   /**
    * Output the *user* should see, verbatim, not just the model.
    *
@@ -195,6 +218,24 @@ export type AgentStopReason =
   | "loop_detected"
   | "error";
 
+/**
+ * A change a tool made, and the truncation it applied.
+ *
+ * Both re-exported from the persisted vocabulary rather than declared twice.
+ * A second definition would be a second place for them to drift, and these are
+ * carried straight through from a tool result to a stored event without being
+ * reshaped on the way.
+ */
+import type { FileChangeKind, TruncationMeta } from "./sessionEvents.ts";
+export type { FileChangeKind, TruncationMeta };
+
+export interface FileChange {
+  path: string;
+  change: FileChangeKind;
+  /** Where a rename came from. */
+  previousPath?: string;
+}
+
 export type AgentEvent =
   | { type: "step"; step: number }
   | { type: "text"; delta: string }
@@ -204,8 +245,22 @@ export type AgentEvent =
   /**
    * `detail` is a status line, capped small on purpose. `output` is what the
    * tool asked to have shown verbatim, and only some tools ask.
+   *
+   * `changedFiles` is reported by the tool that did the changing, which is the
+   * only place that knows for certain — asking git afterwards answers nothing
+   * in a workspace that is not a repository. `meta` says when what is here is
+   * not all there was.
    */
-  | { type: "tool_end"; callId: string; name: string; ok: boolean; detail: string; output?: string }
+  | {
+      type: "tool_end";
+      callId: string;
+      name: string;
+      ok: boolean;
+      detail: string;
+      output?: string;
+      changedFiles?: FileChange[];
+      meta?: TruncationMeta;
+    }
   /**
    * The agent's plan and where it is in it.
    *
@@ -225,7 +280,12 @@ export type AgentEvent =
   | { type: "plan"; steps: string[]; current: number }
   | { type: "checkpoint"; ref: string | null; detail: string }
   | { type: "changed"; files: string[] }
-  | { type: "done"; reason: AgentStopReason; summary: string }
+  /**
+   * `detail` says why *this* run hit *this* reason — which four calls repeated,
+   * which budget ran out. The reason alone is a category; the detail is the
+   * thing a user can act on.
+   */
+  | { type: "done"; reason: AgentStopReason; summary: string; detail?: string }
   | { type: "error"; code: string; message: string };
 
 // ---------------------------------------------------------------------------

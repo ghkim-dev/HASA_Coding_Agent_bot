@@ -18,6 +18,8 @@ import type { AgentTool, ToolContext, ToolResult } from "../types.ts";
 
 const MAX_LIST_ENTRIES = 400;
 const MAX_SEARCH_HITS = 200;
+/** A matching line longer than this ends with an ellipsis and is counted. */
+const MAX_SNIPPET_CHARS = 200;
 const MAX_READ_BYTES = 256 * 1024;
 
 const IGNORED_DIRS = new Set([".git", ".arena", "node_modules", "dist", "out", ".next", "target"]);
@@ -116,7 +118,19 @@ function readFileTool(sandbox: Sandbox): AgentTool {
     summarize: (args) => `${str(args, "path")} 파일을 읽습니다`,
     async execute(args): Promise<ToolResult> {
       const path = str(args, "path");
-      const text = await sandbox.readFile(path, MAX_READ_BYTES);
+      let text: string;
+      try {
+        text = await sandbox.readFile(path, MAX_READ_BYTES);
+      } catch (err) {
+        // A file over the limit used to be a flat refusal, and a model that
+        // cannot read a file it was told to change has nowhere to go but round
+        // in circles. Large files are ordinary in a repository, so the ceiling
+        // becomes a range read rather than a wall — and the reason is
+        // machine-readable so the retry is informed rather than hopeful.
+        const partial = await readWithinLimit(sandbox, path, err);
+        if (partial === null) throw err;
+        return partial;
+      }
       const lines = text.split("\n");
       const start = Math.max(1, num(args, "startLine", 1));
       const end = Math.min(lines.length, num(args, "endLine", lines.length));
@@ -128,6 +142,55 @@ function readFileTool(sandbox: Sandbox): AgentTool {
         ok: true,
         content: `${path} (lines ${start}-${start + slice.length - 1} of ${lines.length})\n${body}`,
       };
+    },
+  };
+}
+
+/**
+ * The beginning of a file too large to read whole.
+ *
+ * Returned instead of the refusal, with three things the model needs: what it
+ * got, that there is more, and the exact call that gets the next part. Without
+ * the last one a large file becomes a loop — the model retries the same read
+ * and gets the same refusal, which is a failure mode worth designing out rather
+ * than detecting later.
+ *
+ * Reads bytes rather than lines because the line count is not knowable without
+ * reading, and stops on a line boundary so the model is never handed half a
+ * line and asked to reason about it.
+ */
+async function readWithinLimit(sandbox: Sandbox, path: string, cause: unknown): Promise<ToolResult | null> {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  const size = /file is (\d+) bytes/.exec(detail)?.[1];
+  // Only the size ceiling is turned into a partial read. A path outside the
+  // workspace or a forbidden name is a refusal and stays one.
+  if (size === undefined) return null;
+
+  let head: string;
+  try {
+    head = await sandbox.readFileRange(path, 0, MAX_READ_BYTES);
+  } catch {
+    return null;
+  }
+  // The last line is almost certainly cut, so it goes rather than lying about
+  // where the chunk ends.
+  const lines = head.split("\n");
+  lines.pop();
+  const body = lines.map((line, i) => `${i + 1}\t${line}`).join("\n");
+
+  return {
+    ok: true,
+    content:
+      `${path} (${size} bytes — too large to read at once; this is the first ${lines.length} lines)\n` +
+      `${body}\n` +
+      `\n[Partial read. Continue with read_file({ path: "${path}", startLine: ${lines.length + 1} }) ` +
+      `and keep going until the line numbers stop advancing. Do not repeat this call unchanged.]`,
+    meta: {
+      truncated: true,
+      originalLength: Number(size),
+      returnedLength: head.length,
+      reason: "file_too_large",
+      hint: `Read the rest with startLine: ${lines.length + 1}.`,
     },
   };
 }
@@ -163,6 +226,9 @@ function searchFiles(sandbox: Sandbox): AgentTool {
       const filter = str(args, "glob");
       const root = await sandbox.resolvePath(str(args, "path", ".") || ".");
       const hits: string[] = [];
+      // Counted so the result can say how many lines were shortened, rather than
+      // handing the model text that merely looks complete.
+      let clipped = 0;
 
       const walk = async (dir: string, depth: number): Promise<void> => {
         if (hits.length >= MAX_SEARCH_HITS || ctx.signal.aborted || depth > 10) return;
@@ -195,18 +261,44 @@ function searchFiles(sandbox: Sandbox): AgentTool {
           text.split("\n").forEach((line, i) => {
             if (hits.length >= MAX_SEARCH_HITS) return;
             regex.lastIndex = 0;
-            if (regex.test(line)) hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 200)}`);
+            if (!regex.test(line)) return;
+            // A line cut at 200 characters used to end mid-word with nothing to
+            // say so, which reads as a short line. The marker is what tells the
+            // model there is more, and `path:line` is what lets it go and get
+            // it with `read_file`.
+            const trimmed = line.trim();
+            const snippet = trimmed.length > MAX_SNIPPET_CHARS ? `${trimmed.slice(0, MAX_SNIPPET_CHARS)}…` : trimmed;
+            if (trimmed.length > MAX_SNIPPET_CHARS) clipped += 1;
+            hits.push(`${rel}:${i + 1}: ${snippet}`);
           });
         }
       };
 
       await walk(root, 0);
+      if (hits.length === 0) return { ok: true, content: `No match for ${pattern}.` };
+
+      const capped = hits.length >= MAX_SEARCH_HITS;
+      const notes: string[] = [];
+      if (capped) notes.push(`stopped at ${MAX_SEARCH_HITS} matches; narrow the pattern or the path to see more`);
+      if (clipped > 0) {
+        notes.push(
+          `${clipped} line(s) were longer than ${MAX_SNIPPET_CHARS} characters and end with "…"; ` +
+            "read the file at the line number for the whole line",
+        );
+      }
       return {
         ok: true,
-        content:
-          hits.length === 0
-            ? `No match for ${pattern}.`
-            : hits.join("\n") + (hits.length >= MAX_SEARCH_HITS ? `\n…stopped at ${MAX_SEARCH_HITS} matches` : ""),
+        content: hits.join("\n") + (notes.length === 0 ? "" : `\n…${notes.join(". ")}.`),
+        ...(capped || clipped > 0
+          ? {
+              meta: {
+                truncated: true,
+                returnedLength: hits.length,
+                reason: capped ? ("max_lines" as const) : ("max_chars" as const),
+                hint: notes.join(". "),
+              },
+            }
+          : {}),
       };
     },
   };
@@ -244,8 +336,17 @@ function createFile(sandbox: Sandbox): AgentTool {
     async execute(args): Promise<ToolResult> {
       const path = str(args, "path");
       const contents = str(args, "contents");
+      // Asked before the write, because afterwards everything exists. Whether a
+      // file was created or modified is the kind of thing only the writer can
+      // still know, and it is what the changed-file list reports.
+      const existed = await sandbox.exists(path);
       await sandbox.writeFile(path, contents);
-      return { ok: true, content: `wrote ${path} (${contents.split("\n").length} lines)`, changedFiles: [path] };
+      return {
+        ok: true,
+        content: `wrote ${path} (${contents.split("\n").length} lines)`,
+        changedFiles: [path],
+        changes: [{ path, change: existed ? "modified" : "created" }],
+      };
     },
   };
 }
@@ -308,7 +409,14 @@ function applyPatch(sandbox: Sandbox): AgentTool {
       const next = replaceOnce(previous, find, str(args, "replace"));
       if (next === null) return { ok: false, content: `could not apply the change to ${path}.` };
       await sandbox.writeFile(path, next);
-      return { ok: true, content: `updated ${path}`, changedFiles: [path] };
+      // A patch only applies to a file that already existed, so this is always
+      // a modification — stated rather than inferred downstream.
+      return {
+        ok: true,
+        content: `updated ${path}`,
+        changedFiles: [path],
+        changes: [{ path, change: "modified" }],
+      };
     },
   };
 }

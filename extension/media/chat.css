@@ -189,6 +189,23 @@ select {
   line-height: 1.45;
 }
 .step.failed + .tool-output > summary { opacity: 1; color: var(--vscode-editorWarning-foreground); }
+.step.muted { opacity: 0.6; }
+.step.denied { color: var(--vscode-testing-iconFailed); opacity: 1; }
+
+/*
+ * A reasoning summary. Collapsed by default and set in the muted colour: it is
+ * how the agent got there, not what it concluded, and a reader should reach the
+ * conclusion first.
+ */
+.reasoning { margin: 0.2rem 0 0.4rem; opacity: 0.8; }
+.reasoning > summary { cursor: pointer; font-size: 0.9em; user-select: none; }
+.reasoning > div {
+  margin-top: 0.3rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--vscode-panel-border);
+  white-space: pre-wrap;
+  font-size: 0.95em;
+}
 
 .notice {
   padding: 8px 12px;

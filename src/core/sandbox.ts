@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { isInside } from "./git.ts";
 
@@ -141,6 +141,33 @@ export class Sandbox {
       );
     }
     return resolvedFull;
+  }
+
+  /**
+   * Part of a file, for one that is too large to read whole.
+   *
+   * Every containment check `readFile` makes still applies — the path goes
+   * through the same `resolvePath`, so a range read cannot reach anywhere a
+   * whole read could not. What is different is only that the size ceiling is
+   * the caller's business rather than a refusal.
+   */
+  async readFileRange(relativePath: string, offset: number, length: number): Promise<string> {
+    const full = await this.resolvePath(relativePath);
+    const info = await stat(full);
+    if (!info.isFile()) throw new SandboxViolation("forbidden", relativePath, "not a regular file");
+
+    const handle = await open(full, "r");
+    try {
+      const buffer = Buffer.alloc(Math.max(0, Math.min(length, info.size - offset)));
+      if (buffer.length === 0) return "";
+      await handle.read(buffer, 0, buffer.length, offset);
+      // Decoded as a whole rather than per read: a chunk boundary that lands
+      // mid-character would otherwise produce replacement characters, the same
+      // fault that made command output unreadable.
+      return buffer.toString("utf8");
+    } finally {
+      await handle.close();
+    }
   }
 
   async readFile(relativePath: string, maxBytes = 512 * 1024): Promise<string> {
