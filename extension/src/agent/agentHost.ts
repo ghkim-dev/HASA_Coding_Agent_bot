@@ -3,7 +3,14 @@ import { AgentSession } from "../../../src/agent/session.ts";
 import { createModelFor } from "../../../src/agent/hasaModel.ts";
 import { chooseModel, protocolFor, type AutoModelChoice } from "../../../src/agent/autoModel.ts";
 import { modeCanWrite } from "../../../src/agent/modes.ts";
-import type { AgentEvent, AgentMode, AgentTurnResult, ApprovalRequest } from "../../../src/agent/types.ts";
+import type {
+  AgentEvent,
+  AgentMode,
+  AgentTurnResult,
+  ApprovalAnswer,
+  ApprovalMode,
+  ApprovalRequest,
+} from "../../../src/agent/types.ts";
 import type { HasaProvider } from "../../../src/provider/hasa/hasaProvider.ts";
 import { createHasaProvider } from "../../../src/provider/hasa/createProvider.ts";
 import { describeVerification, verifyModels } from "../../../src/provider/hasa/verifyModels.ts";
@@ -136,6 +143,41 @@ export class AgentHost {
     const problem = this.modelProblem;
     this.modelProblem = null;
     return problem;
+  }
+
+  /**
+   * How much runs without asking.
+   *
+   * Held here rather than read from settings on every turn, because it is now a
+   * control in the panel: a user who has watched the agent work for ten minutes
+   * changes it mid-conversation, and having to open settings.json to do that is
+   * the reason nobody did.
+   */
+  private approval: ApprovalMode | null = null;
+
+  get approvalMode(): ApprovalMode {
+    this.approval ??= vscode.workspace
+      .getConfiguration("hasaAgent")
+      .get<ApprovalMode>("approvalMode", "safe");
+    return this.approval;
+  }
+
+  setApprovalMode(mode: ApprovalMode): void {
+    this.approval = mode;
+    // Standing grants were given under the old policy and do not carry — the
+    // manager clears them itself, and this is the call that tells it to.
+    this.session?.setApprovalMode(mode);
+    this.log.appendLine(`[hasa] approval mode: ${mode}`);
+  }
+
+  /** Tools the user has said "항상 허용" to, so the panel can show and revoke them. */
+  standingGrants(): string[] {
+    return this.session?.grantedTools() ?? [];
+  }
+
+  revokeGrants(): void {
+    this.session?.revokeGrants();
+    this.log.appendLine("[hasa] standing approvals revoked");
   }
 
   get busy(): boolean {
@@ -539,9 +581,10 @@ export class AgentHost {
       }),
       approvalPort: { request: (request) => askUser(request) },
       mode: this.mode,
-      approvalMode: vscode.workspace
-        .getConfiguration("hasaAgent")
-        .get<"safe" | "balanced" | "auto">("approvalMode", "safe"),
+      approvalMode: this.approvalMode,
+      // Honoured for the conversation, not the turn. "Stop asking me about
+      // this" is not a statement about the next four seconds.
+      rememberGrants: "session",
       ...(await workspaceCommands(folder.uri.fsPath, this.log)),
       ...(await this.mediaTools()),
       checkpoint,
@@ -782,13 +825,20 @@ export class AgentHost {
  * VS Code reserves modals for decisions that matter, and this is one; a toast
  * that can be missed is a toast that will be.
  */
-async function askUser(request: ApprovalRequest): Promise<boolean> {
+async function askUser(request: ApprovalRequest): Promise<ApprovalAnswer> {
   const detail = request.preview === null ? undefined : request.preview.slice(0, 1500);
+  const ALWAYS = "항상 허용";
+  // Two affirmatives, because they are different answers. "허용" is about this
+  // action; "항상 허용" is a decision about the tool, and the reason it exists is
+  // that the fourth identical dialog in one turn is not read — which makes every
+  // later dialog worth less, including the ones that matter.
   const choice = await vscode.window.showWarningMessage(
     request.summary,
     { modal: true, ...(detail === undefined ? {} : { detail }) },
     "허용",
+    ALWAYS,
   );
+  if (choice === ALWAYS) return "always";
   return choice === "허용";
 }
 

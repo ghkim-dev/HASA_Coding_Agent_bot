@@ -119,6 +119,8 @@ export type ApprovalOutcome =
   | "auto"
   /** The user said yes. */
   | "granted"
+  /** The user had already said "always" to this tool, so nobody was asked. */
+  | "standing"
   /** The user said no. */
   | "denied"
   /** No policy permits this, so nobody was asked. */
@@ -139,8 +141,23 @@ export interface ApprovalRequest {
  * A port rather than a class: in the extension it is a modal, in the CLI a
  * prompt, in a test a function. The loop must not know which.
  */
+/**
+ * What the user answered.
+ *
+ * `"always"` is the one that matters for how the product feels. A boolean means
+ * the same dialog for the fourth `pip install` of a turn, and a user asked the
+ * same question four times stops reading it — which is the opposite of what an
+ * approval prompt is for. Saying "yes, and stop asking about this" is a decision
+ * they made once and meant.
+ *
+ * Scoped to the tool, not to the exact command: "let it run commands" is the
+ * thing a person decides. Whether *this* command is `dangerous` was settled
+ * before anyone was asked, and no answer here reaches past that.
+ */
+export type ApprovalAnswer = boolean | "always";
+
 export interface ApprovalPort {
-  request(req: ApprovalRequest): Promise<boolean>;
+  request(req: ApprovalRequest): Promise<ApprovalAnswer>;
 }
 
 // ---------------------------------------------------------------------------

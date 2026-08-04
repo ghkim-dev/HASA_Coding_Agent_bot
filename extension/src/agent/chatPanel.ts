@@ -22,6 +22,8 @@ export type PanelMessage =
   | { type: "send"; prompt: string }
   | { type: "cancel" }
   | { type: "setMode"; mode: AgentMode }
+  | { type: "setApprovalMode"; mode: "safe" | "balanced" | "auto" }
+  | { type: "revokeGrants" }
   | { type: "setModel"; modelId: string | null }
   | { type: "connect" }
   | { type: "changeKey" }
@@ -57,6 +59,15 @@ export interface PanelState {
   canGenerateMedia: boolean;
   /** Files staged for the next message. Names only — no contents cross over. */
   attachments: Array<{ id: string; name: string; kind: "text" | "image" | "audio"; note: string }>;
+  /**
+   * How much runs without asking, and what has been permanently allowed.
+   *
+   * In the panel rather than only in settings.json, because it is a decision
+   * people make *while watching the agent work* — after ten minutes of correct
+   * edits, not before the first one.
+   */
+  approvalMode: "safe" | "balanced" | "auto";
+  standingGrants: string[];
   /** Past conversations for the key in use. */
   history: Array<{ id: string; title: string; updatedAt: number; messageCount: number }>;
   openConversationId: string | null;
@@ -168,6 +179,15 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <label for="model">Model</label>
       <select id="model"><option value="">✨ Auto</option></select>
       <button id="verify" class="ghost" title="이 키로 쓸 수 있는 모델을 확인합니다">모델 확인</button>
+    </div>
+    <div class="field">
+      <label for="approval">권한</label>
+      <select id="approval" title="어디까지 확인 없이 진행할지 정합니다">
+        <option value="safe">확인하고 진행</option>
+        <option value="balanced">수정은 자동</option>
+        <option value="auto">전부 자동</option>
+      </select>
+      <button id="revoke" class="ghost hidden" title="항상 허용해 둔 항목을 취소합니다"></button>
     </div>
     <div class="spacer"></div>
     <span id="status" class="status"></span>

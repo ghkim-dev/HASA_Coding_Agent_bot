@@ -1,6 +1,7 @@
 import {
   RISK_ORDER,
   atMost,
+  type ApprovalAnswer,
   type ApprovalMode,
   type ApprovalOutcome,
   type ApprovalPort,
@@ -38,29 +39,48 @@ export const APPROVAL_POLICIES: Record<ApprovalMode, ApprovalPolicy> = {
 export interface ApprovalManagerOptions {
   mode?: ApprovalMode;
   port: ApprovalPort;
-  /** Remembers a granted tool for the rest of the turn. Off by default. */
-  rememberGrants?: boolean;
+  /**
+   * Whether "always" is honoured, and for how long.
+   *
+   * `session` is what the panel uses: a grant given during a conversation lasts
+   * until the conversation ends or the mode changes. `turn` was the original
+   * behaviour and is kept for callers that want a narrower promise. `never`
+   * asks every time, which is right for a headless caller that has nobody to
+   * ask twice.
+   */
+  rememberGrants?: "never" | "turn" | "session" | boolean;
 }
 
 export class ApprovalManager {
   private mode: ApprovalMode;
   private readonly port: ApprovalPort;
-  private readonly rememberGrants: boolean;
+  private readonly remember: "never" | "turn" | "session";
   private readonly granted = new Set<string>();
 
   constructor(opts: ApprovalManagerOptions) {
     this.mode = opts.mode ?? "safe";
     this.port = opts.port;
-    this.rememberGrants = opts.rememberGrants ?? false;
+    const remember = opts.rememberGrants ?? false;
+    this.remember = remember === true ? "turn" : remember === false ? "never" : remember;
   }
 
   get currentMode(): ApprovalMode {
     return this.mode;
   }
 
+  /** Tools the user has said "always" to, for showing what is standing. */
+  grantedTools(): string[] {
+    return [...this.granted].map((key) => key.split(":")[0] ?? key);
+  }
+
   setMode(mode: ApprovalMode): void {
     this.mode = mode;
     // A remembered grant was given under the old policy and does not carry.
+    this.granted.clear();
+  }
+
+  /** Takes back every standing grant. The user's undo for "always". */
+  revokeGrants(): void {
     this.granted.clear();
   }
 
@@ -84,15 +104,29 @@ export class ApprovalManager {
     if (this.isAutomatic(request.risk)) return "auto";
 
     const key = `${request.toolName}:${request.risk}`;
-    if (this.rememberGrants && this.granted.has(key)) return "granted";
+    if (this.remember !== "never" && this.granted.has(key)) return "standing";
 
-    const approved = await this.port.request(request);
-    if (!approved) return "denied";
-    if (this.rememberGrants) this.granted.add(key);
+    const answer = await this.port.request(request);
+    if (answer === false) return "denied";
+    // Only an explicit "always" creates a standing grant. A plain yes is an
+    // answer to this question, and quietly widening it into a policy is how a
+    // user ends up having permitted something they never agreed to.
+    if (answer === "always" && this.remember !== "never") this.granted.add(key);
     return "granted";
   }
 
-  /** Test and CLI helper: forget anything remembered this turn. */
+  /**
+   * Forgets grants that do not outlive a turn.
+   *
+   * Called between turns by the session. A `session` grant survives it, which is
+   * the whole difference: the user said "stop asking me about this" and a fresh
+   * turn is not a fresh conversation.
+   */
+  endTurn(): void {
+    if (this.remember === "turn") this.granted.clear();
+  }
+
+  /** Test and CLI helper: forget everything remembered. */
   reset(): void {
     this.granted.clear();
   }
@@ -109,7 +143,7 @@ export const allowingApprovalPort: ApprovalPort = {
 };
 
 /** Records what it was asked, so a test can assert the wording. */
-export function recordingApprovalPort(answer: (req: ApprovalRequest) => boolean): {
+export function recordingApprovalPort(answer: (req: ApprovalRequest) => ApprovalAnswer): {
   port: ApprovalPort;
   requests: ApprovalRequest[];
 } {

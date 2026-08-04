@@ -19,6 +19,19 @@ import { AUDIO_EXTENSIONS, isAudioFile } from "../../../src/provider/hasa/hasaAu
  */
 type CatalogueLoad = "with-catalogue" | "without-catalogue";
 
+/**
+ * What each level actually means, said once when it is chosen.
+ *
+ * Shown because "Auto" is a word, and the thing it does — running commands on
+ * the user's machine without asking again — is a decision worth stating in a
+ * sentence at the moment it is made.
+ */
+const APPROVAL_NOTICE: Readonly<Record<"safe" | "balanced" | "auto", string>> = {
+  safe: "안전 모드입니다. 파일 수정과 명령 실행 전에 매번 확인합니다.",
+  balanced: "균형 모드입니다. 파일 수정은 바로 하고, 명령 실행은 확인합니다.",
+  auto: "자동 모드입니다. 파일 수정과 명령 실행을 확인 없이 진행합니다. 되돌리기는 계속 쓸 수 있고, 위험한 작업은 여전히 차단됩니다.",
+};
+
 /** A file staged for the next message, with what the panel needs to show it. */
 interface StagedAttachment {
   id: string;
@@ -124,6 +137,8 @@ export class AgentController {
         kind: s.attachment.kind,
         note: s.note,
       })),
+      approvalMode: this.host.approvalMode,
+      standingGrants: this.host.standingGrants(),
       history: await this.host.listConversations(),
       openConversationId: this.host.currentConversationId,
       busy: this.host.busy,
@@ -160,6 +175,22 @@ export class AgentController {
       case "setMode":
         this.host.setMode(message.mode as AgentMode);
         await this.push();
+        return;
+
+      case "setApprovalMode":
+        this.host.setApprovalMode(message.mode);
+        await this.push();
+        this.panel?.post({
+          type: "notice",
+          level: "info",
+          text: APPROVAL_NOTICE[message.mode],
+        });
+        return;
+
+      case "revokeGrants":
+        this.host.revokeGrants();
+        await this.push();
+        this.panel?.post({ type: "notice", level: "info", text: "허용해 둔 항목을 모두 취소했습니다." });
         return;
 
       case "setModel":

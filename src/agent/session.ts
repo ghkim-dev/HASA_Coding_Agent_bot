@@ -4,7 +4,7 @@ import { Sandbox } from "../core/sandbox.ts";
 import { nullLogger, type Logger } from "../hasa-client/logger.ts";
 import type { ProviderMessage, Tristate } from "../provider/types.ts";
 import { composeUserMessage, describeAttachmentProblems, type Attachment } from "./attachments.ts";
-import { ApprovalManager } from "./approval.ts";
+import { ApprovalManager, type ApprovalManagerOptions } from "./approval.ts";
 import type { RuntimeGap } from "./discoverCommands.ts";
 import { createMediaTools } from "./tools/mediaTools.ts";
 import type { MediaToolOptions } from "./tools/mediaTools.ts";
@@ -43,6 +43,11 @@ export interface AgentSessionOptions {
   approvalPort: ApprovalPort;
   mode?: AgentMode;
   approvalMode?: ApprovalMode;
+  /**
+   * Whether "항상 허용" is honoured, and for how long. See `ApprovalManager`.
+   * Omitted means never, which is the right default for a headless caller.
+   */
+  rememberGrants?: ApprovalManagerOptions["rememberGrants"];
   /** Commands this project declares. Empty means no command tool is offered. */
   commands?: CommandSpec[];
   /**
@@ -110,6 +115,7 @@ export class AgentSession {
     this.approvals = new ApprovalManager({
       mode: opts.approvalMode ?? "safe",
       port: opts.approvalPort,
+      ...(opts.rememberGrants === undefined ? {} : { rememberGrants: opts.rememberGrants }),
     });
     this.checkpoints = new CheckpointManager({
       repoRoot: root,
@@ -166,6 +172,16 @@ export class AgentSession {
 
   setApprovalMode(mode: ApprovalMode): void {
     this.approvals.setMode(mode);
+  }
+
+  /** Tools the user has said "always" to, for showing what is standing. */
+  grantedTools(): string[] {
+    return this.approvals.grantedTools();
+  }
+
+  /** Takes back every standing grant, without changing the mode. */
+  revokeGrants(): void {
+    this.approvals.revokeGrants();
   }
 
   /** True when this workspace can be rolled back. */
@@ -249,7 +265,14 @@ export class AgentSession {
     });
 
     this.log.info("agent turn", { mode: this.mode, approval: this.approvals.currentMode });
-    return loop.run(this.messages, signal);
+    try {
+      return await loop.run(this.messages, signal);
+    } finally {
+      // Grants scoped to a turn expire here. A session-scoped one does not, and
+      // that difference is the whole point of "항상 허용" — a fresh turn is not a
+      // fresh conversation.
+      this.approvals.endTurn();
+    }
   }
 
   /** Restores the workspace to the state it was in before this session wrote. */

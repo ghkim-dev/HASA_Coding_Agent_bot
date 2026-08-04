@@ -103,6 +103,8 @@ function appendInlines(parent, inlines) {
 const el = {
   bar: /** @type {HTMLElement} */ (document.getElementById("bar")),
   mode: /** @type {HTMLSelectElement} */ (document.getElementById("mode")),
+  approval: /** @type {HTMLSelectElement} */ (document.getElementById("approval")),
+  revoke: /** @type {HTMLButtonElement} */ (document.getElementById("revoke")),
   model: /** @type {HTMLSelectElement} */ (document.getElementById("model")),
   status: /** @type {HTMLElement} */ (document.getElementById("status")),
   newChat: /** @type {HTMLButtonElement} */ (document.getElementById("newChat")),
@@ -342,7 +344,12 @@ function renderEvent(event) {
     case "tool_approval": {
       const line = turn.steps.get(event.callId);
       if (!line) break;
-      if (event.outcome === "denied") {
+      if (event.outcome === "standing") {
+        // Said out loud rather than passed over. A user who allowed something
+        // permanently should keep seeing that it is being used, or "항상 허용"
+        // becomes a decision they made once and then forgot they made.
+        line.lastChild.textContent += " — 허용해 두신 항목입니다";
+      } else if (event.outcome === "denied") {
         line.className = "step denied";
         line.lastChild.textContent += " — 사용자가 거부했습니다";
         line.firstChild.textContent = "✕";
@@ -400,6 +407,16 @@ function renderState(state) {
       : "";
 
   el.mode.value = state.mode;
+  el.approval.value = state.approvalMode;
+
+  // Only shown when there is something to take back. A permanently visible
+  // "취소" for a list that is usually empty is a button people learn to ignore.
+  const grants = state.standingGrants ?? [];
+  el.revoke.classList.toggle("hidden", grants.length === 0);
+  if (grants.length > 0) {
+    el.revoke.textContent = `허용 ${grants.length}건 취소`;
+    el.revoke.title = `항상 허용해 둔 항목: ${grants.join(", ")}`;
+  }
 
   // Rebuilt rather than patched: the list changes when the key changes, and a
   // stale option is a model the user cannot actually use.
@@ -483,6 +500,8 @@ el.prompt.addEventListener("keydown", (e) => {
 
 el.cancel.addEventListener("click", () => post({ type: "cancel" }));
 el.mode.addEventListener("change", () => post({ type: "setMode", mode: el.mode.value }));
+el.approval.addEventListener("change", () => post({ type: "setApprovalMode", mode: el.approval.value }));
+el.revoke.addEventListener("click", () => post({ type: "revokeGrants" }));
 el.model.addEventListener("change", () => post({ type: "setModel", modelId: el.model.value || null }));
 el.connectBtn.addEventListener("click", () => post({ type: "connect" }));
 el.viewDiff.addEventListener("click", () => post({ type: "viewDiff" }));
