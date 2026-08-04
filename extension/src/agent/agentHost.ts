@@ -71,6 +71,28 @@ async function workspaceCommands(
 export const HASA_SECRET_KEY = "hasaArena.apiKey";
 
 /**
+ * How long Auto may spend measuring before it stops and guesses.
+ *
+ * Short on purpose. Measuring a model is eleven live inference requests and
+ * there are up to three candidates, so the honest worst case is tens of
+ * minutes — and it is work the user did not ask for, in front of a request they
+ * did. `chooseModel` already falls back to its best-ranked candidate, so the
+ * cost of stopping early is an unverified pick that answers rather than a
+ * measured one nobody waited for.
+ */
+const MODEL_CHOICE_BUDGET_MS = 45_000;
+
+/**
+ * The longest a turn may take, setup included.
+ *
+ * The loop already stops itself after ten minutes. Everything before it —
+ * choosing a model, measuring one, reading the catalogue — sat outside that
+ * ceiling, so a turn could run for as long as the slowest thing in it. One ran
+ * for twenty-four minutes and was still going.
+ */
+const TURN_CEILING_MS = 12 * 60_000;
+
+/**
  * The provider's log, in the window the user can actually open.
  *
  * `src/` logs through a `Logger`; the extension has an `OutputChannel`. Nothing
@@ -132,6 +154,15 @@ export class AgentHost {
   private conversationId: string | null = null;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
+  /**
+   * Where to report what is happening before the loop starts.
+   *
+   * Set for the duration of a turn. Everything `ensureSession` does — choosing a
+   * model, measuring one, reading the catalogue, discovering commands — used to
+   * happen with nothing to say about it, so the panel showed "생각하는 중" and a
+   * climbing clock for work the loop had not begun.
+   */
+  private phase: ((label: string) => void) | null = null;
 
   constructor(context: vscode.ExtensionContext, log: vscode.OutputChannel) {
     this.context = context;
@@ -608,6 +639,16 @@ export class AgentHost {
     // and attempted when nobody has looked.
     const capabilities = await provider.capabilities.capabilitiesOf(choice.modelId);
 
+    // Each of these reaches the network or the disk, and each was silent. The
+    // rule now is that anything which can take a noticeable time says its name
+    // first — a label is cheap, and the alternative is a clock counting up
+    // against the word "생각".
+    this.phase?.("워크스페이스에서 실행 가능한 명령을 찾는 중");
+    const workspace = await workspaceCommands(folder.uri.fsPath, this.log);
+    this.phase?.("이미지·동영상 도구를 준비하는 중");
+    const media = await this.mediaTools();
+    this.phase?.("대화를 준비하는 중");
+
     this.session = await AgentSession.open({
       vision: capabilities.vision,
       workspaceRoot: folder.uri.fsPath,
@@ -623,8 +664,8 @@ export class AgentHost {
       // Honoured for the conversation, not the turn. "Stop asking me about
       // this" is not a statement about the next four seconds.
       rememberGrants: "session",
-      ...(await workspaceCommands(folder.uri.fsPath, this.log)),
-      ...(await this.mediaTools()),
+      ...workspace,
+      ...media,
       checkpoint,
       onEvent,
     });
@@ -694,6 +735,7 @@ export class AgentHost {
       };
     }
     if (this.autoChoice !== null) return this.autoChoice;
+    this.phase?.("사용할 모델을 고르는 중");
 
     // The same list the picker offers, not the raw catalogue. Auto ranked every
     // model `/v1/models` returned, and an unmeasured one is a candidate rather
@@ -701,13 +743,34 @@ export class AgentHost {
     // all selectable, and picking one meant every turn answering 404 before the
     // agent ran. The picker had been taught to hide them; Auto had not, which is
     // how the two came to disagree about what this key can talk to.
+    this.phase?.("모델 목록을 불러오는 중");
     const listing = (await this.conversationModels()) ?? (await provider.listModels());
+
+    // Measuring is an optimisation, and it was allowed to block the request it
+    // was supposed to improve. `chooseModel` takes a signal and was given none,
+    // so probing ran unbounded: three candidates, eleven probes each, every one
+    // able to time out and retry. A turn sat on it for twenty-four minutes.
+    //
+    // Bounded now, and the bound is deliberately short. Past it the ranking's
+    // best guess is used instead — which is exactly what `chooseModel` falls
+    // back to on its own, and an unverified model that answers beats a measured
+    // one nobody waited for.
+    const probing = AbortSignal.timeout(MODEL_CHOICE_BUDGET_MS);
     const choice = await chooseModel({
       models: listing.models,
       mode: this.mode,
       knownUsableModelId: this.validation?.usableModelId ?? null,
-      measure: (id) => provider.capabilities.ensure(id),
+      measure: (id) => {
+        this.phase?.(`${id} 모델을 확인하는 중`);
+        return provider.capabilities.ensure(id, probing);
+      },
+      signal: probing,
     });
+    if (probing.aborted) {
+      this.log.appendLine(
+        `[hasa] model measurement exceeded ${MODEL_CHOICE_BUDGET_MS / 1000}s; using the best unmeasured candidate`,
+      );
+    }
     if (choice === null) return null;
     this.autoChoice = choice;
     this.log.appendLine(
@@ -722,17 +785,39 @@ export class AgentHost {
     attachments: readonly Attachment[] = [],
   ): Promise<AgentTurnResult | null> {
     if (this.running !== null) return null;
-    const session = await this.ensureSession(onEvent);
-    if (session === null) return null;
 
-    // A session created earlier does not carry this turn's event sink, so the
-    // loop is given one per turn through the session's own callback.
+    // Claimed before the setup, not after. `ensureSession` awaits the network,
+    // and until it returned `busy` was false — so the panel left the composer
+    // enabled and a second message went nowhere.
     const controller = new AbortController();
     this.running = controller;
+    this.phase = (label) => onEvent({ type: "phase", label });
+
+    // The loop has a deadline; the setup before it had none, and that is where a
+    // turn spent twenty-four minutes. A ceiling over the whole thing is what
+    // makes "it will end" true rather than mostly true.
+    const wholeTurn = setTimeout(() => controller.abort(new Error("turn timed out")), TURN_CEILING_MS);
+
     try {
+      this.phase("준비하는 중");
+      const session = await this.ensureSession(onEvent);
+      if (session === null) return null;
+      if (controller.signal.aborted) {
+        onEvent({
+          type: "error",
+          code: "setup_timeout",
+          message:
+            "준비 단계가 너무 오래 걸려 중단했습니다. 게이트웨이 응답이 느린 상태일 수 있습니다. " +
+            "출력 패널(HASA)에 원인이 남아 있습니다.",
+        });
+        return null;
+      }
+      this.phase("생각하는 중");
       return await session.send(prompt, controller.signal, attachments);
     } finally {
+      clearTimeout(wholeTurn);
       this.running = null;
+      this.phase = null;
       // Saved even when the turn failed or was cancelled: what the user typed
       // is theirs, and losing it because the gateway was down would be its own
       // small betrayal.

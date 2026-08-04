@@ -433,7 +433,16 @@ function renderEvent(event) {
       break;
 
     case "step":
-      setActivity(turn, "생각하는 중");
+      // Numbered from the second round. "생각하는 중" for the fourth time in a
+      // turn looks identical to the first, which is how a loop going nowhere
+      // passes for one making progress.
+      setActivity(turn, event.step <= 1 ? "모델 응답을 기다리는 중" : `모델 응답을 기다리는 중 (${event.step}번째)`);
+      break;
+
+    case "phase":
+      // Setup, before the loop. This is the work that used to happen with
+      // nothing to say about it while the clock climbed.
+      setActivity(turn, event.label);
       break;
 
     case "plan":

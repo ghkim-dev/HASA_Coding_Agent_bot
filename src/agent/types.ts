@@ -192,6 +192,15 @@ export type AgentEvent =
    * accumulating a log. See `tools/planTool.ts` for why this is a tool call and
    * not something inferred from the model's prose.
    */
+  /**
+   * What the agent is busy with right now, in the user's language.
+   *
+   * Emitted for the work that happens *before* the loop — choosing a model,
+   * measuring one, assembling the tools. That work was invisible and unbounded,
+   * and a turn that spent twenty-four minutes there reported "생각하는 중" the
+   * whole time because nothing else had anything to say.
+   */
+  | { type: "phase"; label: string }
   | { type: "plan"; steps: string[]; current: number }
   | { type: "checkpoint"; ref: string | null; detail: string }
   | { type: "changed"; files: string[] }
