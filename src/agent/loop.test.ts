@@ -687,3 +687,48 @@ describe("announcing work without doing it", () => {
     assert.equal(result.summary, "이 파일은 사용자 인증을 담당합니다.");
   });
 });
+
+/**
+ * A model call that does not come back.
+ *
+ * The deadline was checked at the top of each iteration and then not enforced
+ * during the one thing that takes time, so a call that never returned outlived
+ * the budget indefinitely — the loop was parked inside `await` with nothing left
+ * to notice. Reported as a turn that sat on "생각하는 중 · 369초" with no way to
+ * tell a slow model from a dead request.
+ */
+describe("a turn that outlives its budget", () => {
+  test("a hung model call is cut off at the deadline, not waited on", async () => {
+    let aborted = false;
+    const hung: AgentModel = {
+      modelId: "hung",
+      complete(_req, signal) {
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          });
+        });
+      },
+    };
+
+    let clock = 0;
+    const h = harness({ model: hung, budget: { timeoutMs: 50 }, now: () => clock });
+    // The clock only moves when asked, so the deadline is reached by the timer
+    // rather than by the test racing it.
+    const running = h.loop.run(h.messages, never);
+    await new Promise((r) => setTimeout(r, 80));
+    clock = 1_000;
+
+    const result = await running;
+    assert.equal(aborted, true, "the model call should have been aborted");
+    assert.equal(result.reason, "timeout");
+  });
+
+  test("a call that finishes inside the deadline is untouched", async () => {
+    const h = harness({ model: scripted([turn({ text: "빠르게 답했습니다." })]), budget: { timeoutMs: 60_000 } });
+    const result = await h.loop.run(h.messages, never);
+    assert.equal(result.reason, "finished");
+    assert.equal(result.summary, "빠르게 답했습니다.");
+  });
+});

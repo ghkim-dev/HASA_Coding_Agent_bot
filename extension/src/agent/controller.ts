@@ -411,6 +411,21 @@ export class AgentController {
   }
 
   private async send(prompt: string): Promise<void> {
+    // Said out loud rather than dropped. A turn already running made `send`
+    // return null, and the message vanished — which is what a user was looking
+    // at when they typed "결과 확인이 안되는데?" twice and got nothing either
+    // time. The panel disables the box while busy, but a message already in
+    // flight when a turn starts would still land here.
+    if (this.host.busy) {
+      this.panel?.post({
+        type: "notice",
+        level: "info",
+        text: "앞의 작업이 아직 진행 중입니다. 끝나기를 기다리거나 취소한 뒤 다시 보내 주세요.",
+      });
+      await this.push();
+      return;
+    }
+
     const attachments = this.staged.map((s) => s.attachment);
     // Cleared before the turn, not after: a failed send should not silently
     // re-attach the same files to whatever the user types next.

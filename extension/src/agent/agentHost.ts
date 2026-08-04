@@ -33,6 +33,7 @@ import {
 } from "../../../src/agent/conversationStore.ts";
 import type { Attachment, AttachmentOutcome } from "../../../src/agent/attachments.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
+import type { Logger } from "../../../src/hasa-client/logger.ts";
 
 type MediaConfig = NonNullable<AgentSessionOptions["media"]>;
 
@@ -68,6 +69,31 @@ async function workspaceCommands(
  */
 
 export const HASA_SECRET_KEY = "hasaArena.apiKey";
+
+/**
+ * The provider's log, in the window the user can actually open.
+ *
+ * `src/` logs through a `Logger`; the extension has an `OutputChannel`. Nothing
+ * joined them, so every warning the client produced — retries, cache failures,
+ * a catalogue that would not parse — was written to `nullLogger` and lost. The
+ * cost of that showed up as a question nobody could answer: what was the agent
+ * doing for six minutes?
+ */
+function outputChannelLogger(channel: vscode.OutputChannel, scope = "hasa"): Logger {
+  const write = (level: string, msg: string, fields?: Record<string, unknown>): void => {
+    const detail = fields === undefined ? "" : ` ${JSON.stringify(fields)}`;
+    channel.appendLine(`[${scope}] ${level}: ${msg}${detail}`);
+  };
+  return {
+    // Debug is dropped rather than written: this channel is something a user
+    // reads, and per-request noise would bury the lines that matter.
+    debug: () => {},
+    info: (msg, fields) => write("info", msg, fields),
+    warn: (msg, fields) => write("warn", msg, fields),
+    error: (msg, fields) => write("error", msg, fields),
+    child: (name) => outputChannelLogger(channel, `${scope}:${name}`),
+  };
+}
 
 /** Modality names as a Korean-speaking user would recognise them. */
 const MODALITY_KO: Readonly<Record<string, string>> = {
@@ -253,6 +279,18 @@ export class AgentHost {
       ...(baseUrl.length > 0 ? { baseUrl } : {}),
       cache: new FileModelCache(vscode.Uri.joinPath(home, "model-cache").fsPath),
       matrixPath: vscode.Uri.joinPath(home, "capability-matrix.json").fsPath,
+      // Without this the provider logged to nowhere, and the client's
+      // "retrying request" warning — the one line that would explain a turn
+      // sitting silent for six minutes — went to a null logger. A user watching
+      // it could not tell a slow model from four timed-out attempts, and
+      // neither could I when asked.
+      logger: outputChannelLogger(this.log),
+      // Built for a person waiting, not for an unattended run. The default is
+      // 120s × 4 attempts, which is eight minutes of silence; a real coding
+      // request against this gateway answers in 20–35s, so a minute is already
+      // generous and two attempts is enough to ride out a blip.
+      timeoutMs: 60_000,
+      maxRetries: 1,
     });
     return this.provider;
   }
