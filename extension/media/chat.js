@@ -293,6 +293,24 @@ function attachOutput(turn, line, output, open) {
   scrollToEnd();
 }
 
+/**
+ * Why a turn stopped, when it did not simply finish.
+ *
+ * Said as a fact about the run rather than as an apology, and separately from
+ * the model's own words — a model that was cut off mid-thought does not know it
+ * was, so its last paragraph cannot be the explanation.
+ */
+const STOP_REASON = {
+  denied: "요청하신 작업을 중단했습니다. 승인하지 않으신 단계가 있습니다.",
+  aborted: "작업을 취소했습니다.",
+  timeout: "시간이 초과되어 중단했습니다. 작업을 더 작게 나누어 다시 요청해 주세요.",
+  loop_detected: "같은 시도를 반복하고 있어 중단했습니다. 요청을 조금 더 구체적으로 알려 주세요.",
+  max_steps: "한 번에 처리할 수 있는 단계 수를 넘어 중단했습니다.",
+  max_model_calls: "한 번에 처리할 수 있는 모델 호출 수를 넘어 중단했습니다.",
+  max_tool_calls: "한 번에 처리할 수 있는 도구 호출 수를 넘어 중단했습니다.",
+  error: "오류로 중단했습니다.",
+};
+
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
 
 /** Keeps the activity line moving, so a long step reads as slow rather than dead. */
@@ -561,6 +579,14 @@ function renderEvent(event) {
       if (turn.raw.trim().length === 0) turn.raw = event.summary;
       stopTicking(turn);
       flushRender(turn);
+      // A turn stopped for looping, a timeout or a budget looked exactly like
+      // one that finished: `reason` was never read, and by the time a loop is
+      // detected the model has produced several paragraphs, so the explanation
+      // in `summary` was discarded as "the body is not empty". The reason is
+      // the part the user cannot infer from the prose.
+      if (event.reason !== "finished") {
+        turn.node.appendChild(stepLine("!", STOP_REASON[event.reason] ?? event.summary, "failed"));
+      }
       current = null;
       break;
 

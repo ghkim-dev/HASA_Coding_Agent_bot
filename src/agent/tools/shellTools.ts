@@ -195,8 +195,31 @@ function gateFor(parsed: ParsedCommandLine): CommandSpec["gate"] {
  * result that shows only stdout hides the stack trace that explains the failure,
  * and a model reading "it did not work" without it will guess.
  */
+/**
+ * Keeps the beginning as well as the end.
+ *
+ * This kept only the last 60 lines, which is the wrong end for most of what an
+ * agent runs. A compiler, a test runner and `pip` all put the thing that went
+ * wrong near the top and progress noise underneath it, so tail-only threw away
+ * the error and kept the scrollback — for the model as much as for the user.
+ */
+function clip(text: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= MAX_OUTPUT_LINES) return text.trim();
+  const head = Math.ceil(MAX_OUTPUT_LINES / 2);
+  const tail = MAX_OUTPUT_LINES - head;
+  const omitted = lines.length - head - tail;
+  return [
+    ...lines.slice(0, head),
+    `…[${omitted} more lines]…`,
+    ...lines.slice(-tail),
+  ]
+    .join("\n")
+    .trim();
+}
+
 function report(line: string, outcome: CommandOutcome): string {
-  const tail = (text: string): string => text.split("\n").slice(-MAX_OUTPUT_LINES).join("\n").trim();
+  const tail = clip;
   const head = `$ ${line}\nexit ${outcome.exitCode ?? "null"}${outcome.timedOut ? " (timed out)" : ""} in ${outcome.durationMs}ms`;
   const parts = [
     head,

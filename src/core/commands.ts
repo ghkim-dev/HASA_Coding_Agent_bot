@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { CommandSpec } from "../protocol/index.ts";
 
 /**
@@ -66,8 +67,24 @@ export interface CommandOutcome {
 
 const MAX_CAPTURE = 64 * 1024;
 
+/**
+ * Keeps both ends of very long output.
+ *
+ * It used to keep the first 64 KiB, which reads sensibly until you notice what
+ * consumes it: `shellTools.report` then takes the *last* 60 lines. Head-clip
+ * followed by tail-select means that for anything over 64 KiB the exit line is
+ * gone and the "last 60 lines" are 60 lines from the middle of the run — a
+ * report that looks like a verdict and is not.
+ *
+ * Both ends now survive, with the loss stated between them. A compiler puts the
+ * first error at the top and the summary at the bottom, and those are the two
+ * places worth keeping.
+ */
 function truncate(text: string): string {
-  return text.length > MAX_CAPTURE ? `${text.slice(0, MAX_CAPTURE)}\n…[truncated]` : text;
+  if (text.length <= MAX_CAPTURE) return text;
+  const half = Math.floor(MAX_CAPTURE / 2);
+  const dropped = text.length - half * 2;
+  return `${text.slice(0, half)}\n…[${dropped} characters omitted]…\n${text.slice(-half)}`;
 }
 
 /**
@@ -126,7 +143,21 @@ export function assertRunnable(spec: CommandSpec, allowlist: CommandSpec[]): voi
  */
 export function candidateEnv(extra: Record<string, string> = {}): Record<string, string> {
   const passthrough = ["PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP", "LANG", "TZ", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "COMSPEC"];
-  const env: Record<string, string> = { CI: "1", NO_COLOR: "1", ...extra };
+  const env: Record<string, string> = {
+    CI: "1",
+    NO_COLOR: "1",
+    // Output is read as UTF-8, so it has to be written as UTF-8.
+    //
+    // On Windows a child writing to a pipe defaults to the console codepage —
+    // CP949 on a Korean install — and decoding that as UTF-8 produces
+    // replacement characters. Measured: a Python script printing Korean came
+    // back as U+FFFD, in the output a user reads to find out whether their
+    // program worked. `PYTHONUTF8` is the modern switch and `PYTHONIOENCODING`
+    // covers interpreters that predate it; both are ignored by everything else.
+    PYTHONUTF8: "1",
+    PYTHONIOENCODING: "utf-8",
+    ...extra,
+  };
   for (const key of passthrough) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
@@ -215,11 +246,21 @@ async function spawnChecked(spec: CommandSpec, opts: RunCommandOptions): Promise
     };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
 
+    // Decoded across chunks, not per chunk.
+    //
+    // `chunk.toString("utf8")` decodes each Buffer in isolation, and a stream
+    // splits wherever the pipe happens to flush — which lands mid-character
+    // often enough to matter the moment output is not ASCII. Reproduced against
+    // a real child process printing Korean: the character straddling the
+    // boundary came back as replacement characters, in the output a user reads
+    // to find out whether their program worked.
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
     child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length < MAX_CAPTURE * 2) stdout += chunk.toString("utf8");
+      if (stdout.length < MAX_CAPTURE * 2) stdout += outDecoder.write(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      if (stderr.length < MAX_CAPTURE * 2) stderr += chunk.toString("utf8");
+      if (stderr.length < MAX_CAPTURE * 2) stderr += errDecoder.write(chunk);
     });
 
     const finish = (exitCode: number | null): void => {

@@ -780,8 +780,13 @@ describe("showing what a tool actually produced", () => {
     await h.loop.run(h.messages, never);
 
     const end = h.events.find((e) => e.type === "tool_end") as { output?: string };
-    assert.ok((end.output?.length ?? 0) <= 8_000);
-    assert.ok((end.output?.length ?? 0) > 200, "and it is far more than the status line");
+    const output = String(end.output);
+    // The cut is stated, not silent. Output that stops without saying it was
+    // cut reads as output that ended — which is the same mistake as showing no
+    // output at all, in a smaller place.
+    assert.match(output, /…\[\d+자 더 있습니다\]$/);
+    assert.ok(output.replace(/\n…\[\d+자 더 있습니다\]$/, "").length === 8_000);
+    assert.ok(output.length > 200, "and it is far more than the status line");
   });
 
   test("a failed call still carries its output, which is when it matters most", async () => {
@@ -797,5 +802,75 @@ describe("showing what a tool actually produced", () => {
     const end = h.events.find((e) => e.type === "tool_end") as { ok: boolean; output?: string };
     assert.equal(end.ok, false);
     assert.match(String(end.output), /ModuleNotFoundError/);
+  });
+});
+
+/**
+ * Failures the panel used to show nothing for.
+ *
+ * Both refusals returned before any event was emitted, so a model reaching for
+ * a tool its mode does not have burned a round trip that left no trace: the
+ * user saw a turn take longer and end. Found by auditing every emit against
+ * every branch, not by reading the happy path.
+ */
+describe("refusals that happen before a tool runs", () => {
+  test("an unknown tool produces a visible, failed step", async () => {
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("no_such_tool", {})] }), turn({ text: "ok" })]),
+      tools: [fakeTool({ name: "do_thing" })],
+    });
+    await h.loop.run(h.messages, never);
+
+    const start = h.events.find((e) => e.type === "tool_start") as { name: string; summary: string };
+    const end = h.events.find((e) => e.type === "tool_end") as { ok: boolean; detail: string };
+    assert.equal(start.name, "no_such_tool");
+    assert.equal(end.ok, false);
+    assert.match(end.detail, /there is no tool called/);
+  });
+
+  test("the refusal still names the tools that do exist", async () => {
+    // The usual cause is a mode boundary, and the fix is for the model to pick
+    // a tool it has — which it can only do if it is told what those are.
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("run_command", {})] }), turn({ text: "ok" })]),
+      tools: [fakeTool({ name: "read_file" })],
+    });
+    await h.loop.run(h.messages, never);
+
+    const tool = h.messages.find((m) => m.role === "tool");
+    assert.match(String(tool?.content), /read_file/);
+  });
+
+  test("arguments that are not an object fail visibly too", async () => {
+    const h = harness({
+      model: scripted([
+        turn({
+          toolCalls: [
+            { id: "c1", name: "do_thing", arguments: {}, rawArguments: "not json", argumentsValid: false },
+          ],
+        }),
+        turn({ text: "ok" }),
+      ]),
+      tools: [fakeTool({ name: "do_thing" })],
+    });
+    await h.loop.run(h.messages, never);
+
+    const end = h.events.find((e) => e.type === "tool_end") as { ok: boolean };
+    assert.equal(end.ok, false);
+  });
+
+  test("every tool_start still has exactly one tool_end", async () => {
+    // The invariant the new emits must not break: the panel keys its lines by
+    // callId and would leave a spinner on a line that never resolved.
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("nope", {})] }), turn({ text: "ok" })]),
+      tools: [fakeTool({ name: "do_thing" })],
+    });
+    await h.loop.run(h.messages, never);
+
+    const starts = h.events.filter((e) => e.type === "tool_start");
+    const ends = h.events.filter((e) => e.type === "tool_end");
+    assert.equal(starts.length, ends.length);
+    assert.equal(starts.length, 1);
   });
 });

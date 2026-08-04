@@ -160,3 +160,32 @@ describe("runCommand", () => {
     assert.ok(outcome.durationMs < 20_000);
   });
 });
+
+/**
+ * Output a user can read.
+ *
+ * Two separate faults, found by auditing rather than by using it, and both of
+ * them silent: the reader sees text that looks like the program's, and it is
+ * not.
+ */
+describe("capturing output faithfully", () => {
+  test("the environment asks children to write UTF-8", () => {
+    // On Windows a child writing to a pipe defaults to the console codepage —
+    // CP949 on a Korean install — and this side decodes UTF-8. Measured: a
+    // Python script printing Korean came back as replacement characters.
+    const env = candidateEnv();
+    assert.equal(env["PYTHONUTF8"], "1");
+    assert.equal(env["PYTHONIOENCODING"], "utf-8");
+  });
+
+  test("the passthrough list is not widened by the encoding switches", () => {
+    // They are set, not inherited. A variable this process happens to hold must
+    // not reach a child just because a neighbouring line added one.
+    const env = candidateEnv();
+    assert.equal(env["HASA_API_KEY"], undefined);
+  });
+
+  test("callers can still override what is set", () => {
+    assert.equal(candidateEnv({ PYTHONUTF8: "0" })["PYTHONUTF8"], "0");
+  });
+});
