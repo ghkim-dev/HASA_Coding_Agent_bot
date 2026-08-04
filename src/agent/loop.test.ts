@@ -732,3 +732,70 @@ describe("a turn that outlives its budget", () => {
     assert.equal(result.summary, "빠르게 답했습니다.");
   });
 });
+
+/**
+ * Output the user can check.
+ *
+ * Reported from a screenshot: three ticks, a paragraph of the model's prose
+ * about what the command printed, and no way to verify any of it. `tool_end`
+ * carried 200 characters of status and the panel used none of them.
+ *
+ * The rule that produced that — a progress line per tool, not a transcript — is
+ * still right for reading a file. It is wrong for a command, where the output
+ * *is* the answer. So a tool opts in, and almost none do.
+ */
+describe("showing what a tool actually produced", () => {
+  test("a tool that opts in has its output carried to the panel", async () => {
+    const tool = fakeTool({ result: { ok: true, content: "model text", display: "hello\nworld" } });
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("do_thing", {})] }), turn({ text: "ok" })]),
+      tools: [tool],
+    });
+    await h.loop.run(h.messages, never);
+
+    const end = h.events.find((e) => e.type === "tool_end") as { output?: string };
+    assert.equal(end.output, "hello\nworld");
+  });
+
+  test("a tool that does not opt in carries nothing, as before", async () => {
+    // The considered decision this must not silently overturn: a whole file
+    // under `read_file` is a payload nobody asked to render.
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("do_thing", {})] }), turn({ text: "ok" })]),
+      tools: [fakeTool({ result: { ok: true, content: "x".repeat(10_000) } })],
+    });
+    await h.loop.run(h.messages, never);
+
+    const end = h.events.find((e) => e.type === "tool_end") as { detail: string; output?: string };
+    assert.equal(end.output, undefined);
+    assert.ok(end.detail.length <= 200, "the status line is still a status line");
+  });
+
+  test("displayed output is capped, because a webview is not a file viewer", async () => {
+    const tool = fakeTool({ result: { ok: true, content: "c", display: "y".repeat(50_000) } });
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("do_thing", {})] }), turn({ text: "ok" })]),
+      tools: [tool],
+    });
+    await h.loop.run(h.messages, never);
+
+    const end = h.events.find((e) => e.type === "tool_end") as { output?: string };
+    assert.ok((end.output?.length ?? 0) <= 8_000);
+    assert.ok((end.output?.length ?? 0) > 200, "and it is far more than the status line");
+  });
+
+  test("a failed call still carries its output, which is when it matters most", async () => {
+    const tool = fakeTool({
+      result: { ok: false, content: "failed", display: "Traceback…\nModuleNotFoundError: cowsay" },
+    });
+    const h = harness({
+      model: scripted([turn({ toolCalls: [call("do_thing", {})] }), turn({ text: "ok" })]),
+      tools: [tool],
+    });
+    await h.loop.run(h.messages, never);
+
+    const end = h.events.find((e) => e.type === "tool_end") as { ok: boolean; output?: string };
+    assert.equal(end.ok, false);
+    assert.match(String(end.output), /ModuleNotFoundError/);
+  });
+});

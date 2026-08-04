@@ -72,6 +72,23 @@ export interface ToolResult {
   content: string;
   /** Workspace-relative paths this call changed. */
   changedFiles?: string[];
+  /**
+   * Output the *user* should see, verbatim, not just the model.
+   *
+   * Opt-in, and almost nothing opts in. The panel deliberately shows a progress
+   * line per tool rather than a transcript, and a whole file dumped under
+   * `read_file` is a payload nobody asked to render — that reasoning still
+   * holds and is why this is not simply `content`.
+   *
+   * Where it does not hold is a command. "I ran it and it worked" is a claim,
+   * and a user who cannot see what it printed has to take the model's word for
+   * the one thing they asked it to find out. Reported as exactly that: a user
+   * looking at three ticks and a paragraph, unable to check any of it.
+   *
+   * So a tool sets this when its output *is* the answer. Everything else leaves
+   * it undefined and keeps the status line it had.
+   */
+  display?: string;
 }
 
 export interface ToolContext {
@@ -184,7 +201,11 @@ export type AgentEvent =
   | { type: "reasoning"; delta: string }
   | { type: "tool_start"; callId: string; name: string; risk: ToolRisk; summary: string }
   | { type: "tool_approval"; callId: string; name: string; outcome: ApprovalOutcome }
-  | { type: "tool_end"; callId: string; name: string; ok: boolean; detail: string }
+  /**
+   * `detail` is a status line, capped small on purpose. `output` is what the
+   * tool asked to have shown verbatim, and only some tools ask.
+   */
+  | { type: "tool_end"; callId: string; name: string; ok: boolean; detail: string; output?: string }
   /**
    * The agent's plan and where it is in it.
    *

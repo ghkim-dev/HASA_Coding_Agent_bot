@@ -162,6 +162,34 @@ select {
 .plan-step.now { opacity: 1; font-weight: 600; color: var(--vscode-textLink-foreground); }
 .plan-step.next { opacity: 0.75; }
 
+/*
+ * What a command printed. Indented under its step line so it reads as that
+ * line's evidence rather than as a new event.
+ */
+.tool-output { margin: 0.15rem 0 0.4rem 1.6rem; }
+.tool-output > summary {
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 0.9em;
+  user-select: none;
+}
+.tool-output > summary:hover { opacity: 1; }
+.tool-output > pre {
+  margin: 0.3rem 0 0;
+  padding: 0.5rem 0.7rem;
+  /* Scrolls inside itself: a long line of output must not widen the panel. */
+  overflow-x: auto;
+  max-height: 22rem;
+  overflow-y: auto;
+  white-space: pre;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+.step.failed + .tool-output > summary { opacity: 1; color: var(--vscode-editorWarning-foreground); }
+
 .notice {
   padding: 8px 12px;
   border-radius: 6px;

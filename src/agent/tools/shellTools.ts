@@ -131,15 +131,17 @@ function runCommandTool(opts: ShellToolOptions): AgentTool {
         // the raw spawn text it says "[spawn error] spawn foo ENOENT", which
         // tells a model nothing about what to do next.
         if (outcome.exitCode === null && /ENOENT/.test(outcome.stderr)) {
-          return {
-            ok: false,
-            content:
-              `\`${parsed.cmd}\` is not installed, or is not on this machine's PATH. ` +
-              "Check before assuming it is there; if it is genuinely missing, say so plainly " +
-              "and tell the user how to install it rather than trying another spelling.",
-          };
+          const missing =
+            `\`${parsed.cmd}\` is not installed, or is not on this machine's PATH. ` +
+            "Check before assuming it is there; if it is genuinely missing, say so plainly " +
+            "and tell the user how to install it rather than trying another spelling.";
+          return { ok: false, content: missing, display: `$ ${line}\n${parsed.cmd}: 실행 파일을 찾을 수 없습니다.` };
         }
-        return { ok: outcome.exitCode === 0, content: report(line, outcome) };
+        const body = report(line, outcome);
+        // Shown to the user verbatim, not only to the model. "I ran it and it
+        // worked" is a claim; this is the thing that makes it checkable, and
+        // checking it is the entire reason they asked for the command.
+        return { ok: outcome.exitCode === 0, content: body, display: body };
       } catch (err) {
         // A refusal is a result, not an exception. The model learns the boundary
         // and tries something legal; throwing would end the turn and teach it

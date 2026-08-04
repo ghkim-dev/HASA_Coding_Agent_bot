@@ -150,6 +150,28 @@ function addUserTurn(text) {
   scrollToEnd();
 }
 
+/**
+ * Starts a fresh paragraph for whatever the model says next.
+ *
+ * A turn is a sequence of prose and steps in the order they happened, so the
+ * prose is a series of blocks rather than one. `turn.body` is the block being
+ * written into now; `turn.raw` is that block's source, because Markdown cannot
+ * be rendered incrementally and each delta re-renders from the accumulated
+ * text.
+ */
+function openProse(turn) {
+  flushRender(turn);
+  // A model that calls two tools without saying anything between them would
+  // otherwise leave an empty block, and an empty block is still a margin.
+  if (turn.body.childNodes.length === 0) turn.body.remove();
+  const body = document.createElement("div");
+  body.className = "body";
+  turn.node.insertBefore(body, turn.activity);
+  turn.body = body;
+  turn.raw = "";
+  return body;
+}
+
 function openAgentTurn() {
   const node = document.createElement("div");
   node.className = "turn agent";
@@ -234,6 +256,40 @@ function renderPlan(turn, steps, current) {
   // "생각하는 중" is true and useless once there is a plan saying what for.
   const step = steps[current - 1];
   if (step !== undefined) setActivity(turn, step);
+  scrollToEnd();
+}
+
+/**
+ * What a command actually printed, under the line that ran it.
+ *
+ * The panel's rule has been "a progress line per tool, not a transcript", and
+ * for reading a file that is right — nobody asked to render the file. For a
+ * command it was wrong in a way a user named exactly: three ticks, a paragraph
+ * of the model's prose, and no way to check any of it. The output *is* what
+ * they asked for.
+ *
+ * Collapsed by default so forty tool calls stay a list, open when the command
+ * failed because that is the one nobody should have to go looking for.
+ *
+ * `textContent` throughout, as everywhere else here: this is bytes a process on
+ * the user's machine wrote, which is exactly the kind of thing that must never
+ * become markup.
+ */
+function attachOutput(turn, line, output, open) {
+  const block = document.createElement("details");
+  block.className = "tool-output";
+  block.open = open === true;
+
+  const label = document.createElement("summary");
+  const lines = output.split("\n").length;
+  label.textContent = open === true ? "출력" : `출력 ${lines}줄 보기`;
+  block.appendChild(label);
+
+  const pre = document.createElement("pre");
+  pre.textContent = output;
+  block.appendChild(pre);
+
+  line.insertAdjacentElement("afterend", block);
   scrollToEnd();
 }
 
@@ -453,6 +509,12 @@ function renderEvent(event) {
       const line = stepLine("·", event.summary);
       turn.steps.set(event.callId, line);
       turn.node.insertBefore(line, turn.activity);
+      // Whatever prose came before this step is now finished, so the next delta
+      // starts a fresh paragraph *after* the step rather than being appended to
+      // the one above it. Without this every step line sank below every
+      // sentence, and the transcript read as an essay followed by a list of
+      // ticks — the reader could not tell which sentence went with which call.
+      openProse(turn);
       setActivity(turn, event.summary);
       break;
     }
@@ -482,6 +544,10 @@ function renderEvent(event) {
       if (!line || line.className !== "step") break;
       line.firstChild.textContent = event.ok ? "✓" : "!";
       if (!event.ok) line.className = "step failed";
+      // The output, when the tool asked for it to be shown. Open on failure and
+      // closed on success: a command that worked is a tick, and a command that
+      // did not is the thing the user needs to read without hunting for it.
+      if (event.output) attachOutput(turn, line, event.output, !event.ok);
       break;
     }
 
