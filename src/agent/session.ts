@@ -12,6 +12,7 @@ import { CheckpointManager, type Checkpoint } from "./checkpoint.ts";
 import { AgentLoop } from "./loop.ts";
 import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
+import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
 import type {
@@ -63,6 +64,15 @@ export interface AgentSessionOptions {
    * unprobed model is given the benefit of the doubt.
    */
   vision?: Tristate;
+  /**
+   * Reading the web. On unless explicitly disabled.
+   *
+   * Nothing here sends the HASA key or reaches a private address — see
+   * `web/address.ts` — and a fetched page arrives marked as untrusted. The
+   * switch exists because a workspace may be somewhere the network is not
+   * wanted at all, and that is the user's call rather than this file's.
+   */
+  web?: WebToolOptions & { enabled?: boolean };
   /** Restricts writes to these path prefixes. Reads stay workspace-wide. */
   writeScope?: string[];
   /**
@@ -181,6 +191,10 @@ export class AgentSession {
       ...(this.opts.media === undefined
         ? []
         : createMediaTools({ ...this.opts.media, sandbox: this.sandbox })),
+      // Every mode gets these, including the read-only ones: looking something
+      // up is reading, and ARCHITECT planning against a library it half
+      // remembers is the failure this exists to prevent.
+      ...(this.opts.web?.enabled === false ? [] : createWebTools(this.opts.web)),
     ]);
     return all.withCeiling(definition.maxRisk);
   }
