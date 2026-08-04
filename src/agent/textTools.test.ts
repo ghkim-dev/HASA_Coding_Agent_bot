@@ -70,11 +70,30 @@ describe("the instructions", () => {
   test("name every tool and every parameter", () => {
     const text = renderToolInstructions(tools);
     for (const tool of tools) {
-      assert.match(text, new RegExp(`<${tool.name}>`), tool.name);
+      assert.match(text, new RegExp(`## ${tool.name}\\b`), tool.name);
       for (const param of Object.keys((tool.parameters as { properties: object }).properties)) {
-        assert.match(text, new RegExp(`<${param}>`), `${tool.name}.${param}`);
+        assert.match(text, new RegExp(`- ${param}\\b`), `${tool.name}.${param}`);
       }
     }
+  });
+
+  test("only the example is tag-shaped, so the skeleton cannot be copied", () => {
+    // This replaced an assertion that every parameter appeared as `<name>`. That
+    // rendering made the reference section the nearest tag-shaped text in the
+    // prompt, and a model copies the nearest pattern: `qwen3-coder` answered
+    // with the empty skeleton — a perfectly formed call carrying nothing, which
+    // parsed and then had to be refused.
+    const text = renderToolInstructions(tools);
+    const reference = text.slice(text.indexOf("# Tools"));
+    assert.doesNotMatch(reference, /<[a-z_]+>/i, "the reference section must contain no tags to copy");
+    assert.match(text, /<read_file>/, "the example still shows the shape");
+  });
+
+  test("the example carries real values, not an ellipsis", () => {
+    // A model that copies the example copies whatever is inside the tags.
+    const text = renderToolInstructions(tools);
+    assert.doesNotMatch(text, /<path>…<\/path>/);
+    assert.match(text, /<path>[^<…]+<\/path>/);
   });
 
   test("say that values are literal, because that is the whole reason for XML", () => {
@@ -85,7 +104,7 @@ describe("the instructions", () => {
 
   test("the example uses a real tool rather than a placeholder", () => {
     const text = renderToolInstructions(tools);
-    assert.match(text, /<read_file>\n<path>…<\/path>\n<\/read_file>/);
+    assert.match(text, /<read_file>\n<path>src\/main\.py<\/path>\n<\/read_file>/);
   });
 
   test("no tools means no instructions at all", () => {

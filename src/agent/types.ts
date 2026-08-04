@@ -185,6 +185,14 @@ export type AgentEvent =
   | { type: "tool_start"; callId: string; name: string; risk: ToolRisk; summary: string }
   | { type: "tool_approval"; callId: string; name: string; outcome: ApprovalOutcome }
   | { type: "tool_end"; callId: string; name: string; ok: boolean; detail: string }
+  /**
+   * The agent's plan and where it is in it.
+   *
+   * Sent whole each time it changes, so the panel renders state rather than
+   * accumulating a log. See `tools/planTool.ts` for why this is a tool call and
+   * not something inferred from the model's prose.
+   */
+  | { type: "plan"; steps: string[]; current: number }
   | { type: "checkpoint"; ref: string | null; detail: string }
   | { type: "changed"; files: string[] }
   | { type: "done"; reason: AgentStopReason; summary: string }

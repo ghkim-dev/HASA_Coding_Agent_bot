@@ -144,6 +144,24 @@ select {
  */
 .step.activity { opacity: 1; color: var(--vscode-textLink-foreground); }
 
+/*
+ * The plan. Set apart from the prose because it is state, not narrative — it is
+ * rewritten in place while everything around it accumulates.
+ */
+.plan {
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-panel-border));
+  background: var(--vscode-textBlockQuote-background, transparent);
+  border-radius: 3px;
+}
+.plan-step { display: flex; gap: 0.4rem; align-items: baseline; line-height: 1.5; font-size: 0.95em; }
+.plan-step .icon { width: 1.2em; flex-shrink: 0; }
+/* Done recedes, now is emphasised, next is legible but clearly not started. */
+.plan-step.done { opacity: 0.55; text-decoration: line-through; text-decoration-thickness: 1px; }
+.plan-step.now { opacity: 1; font-weight: 600; color: var(--vscode-textLink-foreground); }
+.plan-step.next { opacity: 0.75; }
+
 .notice {
   padding: 8px 12px;
   border-radius: 6px;

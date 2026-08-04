@@ -13,6 +13,7 @@ import { AgentLoop } from "./loop.ts";
 import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
+import { createPlanTool } from "./tools/planTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
 import type {
@@ -211,6 +212,9 @@ export class AgentSession {
       // up is reading, and ARCHITECT planning against a library it half
       // remembers is the failure this exists to prevent.
       ...(this.opts.web?.enabled === false ? [] : createWebTools(this.opts.web)),
+      // Also every mode. ARCHITECT plans for a living, and a user watching ASK
+      // read six files deserves the same answer to "what is it doing".
+      createPlanTool({ onPlan: (event) => this.opts.onEvent?.(event) }),
     ]);
     return all.withCeiling(definition.maxRisk);
   }

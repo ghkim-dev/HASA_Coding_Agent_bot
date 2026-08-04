@@ -69,6 +69,24 @@ function describeParameters(tool: ToolDescriptor): Array<{ name: string; require
 }
 
 /**
+ * A plausible value for the example, by parameter name.
+ *
+ * An ellipsis was what the example used, and a model that copies the example
+ * copies the ellipsis. Anything concrete is better; matching the name is better
+ * still, because it also demonstrates what kind of thing the parameter wants.
+ */
+function placeholderFor(name: string): string {
+  if (/path|file/i.test(name)) return "src/main.py";
+  if (/command|cmd/i.test(name)) return "python src/main.py";
+  if (/url/i.test(name)) return "https://example.com/docs";
+  if (/quer|search/i.test(name)) return "blip2 image captioning example";
+  if (/prompt|description/i.test(name)) return "a lion in a forest";
+  if (/current|index|count|limit|seconds|number/i.test(name)) return "1";
+  if (/steps|plan/i.test(name)) return "패키지를 설치한다\n예제를 실행한다";
+  return "값을 여기에 씁니다";
+}
+
+/**
  * The section appended to the system prompt.
  *
  * Written as instructions rather than as a schema dump because that is what the
@@ -78,12 +96,24 @@ function describeParameters(tool: ToolDescriptor): Array<{ name: string; require
 export function renderToolInstructions(tools: readonly ToolDescriptor[]): string {
   if (tools.length === 0) return "";
 
+  // Parameters are described, not drawn as tags.
+  //
+  // They used to be rendered as an empty tag pair per parameter, which made the
+  // reference section the nearest tag-shaped thing in the prompt — and a model
+  // copies the nearest pattern. Measured on `qwen3-coder`, which answered with
+  // the skeleton and nothing in it:
+  //
+  //   <update_plan>\n  <steps>\n    </steps>\n  <current></current>\n</update_plan>
+  //
+  // A perfectly formed call carrying no information, which parsed, and which the
+  // tool then had to refuse. Now the only tag-shaped text in the prompt is one
+  // example with real values in it.
   const blocks = tools.map((tool) => {
     const params = describeParameters(tool);
     const lines = params.map(
-      (p) => `  <${p.name}>${p.required ? "" : "  (optional)"}</${p.name}>  ${p.description}`,
+      (p) => `- ${p.name}${p.required ? "" : " (optional)"} — ${p.description}`,
     );
-    return [`## ${tool.name}`, tool.description, "", `<${tool.name}>`, ...lines, `</${tool.name}>`].join("\n");
+    return [`## ${tool.name}`, tool.description, "", "Parameters:", ...lines].join("\n");
   });
 
   const example = tools[0];
@@ -103,12 +133,14 @@ Rules:
 - A value that spans lines starts on the line after the opening tag and ends on
   the line before the closing tag.
 - Use the exact tool and parameter names below. Nothing else is a tool.
+- Every parameter must contain a real value. An empty tag is not a call — it is a
+  call that does nothing, and it will be refused.
 - When you have finished and need no more tools, reply with prose and no call.
 
-Example:
+Example of the shape, with values filled in:
 
 <${example?.name ?? "read_file"}>
-${exampleParams.map((p) => `<${p.name}>…</${p.name}>`).join("\n")}
+${exampleParams.map((p) => `<${p.name}>${placeholderFor(p.name)}</${p.name}>`).join("\n")}
 </${example?.name ?? "read_file"}>
 
 # Tools

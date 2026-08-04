@@ -194,6 +194,49 @@ function openAgentTurn() {
   return current;
 }
 
+/**
+ * The plan, rewritten in place each time it changes.
+ *
+ * State rather than a log: the model sends the whole list every time, so the
+ * block is rebuilt rather than appended to. Three marks, and the third is the
+ * one that was missing — a user could see what had been done and what was
+ * happening, but never what the agent intended to do next.
+ *
+ * It sits above the prose and stays there for the turn, because "what is
+ * happening" is a question asked at arbitrary moments, and an answer that has
+ * scrolled away is not an answer.
+ */
+function renderPlan(turn, steps, current) {
+  if (!turn.plan) {
+    turn.plan = document.createElement("div");
+    turn.plan.className = "plan";
+    turn.node.insertBefore(turn.plan, turn.body);
+  }
+  turn.plan.textContent = "";
+
+  for (const [index, step] of steps.entries()) {
+    const position = index + 1;
+    const done = position < current;
+    const now = position === current;
+    const line = document.createElement("div");
+    line.className = done ? "plan-step done" : now ? "plan-step now" : "plan-step next";
+
+    const mark = document.createElement("span");
+    mark.className = "icon";
+    mark.textContent = done ? "✓" : now ? "▸" : "·";
+    const label = document.createElement("span");
+    label.textContent = step;
+    line.append(mark, label);
+    turn.plan.appendChild(line);
+  }
+
+  // The current step is also what the activity line should be counting against:
+  // "생각하는 중" is true and useless once there is a plan saying what for.
+  const step = steps[current - 1];
+  if (step !== undefined) setActivity(turn, step);
+  scrollToEnd();
+}
+
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
 
 /** Keeps the activity line moving, so a long step reads as slow rather than dead. */
@@ -391,6 +434,10 @@ function renderEvent(event) {
 
     case "step":
       setActivity(turn, "생각하는 중");
+      break;
+
+    case "plan":
+      renderPlan(turn, event.steps, event.current);
       break;
 
     case "tool_start": {
