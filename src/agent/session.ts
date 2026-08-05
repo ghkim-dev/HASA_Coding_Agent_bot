@@ -115,6 +115,14 @@ export class AgentSession {
    * better to send them.
    */
   private eventSink: ((event: AgentEvent) => void) | null = null;
+  /**
+   * What the last turn added to the model's history.
+   *
+   * Observed across the turn rather than derived from anything: `SessionEvent`
+   * and `ProviderMessage` are not interconvertible, and a reconstruction would
+   * be a guess written into a record the model is later asked to trust.
+   */
+  private lastDelta: ProviderMessage[] = [];
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -272,6 +280,21 @@ export class AgentSession {
     };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];
 
+    // The turn's boundary, taken here and not inferred later.
+    //
+    // Here specifically: after the system message has been re-seeded, so the
+    // delta never contains one. A system prompt belongs to the mode a turn ran
+    // in, and restoring an old one into a branch would hand the model a prompt
+    // for a mode the user has since left.
+    //
+    // Indexing is sound because the array is append-only from this point: every
+    // mutation `AgentLoop` makes is a `push` — six of them, no splice, no
+    // assignment, no reordering — and nothing else touches `this.messages`
+    // during a turn. `session.test.ts` asserts that prefix rather than assuming
+    // it, because the moment it stops being true this arithmetic starts
+    // producing histories that never existed.
+    const deltaStart = this.messages.length;
+
     // Attachments become part of the user's message rather than a separate
     // one, so a model that only reads the last message still sees the file the
     // question is about. What could not be sent is returned rather than
@@ -302,6 +325,15 @@ export class AgentSession {
     try {
       return await loop.run(this.messages, signal);
     } finally {
+      // Taken in `finally` so an aborted or failed turn still records what the
+      // model actually read. A turn that timed out mid-tool-call is a turn that
+      // happened, and dropping its history would leave the graph claiming the
+      // conversation went somewhere it did not.
+      //
+      // Copied, not referenced: the loop keeps pushing into this same array on
+      // the next turn, and a stored delta that grows afterwards is a record
+      // that rewrites itself.
+      this.lastDelta = structuredClone(this.messages.slice(deltaStart));
       // Grants scoped to a turn expire here. A session-scoped one does not, and
       // that difference is the whole point of "항상 허용" — a fresh turn is not a
       // fresh conversation.
@@ -349,5 +381,18 @@ export class AgentSession {
   /** Read-only view, for a transcript or a test. */
   history(): readonly ProviderMessage[] {
     return this.messages;
+  }
+
+  /**
+   * What the last turn added to the model's history, and only that turn.
+   *
+   * Taken rather than read: a delta belongs to the turn that produced it, and
+   * leaving it available would let a second reader attribute it to a turn that
+   * did not.
+   */
+  takeMessageDelta(): ProviderMessage[] {
+    const delta = this.lastDelta;
+    this.lastDelta = [];
+    return delta;
   }
 }

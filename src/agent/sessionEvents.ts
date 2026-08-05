@@ -1,4 +1,9 @@
 import type { ToolRisk } from "./types.ts";
+import type {
+  ConversationBranch,
+  ConversationCheckpoint,
+  ConversationTurn,
+} from "./conversationGraph.ts";
 
 /**
  * What a conversation is made of, once the streaming is over.
@@ -25,7 +30,17 @@ import type { ToolRisk } from "./types.ts";
  * be rendered by the same code instead of two that drift.
  */
 
-export const SESSION_SCHEMA_VERSION = 2;
+/**
+ * The on-disk generation.
+ *
+ * 2 stored a flat event log beside the model's messages. 3 groups both into
+ * turns, because a branch needs to move the two together and a flat pair cannot
+ * say where one turn ended — see `conversationGraph.ts`.
+ */
+export const SESSION_SCHEMA_VERSION = 3;
+
+/** Kept so a v2 reader's expectations are named rather than implied by a number. */
+export const SESSION_SCHEMA_V2 = 2;
 
 /** Coarse phase of a reasoning summary, when the runtime can tell. */
 export type ReasoningPhase = "analysis" | "planning" | "execution" | "verification";
@@ -188,14 +203,43 @@ export interface PersistedSession {
   title: string;
   createdAt: number;
   updatedAt: number;
-  events: SessionEvent[];
+
   /**
-   * The model messages, kept alongside the events.
+   * The conversation itself, as a graph of turns.
    *
-   * The events are for the user and the messages are for the model, and neither
-   * reconstructs the other faithfully: a tool result is summarised for a person
-   * and verbatim for a model, and an event log replayed as a prompt would feed
-   * it a different conversation than it had. So both are stored.
+   * This is the only thing written to disk in v3. A turn owns both halves — the
+   * events the user saw and the messages the model read — so the two cannot be
+   * restored to different points, which is the failure the whole graph exists to
+   * prevent.
    */
+  turns: ConversationTurn[];
+  branches: ConversationBranch[];
+  checkpoints: ConversationCheckpoint[];
+  /** Which branch the next turn extends. `MAIN_BRANCH_ID` unless forked. */
+  activeBranchId: string;
+
+  /**
+   * The active branch, flattened — derived on read, never stored.
+   *
+   * Both halves are here because neither reconstructs the other faithfully: a
+   * tool result is summarised for a person and verbatim for a model, and an
+   * event log replayed as a prompt would feed it a different conversation than
+   * it had. v2 stored both side by side, which meant two arrays that could
+   * disagree; v3 stores the turns and computes these from them, so they cannot.
+   */
+  events: SessionEvent[];
   messages: unknown[];
 }
+
+/**
+ * What a writer must supply.
+ *
+ * The graph fields are optional so a caller holding only the flat pair — a v2
+ * writer, a test — still writes a valid file: `writeSession` folds what it is
+ * given into a single turn rather than refusing it.
+ */
+export type SessionFileInput = Omit<
+  PersistedSession,
+  "turns" | "branches" | "checkpoints" | "activeBranchId"
+> &
+  Partial<Pick<PersistedSession, "turns" | "branches" | "checkpoints" | "activeBranchId">>;

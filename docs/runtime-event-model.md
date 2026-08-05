@@ -76,23 +76,33 @@ Replay                 │
 
 ```ts
 interface PersistedSession {
-  version: 2;
+  version: 3;
   id: string;
   title: string;
   createdAt: number;
   updatedAt: number;
-  events: SessionEvent[];   // 사용자가 본 것
-  messages: unknown[];      // 모델이 읽을 것
+
+  turns: ConversationTurn[];          // 디스크에 실제로 쓰이는 것
+  branches: ConversationBranch[];
+  checkpoints: ConversationCheckpoint[];
+  activeBranchId: string;
+
+  events: SessionEvent[];   // 사용자가 본 것 ─┐ 읽을 때 turns에서
+  messages: unknown[];      // 모델이 읽을 것 ─┘ 계산된다. 저장되지 않는다.
 }
 ```
 
-**두 배열을 모두 저장한다.** 어느 쪽도 다른 쪽을 충실히 복원하지 못한다 — 도구 결과는 사람에게는 요약이고 모델에게는 원문이며, 이벤트 로그를 프롬프트로 재생하면 모델이 실제로 나눈 것과 다른 대화를 읽게 된다.
+**두 배열은 여전히 둘 다 필요하다.** 어느 쪽도 다른 쪽을 충실히 복원하지 못한다 — 도구 결과는 사람에게는 요약이고 모델에게는 원문이며, 이벤트 로그를 프롬프트로 재생하면 모델이 실제로 나눈 것과 다른 대화를 읽게 된다.
+
+**하지만 v3는 둘을 나란히 저장하지 않는다.** v2는 평평한 두 배열이었고, 그러면 둘이 어긋날 자리가 생긴다. v3는 turn을 저장하고 두 배열은 읽을 때 같은 chain 순회에서 함께 계산한다. "화면과 모델이 같이 움직인다"가 지켜야 하는 규칙이 아니라 코드의 성질이 된다. 자세한 것은 [conversation-graph.md](conversation-graph.md).
 
 `version`은 장식이 아니라 검사된다. `modelCache.ts`와 capability matrix가 쓰는 것과 같은 방식으로, 모르는 번호를 만나면 추측하지 않고 거부한다.
 
 ### 마이그레이션
 
-v1(`{ id, title, createdAt, updatedAt, messages }`)은 읽을 때 v2로 변환된다. 메시지 배열이 실제로 담고 있던 것 — 텍스트와 도구 호출·결과 — 만 이벤트가 되고, **담고 있지 않던 것은 만들어내지 않는다.** 계획이나 종료 사유를 추측해 채우면 일어난 적 없는 일을 사용자 기록에 적는 셈이다.
+v1(`{ id, title, createdAt, updatedAt, messages }`)과 v2는 읽을 때 v3로 변환된다. 메시지 배열이 실제로 담고 있던 것 — 텍스트와 도구 호출·결과 — 만 이벤트가 되고, **담고 있지 않던 것은 만들어내지 않는다.** 계획이나 종료 사유를 추측해 채우면 일어난 적 없는 일을 사용자 기록에 적는 셈이다.
+
+같은 이유로 **v1/v2는 turn 하나가 된다.** 이벤트에는 `turnId`가 있지만 메시지에는 없어서, 모델 히스토리가 어디서 나뉘었는지는 어디에도 기록되어 있지 않다. `role: "user"`로 쪼개는 것은 추측이고, 추측한 경계에서 분기하면 존재한 적 없는 context가 복원된다. turn 하나면 대화는 그대로 이어지고 중간 분기점은 제공되지 않는다 — 그것이 그 파일에 대한 사실이다.
 
 ## 5. 종료 사유
 
@@ -138,9 +148,15 @@ interface TruncationMeta {
 
 `read_file`은 256KB 초과 파일을 거부하는 대신 첫 chunk와 다음 호출(`startLine`)을 돌려준다. 재시도 루프를 설계 단계에서 없애는 쪽이 나중에 감지하는 것보다 낫다.
 
-## 8. 앞으로
+## 8. Turn Graph
 
-`turnId`가 모든 이벤트에 있는 것은 분기 히스토리를 나중에 또 한 번의 마이그레이션 없이 얹기 위해서다. checkpoint는 turn이고, fork는 부모가 직전 turn이 아닌 turn이다. **이 문서의 어떤 것도 그것을 구현하지 않고, 어떤 것도 그것을 막지 않는다.**
+`turnId`가 모든 이벤트에 있던 것은 분기 히스토리를 또 한 번의 마이그레이션 없이 얹기 위해서였다. v3가 그것을 얹었다 — checkpoint는 turn이고, fork는 부모가 직전 turn이 아닌 turn이다.
+
+한 Turn은 **양쪽 절반을 모두** 소유한다. 화면(`events`)과 모델이 추가로 읽은 것(`messageDelta`)이 같은 레코드에 있으므로, 하나만 되돌리는 배치가 존재하지 않는다.
+
+Turn 경계는 **실제 사용자 상호작용 지점**(`AgentSession.send`)에서 만들어지며 메시지에서 추론되지 않는다. `role: "user"`는 프로토콜 역할이지 사람에 대한 주장이 아니다 — 루프는 모델이 행동을 예고하고 하지 않았을 때 스스로 하나를 밀어 넣는다.
+
+[conversation-graph.md](conversation-graph.md)에 전체가 있다.
 
 ## 9. 불변식
 

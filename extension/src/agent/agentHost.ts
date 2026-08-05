@@ -16,7 +16,7 @@ import { createHasaProvider } from "../../../src/provider/hasa/createProvider.ts
 import { describeVerification, verifyModels } from "../../../src/provider/hasa/verifyModels.ts";
 import { FileModelCache } from "../../../src/provider/modelCache.ts";
 import { ProviderError } from "../../../src/provider/errors.ts";
-import type { ModelListing, ProviderValidation } from "../../../src/provider/types.ts";
+import type { ModelListing, ProviderMessage, ProviderValidation } from "../../../src/provider/types.ts";
 import type { CommandSpec } from "../../../src/protocol/index.ts";
 import type { RuntimeGap } from "../../../src/agent/discoverCommands.ts";
 import { HasaCatalog, canConverse, offerForConversation } from "../../../src/provider/hasa/hasaCatalog.ts";
@@ -33,6 +33,7 @@ import {
 } from "../../../src/agent/conversationStore.ts";
 import type { Attachment, AttachmentOutcome } from "../../../src/agent/attachments.ts";
 import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
+import { completedTurn } from "../../../src/agent/conversationGraph.ts";
 import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
 import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
@@ -164,6 +165,17 @@ export class AgentHost {
    * conversation used to lose.
    */
   private recorded: SessionEvent[] = [];
+  /**
+   * Events from a turn that could not be written to one.
+   *
+   * A turn that dies before its session exists has no delta to pair with, and a
+   * turn on disk owns both halves or neither. Rather than write half a turn or
+   * throw the user's own message away, its events wait here and join the next
+   * turn that does land.
+   */
+  private pendingEvents: SessionEvent[] = [];
+  /** Its other half. The two are held and released together or not at all. */
+  private pendingDelta: ProviderMessage[] = [];
   /** Turn counter, so event ids are unique and ordered within a conversation. */
   private turnOrdinal = 0;
   private mode: AgentMode = "code";
@@ -301,6 +313,10 @@ export class AgentHost {
     this.conversations = null;
     this.conversationId = null;
     this.recorded = [];
+    // Held events belong to the old key's history and must not be written into
+    // the new one's.
+    this.pendingEvents = [];
+    this.pendingDelta = [];
     this.turnOrdinal = 0;
     // The catalogue is public and key-independent, but a new key may reach a
     // different gateway, so it is re-read rather than carried across.
@@ -819,14 +835,27 @@ export class AgentHost {
     // the live panel and a reopened conversation are projections of what it
     // wrote — which is what stops the two disagreeing.
     this.conversationId ??= newConversationId(Date.now(), Math.random);
-    const recorder = new TurnRecorder({ turnId: `${this.conversationId}-${this.turnOrdinal++}` });
-    this.recorded.push(...recorder.userMessage(prompt, attachments.map((a) => ({ name: a.name, kind: a.kind }))));
+    const turnId = `${this.conversationId}-${this.turnOrdinal++}`;
+    const recorder = new TurnRecorder({ turnId });
+    const startedAt = Date.now();
+
+    // The turn's own events, kept apart from the running log. `this.recorded` is
+    // what the panel draws — every turn of the conversation — while a turn on
+    // disk owns only its own, so that restoring to it restores exactly the
+    // screen that turn ended with.
+    const turnEvents: SessionEvent[] = [];
+    const keep = (events: readonly SessionEvent[]): void => {
+      turnEvents.push(...events);
+      this.recorded.push(...events);
+    };
+    keep(recorder.userMessage(prompt, attachments.map((a) => ({ name: a.name, kind: a.kind }))));
 
     const forward = (event: AgentEvent): void => {
-      this.recorded.push(...recorder.record(event));
+      keep(recorder.record(event));
       onEvent(event);
     };
 
+    let outcome: AgentTurnResult | null = null;
     try {
       this.phase("준비하는 중");
       const session = await this.ensureSession(forward);
@@ -846,7 +875,8 @@ export class AgentHost {
         return null;
       }
       this.phase("생각하는 중");
-      return await session.send(prompt, controller.signal, attachments);
+      outcome = await session.send(prompt, controller.signal, attachments);
+      return outcome;
     } finally {
       // The turn's own events are already in `this.recorded` via `forward`.
       clearTimeout(wholeTurn);
@@ -854,8 +884,9 @@ export class AgentHost {
       this.phase = null;
       // Saved even when the turn failed or was cancelled: what the user typed
       // is theirs, and losing it because the gateway was down would be its own
-      // small betrayal.
-      await this.persist();
+      // small betrayal. An abnormal ending is a real turn — it is written with
+      // the state it actually reached rather than dropped.
+      await this.persistTurn({ id: turnId, startedAt, events: turnEvents, outcome });
     }
   }
 
@@ -931,14 +962,22 @@ export class AgentHost {
 
     const session = await this.ensureSession(() => {});
     if (session === null) return false;
+    // Both halves, from the same graph traversal. The model is put back to the
+    // branch head and the screen is drawn from the same chain of turns, so a
+    // reopened conversation cannot show one point while the model holds another.
     session.restore(stored.messages);
     this.conversationId = stored.id;
-    // The events come back with the conversation, so the next turn appends to
-    // what the user is looking at rather than starting a log that disagrees
-    // with the screen. The turn counter continues past what is already there.
     this.recorded = [...(stored.events ?? [])];
-    this.turnOrdinal = new Set(this.recorded.map((e) => e.turnId)).size;
-    this.log.appendLine(`[hasa] opened conversation ${id} (${this.recorded.length} events)`);
+    this.pendingEvents = [];
+    this.pendingDelta = [];
+    // Continues past the turns that exist rather than counting distinct event
+    // `turnId`s: a turn can end with no events at all, and counting those would
+    // hand the next turn an id that is already taken.
+    this.turnOrdinal = stored.turns?.length ?? new Set(this.recorded.map((e) => e.turnId)).size;
+    this.log.appendLine(
+      `[hasa] opened conversation ${id} (${stored.turns?.length ?? 0} turns, ` +
+        `${this.recorded.length} events, ${stored.messages.length} messages)`,
+    );
     return true;
   }
 
@@ -962,32 +1001,68 @@ export class AgentHost {
   }
 
   /**
-   * Writes the live conversation to disk.
+   * Writes one turn to disk.
    *
    * Called after a turn rather than during it: a turn that is still running has
-   * a history that is about to change, and saving twice is cheaper than saving
-   * something half-finished.
+   * a history that is about to change.
+   *
+   * Both halves are taken here, together. The events are what the user saw; the
+   * delta is what the model additionally read, observed from the real history
+   * across the turn rather than rebuilt from the events — the two are not
+   * interconvertible, and a reconstruction would be a guess written into a
+   * record. Taking them in one place is what makes it impossible to store a turn
+   * whose screen and whose context stopped at different moments.
    */
-  private async persist(): Promise<void> {
+  private async persistTurn(turn: {
+    id: string;
+    startedAt: number;
+    events: SessionEvent[];
+    outcome: AgentTurnResult | null;
+  }): Promise<void> {
     const store = await this.ensureConversations();
-    if (store === null || this.session === null) return;
+    const session = this.session;
 
-    const messages = [...this.session.history()];
-    if (messages.filter((m) => m.role !== "system").length === 0) return;
+    // Taken whenever there is a session, even when there is nowhere to write it.
+    // Left in place it would be discarded by the next turn, and the events it
+    // belongs with would then describe an exchange the model's stored history
+    // does not contain.
+    const delta = session === null ? [] : session.takeMessageDelta();
 
-    const now = Date.now();
-    this.conversationId ??= newConversationId(now, Math.random);
+    // Nothing to write into. Both halves are held rather than dropped, so a turn
+    // that died before its store existed still appears once the next one lands —
+    // losing what the user typed because the gateway was down would be its own
+    // small betrayal. Held together, so what comes back is still a whole turn.
+    if (store === null || session === null) {
+      this.pendingEvents.push(...turn.events);
+      this.pendingDelta.push(...delta);
+      return;
+    }
+
+    const events = [...this.pendingEvents, ...turn.events];
+    const messageDelta = [...this.pendingDelta, ...delta];
+    this.pendingEvents = [];
+    this.pendingDelta = [];
+    if (events.length === 0 && messageDelta.length === 0) return;
+
+    const completedAt = Date.now();
+    this.conversationId ??= newConversationId(completedAt, Math.random);
+
     try {
-      await store.save({
-        id: this.conversationId,
-        title: titleFrom(messages),
-        createdAt: now,
-        updatedAt: now,
-        messages,
-        // Both halves. The messages are what the model reads next turn; the
-        // events are what the user saw, and neither reconstructs the other.
-        events: this.recorded,
-      });
+      await store.appendTurn(
+        this.conversationId,
+        completedTurn({
+          id: turn.id,
+          startedAt: turn.startedAt,
+          completedAt,
+          events,
+          messageDelta,
+          reason: turn.outcome?.reason ?? null,
+        }),
+        // The title comes from the whole conversation, not from this turn: the
+        // first thing the user said is what names it, and later turns must not
+        // rename it out from under them.
+        { title: titleFrom([...session.history()]), updatedAt: completedAt },
+      );
     } catch (err) {
       // A history that cannot be written must not lose the answer on screen.
       this.log.appendLine(`[hasa] could not save the conversation: ${describe(err)}`);
@@ -997,6 +1072,8 @@ export class AgentHost {
   newConversation(): void {
     this.session?.clearHistory();
     this.recorded = [];
+    this.pendingEvents = [];
+    this.pendingDelta = [];
     this.turnOrdinal = 0;
     // A new id, so the next turn starts a new file rather than overwriting the
     // conversation the user just moved away from.

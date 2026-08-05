@@ -2,6 +2,13 @@ import type { ProviderMessage } from "../provider/types.ts";
 import { fingerprint } from "../hasa-client/redact.ts";
 import { SESSION_SCHEMA_VERSION, type SessionEvent } from "./sessionEvents.ts";
 import { readSession, writeSession } from "./sessionLog.ts";
+import {
+  MAIN_BRANCH_ID,
+  newBranch,
+  type ConversationBranch,
+  type ConversationCheckpoint,
+  type ConversationTurn,
+} from "./conversationGraph.ts";
 
 /**
  * Conversations, remembered between sessions and kept apart per key.
@@ -43,8 +50,17 @@ export interface StoredConversation {
    * steps as a person saw them, the files that changed and why the run stopped.
    * None of those fit in a `ProviderMessage`, which is why reopening a
    * conversation used to lose all of them.
+   *
+   * From v3 this is a projection of `turns` rather than a stored array, so it
+   * cannot drift from the messages beside it.
    */
   events?: SessionEvent[];
+
+  /** The graph the two arrays above are projected from. Absent only pre-v3. */
+  turns?: ConversationTurn[];
+  branches?: ConversationBranch[];
+  checkpoints?: ConversationCheckpoint[];
+  activeBranchId?: string;
 }
 
 export interface ConversationSummary {
@@ -130,7 +146,28 @@ function parse(raw: string): StoredConversation | null {
     updatedAt: session.updatedAt,
     messages: session.messages as ProviderMessage[],
     events: session.events,
+    turns: session.turns,
+    branches: session.branches,
+    checkpoints: session.checkpoints,
+    activeBranchId: session.activeBranchId,
   };
+}
+
+/** What a conversation is created with. `createdAt` is set here and only here. */
+export interface NewConversation {
+  id: string;
+  title: string;
+  createdAt: number;
+  turn: Omit<ConversationTurn, "parentTurnId">;
+}
+
+/** What may change after creation. `createdAt` is deliberately not in it. */
+export interface ConversationPatch {
+  title?: string;
+  updatedAt?: number;
+  activeBranchId?: string;
+  checkpoints?: ConversationCheckpoint[];
+  branches?: ConversationBranch[];
 }
 
 export class ConversationStore {
@@ -184,6 +221,16 @@ export class ConversationStore {
   /**
    * Writes a conversation, and drops the oldest beyond the cap.
    *
+   * `createdAt` is honoured only when the file does not yet exist. A caller
+   * passing `Date.now()` on every save — which is exactly what the host did, and
+   * why every conversation claimed to have been started seconds ago — cannot
+   * move the date of one that is already there.
+   *
+   * Prefer `createConversation` / `appendTurn` / `updateConversation`: they say
+   * which of the three things is happening, and none of them takes a `createdAt`
+   * for a conversation that has one. This stays for callers that hold a whole
+   * conversation and simply want it written.
+   *
    * The system message is stripped before storing: it is re-seeded from the
    * current mode on every turn, so keeping it would restore a stale prompt into
    * a session whose mode had since changed.
@@ -193,6 +240,118 @@ export class ConversationStore {
     const messages = conversation.messages.filter((m) => m.role !== "system");
     if (messages.length === 0) return;
 
+    const existing = await this.load(conversation.id);
+    await this.write({
+      ...conversation,
+      messages,
+      createdAt: existing?.createdAt ?? conversation.createdAt,
+    });
+  }
+
+  /**
+   * Starts a conversation.
+   *
+   * Refuses to touch one that exists: creating twice is a bug in the caller, and
+   * silently overwriting is how the first turn's date and events get lost.
+   */
+  async createConversation(input: NewConversation): Promise<void> {
+    if (!isValidId(input.id)) throw new Error(`refusing to write id ${JSON.stringify(input.id)}`);
+    if ((await this.load(input.id)) !== null) {
+      throw new Error(`conversation ${input.id} already exists`);
+    }
+    const turn: ConversationTurn = { ...input.turn, parentTurnId: null };
+    await this.write({
+      id: input.id,
+      title: input.title,
+      createdAt: input.createdAt,
+      updatedAt: turn.completedAt ?? turn.createdAt,
+      messages: [],
+      turns: [turn],
+      branches: [newBranch(MAIN_BRANCH_ID, "main", turn.id, input.createdAt)],
+      checkpoints: [],
+      activeBranchId: MAIN_BRANCH_ID,
+    });
+  }
+
+  /**
+   * Adds a turn to the end of the active branch.
+   *
+   * The parent is taken from the branch head here rather than from the caller.
+   * The store is the one place that knows where the branch actually is, so a
+   * host that lost track of it — reopened a conversation, restarted — cannot
+   * write a turn whose parent is wrong, and a wrong parent is a restore into a
+   * history that never happened.
+   *
+   * Creates the conversation when it is not there yet, so a first turn needs no
+   * separate call and `createdAt` is still set exactly once.
+   */
+  async appendTurn(
+    id: string,
+    turn: Omit<ConversationTurn, "parentTurnId">,
+    patch: ConversationPatch = {},
+  ): Promise<void> {
+    if (!isValidId(id)) throw new Error(`refusing to write id ${JSON.stringify(id)}`);
+    const existing = await this.load(id);
+
+    if (existing === null) {
+      await this.createConversation({
+        id,
+        title: patch.title ?? "새 대화",
+        createdAt: turn.createdAt,
+        turn,
+      });
+      return;
+    }
+
+    const turns = existing.turns ?? [];
+    const branches =
+      existing.branches !== undefined && existing.branches.length > 0
+        ? existing.branches
+        : [newBranch(MAIN_BRANCH_ID, "main", turns.at(-1)?.id ?? null, existing.createdAt)];
+    const activeId = existing.activeBranchId ?? MAIN_BRANCH_ID;
+    const active = branches.find((b) => b.id === activeId) ?? branches[0]!;
+
+    // Re-appending the same id replaces it rather than duplicating: a turn
+    // written twice — a retried save, a crash between write and rename — should
+    // leave one turn, and its parent should not shift under it.
+    const previous = turns.find((t) => t.id === turn.id);
+    const parentTurnId = previous?.parentTurnId ?? active.headTurnId;
+    const complete: ConversationTurn = { ...turn, parentTurnId };
+    const nextTurns = previous === undefined ? [...turns, complete] : turns.map((t) => (t.id === turn.id ? complete : t));
+
+    const at = turn.completedAt ?? turn.createdAt;
+    await this.write({
+      id,
+      title: patch.title ?? existing.title,
+      // Read from disk, not from the caller. There is no argument to this method
+      // that can move it.
+      createdAt: existing.createdAt,
+      updatedAt: patch.updatedAt ?? at,
+      messages: [],
+      turns: nextTurns,
+      branches: branches.map((b) => (b.id === active.id ? { ...b, headTurnId: complete.id, updatedAt: at } : b)),
+      checkpoints: patch.checkpoints ?? existing.checkpoints ?? [],
+      activeBranchId: active.id,
+    });
+  }
+
+  /** Changes what is not the conversation itself — its title, its branches. */
+  async updateConversation(id: string, patch: ConversationPatch): Promise<void> {
+    const existing = await this.load(id);
+    if (existing === null) return;
+    await this.write({
+      ...existing,
+      title: patch.title ?? existing.title,
+      createdAt: existing.createdAt,
+      updatedAt: patch.updatedAt ?? existing.updatedAt,
+      ...(patch.branches === undefined ? {} : { branches: patch.branches }),
+      ...(patch.checkpoints === undefined ? {} : { checkpoints: patch.checkpoints }),
+      ...(patch.activeBranchId === undefined ? {} : { activeBranchId: patch.activeBranchId }),
+    });
+  }
+
+  /** The single place a conversation file is written. */
+  private async write(conversation: StoredConversation): Promise<void> {
     await this.port.writeFile(
       `${this.dir}/${conversation.id}.json`,
       writeSession({
@@ -202,7 +361,11 @@ export class ConversationStore {
         createdAt: conversation.createdAt,
         updatedAt: conversation.updatedAt,
         events: conversation.events ?? [],
-        messages,
+        messages: conversation.messages,
+        ...(conversation.turns === undefined ? {} : { turns: conversation.turns }),
+        ...(conversation.branches === undefined ? {} : { branches: conversation.branches }),
+        ...(conversation.checkpoints === undefined ? {} : { checkpoints: conversation.checkpoints }),
+        ...(conversation.activeBranchId === undefined ? {} : { activeBranchId: conversation.activeBranchId }),
       }),
     );
     await this.prune();
