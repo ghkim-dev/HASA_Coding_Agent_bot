@@ -176,6 +176,20 @@ export class AgentHost {
   private pendingEvents: SessionEvent[] = [];
   /** Its other half. The two are held and released together or not at all. */
   private pendingDelta: ProviderMessage[] = [];
+  /**
+   * A reopened conversation's model history, waiting for a session to put it in.
+   *
+   * Reading your own history is a local operation — the file is on this machine
+   * — but continuing it needs a model, and a model needs the gateway. Those were
+   * the same step, so a gateway that was down made saved conversations
+   * unopenable: the list showed them and clicking one said "대화를 열지
+   * 못했습니다."
+   *
+   * Splitting them means the transcript is drawn from disk immediately and this
+   * holds the other half until `ensureSession` has somewhere to put it. The two
+   * still arrive together at the only moment it matters — before a turn runs.
+   */
+  private pendingRestore: ProviderMessage[] | null = null;
   /** Turn counter, so event ids are unique and ordered within a conversation. */
   private turnOrdinal = 0;
   private mode: AgentMode = "code";
@@ -314,9 +328,11 @@ export class AgentHost {
     this.conversationId = null;
     this.recorded = [];
     // Held events belong to the old key's history and must not be written into
-    // the new one's.
+    // the new one's. The same goes for a conversation waiting to be restored:
+    // it was read under the old key's scope.
     this.pendingEvents = [];
     this.pendingDelta = [];
+    this.pendingRestore = null;
     this.turnOrdinal = 0;
     // The catalogue is public and key-independent, but a new key may reach a
     // different gateway, so it is re-read rather than carried across.
@@ -624,6 +640,7 @@ export class AgentHost {
     // the answer away.
     if (this.session !== null && !this.modelNeedsRevisiting()) {
       this.session.setMode(this.mode);
+      this.applyPendingRestore(this.session);
       return this.session;
     }
 
@@ -702,7 +719,25 @@ export class AgentHost {
       onEvent,
     });
     if (carried.length > 0) this.session.restore(carried);
+    // After `carried`, deliberately. A conversation the user reopened is what
+    // they are looking at; whatever the previous session happened to hold is
+    // not, and the screen must win.
+    this.applyPendingRestore(this.session);
     return this.session;
+  }
+
+  /**
+   * Puts a reopened conversation's messages into the session that can hold them.
+   *
+   * Called on both paths out of `ensureSession` — the reused session and the
+   * rebuilt one — because a conversation opened while the gateway was down can
+   * be waiting on either.
+   */
+  private applyPendingRestore(session: AgentSession): void {
+    if (this.pendingRestore === null) return;
+    session.restore(this.pendingRestore);
+    this.log.appendLine(`[hasa] restored ${this.pendingRestore.length} message(s) into the session`);
+    this.pendingRestore = null;
   }
 
   /**
@@ -953,19 +988,28 @@ export class AgentHost {
     return store === null ? [] : store.list();
   }
 
-  /** Loads a past conversation into the live session. */
+  /**
+   * Loads a past conversation.
+   *
+   * Reading is local and stays local. This used to build a session first, which
+   * meant validating the key and fetching the model list, so a gateway that was
+   * down made every saved conversation unopenable — the history list showed them
+   * and clicking one failed. Nothing about reading a file needs a model.
+   *
+   * Both halves still move together: the events are drawn now and the messages
+   * wait in `pendingRestore` for the session that will hold them, which is
+   * installed before any turn can run.
+   */
   async openConversation(id: string): Promise<boolean> {
     const store = await this.ensureConversations();
     if (store === null) return false;
     const stored = await store.load(id);
     if (stored === null) return false;
 
-    const session = await this.ensureSession(() => {});
-    if (session === null) return false;
-    // Both halves, from the same graph traversal. The model is put back to the
-    // branch head and the screen is drawn from the same chain of turns, so a
-    // reopened conversation cannot show one point while the model holds another.
-    session.restore(stored.messages);
+    // Both halves come from the same graph traversal, so a reopened
+    // conversation cannot show one point while the model holds another.
+    this.pendingRestore = stored.messages;
+    if (this.session !== null) this.applyPendingRestore(this.session);
     this.conversationId = stored.id;
     this.recorded = [...(stored.events ?? [])];
     this.pendingEvents = [];
@@ -986,17 +1030,19 @@ export class AgentHost {
     return this.recorded;
   }
 
-  /** The messages of the open conversation, for redrawing the panel. */
-  async openConversationMessages(): Promise<readonly unknown[]> {
-    return this.session?.history() ?? [];
-  }
-
   async deleteConversation(id: string): Promise<void> {
     const store = await this.ensureConversations();
     await store?.remove(id);
     if (this.conversationId === id) {
       this.conversationId = null;
       this.session?.clearHistory();
+      // A conversation deleted before its messages reached a session must not
+      // reach one afterwards.
+      this.pendingRestore = null;
+      this.recorded = [];
+      this.pendingEvents = [];
+      this.pendingDelta = [];
+      this.turnOrdinal = 0;
     }
   }
 
@@ -1074,6 +1120,11 @@ export class AgentHost {
     this.recorded = [];
     this.pendingEvents = [];
     this.pendingDelta = [];
+    // Cleared even though `clearHistory` above looks like it covers this: when
+    // the gateway was down there is no session to clear, and a conversation
+    // opened while it was would otherwise be restored into the new one the
+    // moment a session appeared.
+    this.pendingRestore = null;
     this.turnOrdinal = 0;
     // A new id, so the next turn starts a new file rather than overwriting the
     // conversation the user just moved away from.
