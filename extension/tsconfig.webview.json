@@ -1,0 +1,37 @@
+{
+  // The webview, type checked.
+  //
+  // It was not, and that is how `message.turns` survived a rename to
+  // `message.events`: the host's type said one thing, the panel read the other,
+  // and every reopened conversation drew an empty screen while the conversation
+  // itself restored correctly underneath. Nothing could have caught it —
+  // `extension/tsconfig.json` includes `src/**/*.ts` and the panel is `.js`.
+  //
+  // Separate from the extension host's config because the two run in different
+  // worlds: this one has a DOM and no Node, and its globals come from VS Code's
+  // webview API rather than from `@types/vscode`.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    // Off deliberately. Turning it on adds ~50 findings, every one of them an
+    // unannotated DOM callback parameter, and none of them a defect. The checks
+    // that earn their place here are the ones about fields that do not exist —
+    // which is the bug this config was written for.
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    // The host types the panel's message union refers to resolve through this.
+    "types": ["node", "vscode"]
+  },
+  "include": ["media/**/*.js", "media/webview.d.ts"],
+  // Build output. esbuild writes it from the sources above, and checking it
+  // reports every finding twice — once where it can be fixed and once where it
+  // cannot.
+  "exclude": ["media/**/*.bundle.js"]
+}

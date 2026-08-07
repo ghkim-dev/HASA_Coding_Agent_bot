@@ -123,10 +123,30 @@ describe("the panel contract cannot carry a key", () => {
   test("the webview is told whether a key exists, not what it is", () => {
     // Both surfaces answer the same way, and it is the only thing either says
     // about the credential.
+    //
+    // The agent's `ConnectionState` moved from `agentHost.ts` to `chatPanel.ts`
+    // — it is a thing the panel draws, and having the boundary's types reach
+    // into the host made the whole extension part of the webview's type graph,
+    // which is why the webview could not be type checked at all. So the shape is
+    // looked for where it now lives. What is asserted is unchanged: the declared
+    // contract says whether a key exists and says nothing more.
     const arena = hostFiles.find((f) => f.name.endsWith("types.ts"));
-    const agent = hostFiles.find((f) => f.name.includes("agentHost"));
+    const boundary = hostFiles.find((f) => f.name.includes("chatPanel"));
     assert.match(arena?.text ?? "", /hasApiKey:\s*boolean/);
-    assert.match(agent?.text ?? "", /hasApiKey:\s*boolean/);
+    assert.match(boundary?.text ?? "", /hasApiKey:\s*boolean/);
+  });
+
+  test("the boundary declares the connection shape without reaching into the host", () => {
+    // The rule that keeps the above checkable. A message type that imports the
+    // host drags the gateway, the session and the filesystem into the type graph
+    // the panel is written against, and then nothing can check the panel.
+    const panel = hostFiles.find((f) => f.name.includes("chatPanel"));
+    assert.ok(panel !== undefined);
+    assert.match(panel.text, /export interface ConnectionState/);
+    assert.ok(
+      !/from\s+"\.\/agentHost\.ts"/.test(panel.text),
+      "chatPanel must not import the host — it is the boundary, not a client of it",
+    );
   });
 
   test("the state the chat panel sends is built from that boolean", () => {

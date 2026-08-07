@@ -14,7 +14,7 @@
     "serve": "node --env-file-if-exists=.env src/server/main.ts",
     "test": "node --test \"src/**/*.test.ts\"",
     "test:fuzz": "node --test \"src/**/*.fuzz.test.ts\"",
-    "typecheck": "tsc --noEmit && tsc -p extension --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p extension --noEmit && tsc -p extension/tsconfig.webview.json",
     "build:extension": "node extension/build.mjs",
     "watch:extension": "node extension/build.mjs --watch",
     "test:extension": "node extension/build.mjs && node extension/test/runTest.js"

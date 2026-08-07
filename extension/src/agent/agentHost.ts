@@ -38,6 +38,11 @@ import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
 import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
 import type { Logger } from "../../../src/hasa-client/logger.ts";
+import type { ConnectionState } from "./chatPanel.ts";
+
+// Re-exported: it started here, and callers outside the panel still ask the
+// host for it. The shape now lives at the boundary that draws it.
+export type { ConnectionState };
 
 type MediaConfig = NonNullable<AgentSessionOptions["media"]>;
 
@@ -130,13 +135,7 @@ const MODALITY_KO: Readonly<Record<string, string>> = {
   rerank: "리랭킹",
 };
 
-export interface ConnectionState {
-  hasApiKey: boolean;
-  connected: boolean;
-  detail: string;
-  modelCount: number;
-  usableModelId: string | null;
-}
+
 
 export class AgentHost {
   private readonly context: vscode.ExtensionContext;

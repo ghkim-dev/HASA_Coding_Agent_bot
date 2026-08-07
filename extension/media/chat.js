@@ -17,6 +17,8 @@
 import { parseMarkdown } from "../../src/agent/markdown.ts";
 import { reduceSession } from "../../src/agent/sessionView.ts";
 
+// `HostMessage` and `acquireVsCodeApi` come from `webview.d.ts`, which is where
+// everything this file gets from outside the page is written down.
 const vscode = acquireVsCodeApi();
 
 /**
@@ -413,7 +415,14 @@ function showArtifact(message) {
   const figure = document.createElement("figure");
   figure.className = "artifact";
 
-  const media = document.createElement(message.kind === "video" ? "video" : "img");
+  // One construction site, and the tag comes from `message.kind` — that exact
+  // shape is what `extensionBoundary.test.ts` looks for, because media that
+  // loads a URL must be built from a host message and never from model text.
+  // Splitting it into two branches to satisfy the type checker silently removed
+  // the thing the check was checking, so the cast is here and the shape stays.
+  const media = /** @type {HTMLImageElement & HTMLVideoElement} */ (
+    document.createElement(message.kind === "video" ? "video" : "img")
+  );
   media.src = message.src;
   if (message.kind === "video") {
     media.controls = true;
@@ -862,12 +871,19 @@ el.newChat.addEventListener("click", () => {
 });
 
 window.addEventListener("message", (e) => {
-  const message = e.data;
+  // Typed, so a field the host does not send is a compile error rather than an
+  // `undefined` that renders as nothing. This read `message.turns` for a
+  // message that carries `events` — the payload was renamed and this one call
+  // site was not — and every reopened conversation drew
+  // `reduceSession(undefined ?? [])`: a blank screen, silently, with the
+  // conversation correctly restored underneath it. `e.data` is `any`, so
+  // nothing was going to catch that until it was named.
+  const message = /** @type {HostMessage} */ (e.data);
   if (message.type === "state") renderState(message.state);
   else if (message.type === "event") renderEvent(message.event);
   else if (message.type === "notice") notice(message.level, message.text);
   else if (message.type === "artifact") showArtifact(message);
-  else if (message.type === "transcript") renderTranscript(message.turns);
+  else if (message.type === "transcript") renderTranscript(message.events);
 });
 
 post({ type: "ready" });

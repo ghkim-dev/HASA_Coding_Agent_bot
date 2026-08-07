@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "typeRoots": [
+      "C:/Users/IT/AppData/Local/Temp/claude/c--Users-IT-ghkim-Education-Coding-agent/d3282848-6d9d-41f5-978b-2103062b888f/scratchpad/types190/node_modules/@types"
+    ],
+    "paths": {
+      "vscode": [
+        "C:/Users/IT/AppData/Local/Temp/claude/c--Users-IT-ghkim-Education-Coding-agent/d3282848-6d9d-41f5-978b-2103062b888f/scratchpad/types190/node_modules/@types/vscode/index.d.ts"
+      ]
+    }
+  }
+}

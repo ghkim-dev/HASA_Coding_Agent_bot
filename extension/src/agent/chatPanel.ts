@@ -2,7 +2,25 @@ import * as vscode from "vscode";
 import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { MODE_DEFINITIONS } from "../../../src/agent/modes.ts";
 import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
-import type { ConnectionState } from "./agentHost.ts";
+
+/**
+ * What the panel says about the connection.
+ *
+ * Here rather than in `agentHost.ts`, which is where it started. It is a thing
+ * the panel draws, not a thing the host keeps, and having the boundary's message
+ * types reach into the host made the whole extension part of the webview's type
+ * graph — which is how checking the webview at all became impractical, which is
+ * how a field renamed on one side and not the other went unnoticed.
+ *
+ * Nothing in this file may import the host. That is the rule the boundary is.
+ */
+export interface ConnectionState {
+  hasApiKey: boolean;
+  connected: boolean;
+  detail: string;
+  modelCount: number;
+  usableModelId: string | null;
+}
 
 /**
  * The chat surface.
