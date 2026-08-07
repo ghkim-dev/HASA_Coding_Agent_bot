@@ -73,7 +73,20 @@ export class AgentController {
     this.panel = ChatPanel.show(this.context.extensionUri, (message) => {
       void this.handle(message).catch((err) => this.fail(err));
     });
+    // Cleared when the user closes the window, so `this.panel?.` means what it
+    // looks like it means. Without this the reference outlives the webview and
+    // every later post reaches a disposed one.
+    this.panel.whenClosed(() => {
+      this.panel = null;
+    });
     this.panel.reveal();
+
+    // Reopening shows what was already said. The events live in the host, not
+    // in the webview, so closing the panel lost only the pixels — but nothing
+    // redrew them, and a user who closed the panel mid-conversation came back
+    // to an empty one that was still the open conversation underneath.
+    const already = this.host.recordedEvents();
+    if (already.length > 0) this.panel.post({ type: "transcript", events: [...already] });
 
     // Checking the key on open rather than on first message: a user who typed
     // a wrong key should learn it now, not after writing a request.
@@ -152,10 +165,28 @@ export class AgentController {
     this.panel?.post({ type: "state", state: await this.state(catalogue) });
   }
 
+  /**
+   * The last place an error can go, so it must not be able to throw.
+   *
+   * It could. It posted the error to the panel, and posting to a closed panel
+   * threw, and this runs inside a `.catch` — so the throw became a fresh
+   * rejected promise with no handler left above it. An error handler that
+   * generates errors is worse than none, because the original is lost too.
+   *
+   * The log comes first for the same reason: it is the part that always works.
+   */
   private fail(err: unknown): void {
     const text = err instanceof Error ? err.message : String(err);
-    this.log.appendLine(`[hasa] ${text}`);
-    this.panel?.post({ type: "notice", level: "error", text });
+    try {
+      this.log.appendLine(`[hasa] ${text}`);
+    } catch {
+      // An output channel disposed during shutdown. Nothing left to report to.
+    }
+    try {
+      this.panel?.post({ type: "notice", level: "error", text });
+    } catch {
+      // The window is gone. The log above already has it.
+    }
   }
 
   private async handle(message: PanelMessage): Promise<void> {
@@ -305,13 +336,11 @@ export class AgentController {
     if (saved === null) return;
 
     const uri = vscode.Uri.joinPath(folder.uri, ...saved.path.split("/"));
-    panel.post({
-      type: "artifact",
-      callId: event.callId,
-      kind: saved.kind,
-      src: panel.webviewUri(uri),
-      path: saved.path,
-    });
+    // Null once the window is gone, and there is then nothing to show it in.
+    const src = panel.webviewUri(uri);
+    if (src === null) return;
+
+    panel.post({ type: "artifact", callId: event.callId, kind: saved.kind, src, path: saved.path });
   }
 
   /**

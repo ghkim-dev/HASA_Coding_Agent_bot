@@ -92,6 +92,49 @@ exports.run = async function run() {
   );
 
   results.push(
+    await test("closing the panel and reopening it does not throw", async () => {
+      // `panel.webview` does not return undefined once the panel is disposed —
+      // its getter throws. So a post after a close was a synchronous exception
+      // from a property access, and when it happened inside the error handler
+      // the rejection had nowhere left to go: "rejected promise not handled
+      // within 1 second: Error: Webview is disposed".
+      const rejections = [];
+      const onRejection = (reason) => rejections.push(reason);
+      process.on("unhandledRejection", onRejection);
+      try {
+        const chatTabs = () =>
+          vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => t.label === "HASA Coding Agent");
+
+        await vscode.commands.executeCommand("hasa.chat");
+        await new Promise((r) => setTimeout(r, 500));
+        assert.equal(chatTabs().length, 1, "the panel should be open");
+
+        await vscode.window.tabGroups.close(chatTabs());
+        await new Promise((r) => setTimeout(r, 500));
+        assert.equal(chatTabs().length, 0, "the panel should be closed");
+
+        // The part with teeth. This command redraws the panel, and the
+        // controller used to keep its reference to the closed one — so the
+        // redraw reached a disposed webview and the property access threw.
+        // Opening and closing alone never posts anything, which is why the
+        // first version of this test passed against the unfixed code.
+        await vscode.commands.executeCommand("hasa.clearApiKey");
+        await new Promise((r) => setTimeout(r, 300));
+
+        // Reopening builds a fresh panel rather than reviving the disposed one.
+        await vscode.commands.executeCommand("hasa.chat");
+        await new Promise((r) => setTimeout(r, 1500));
+        assert.equal(chatTabs().length, 1, "reopening should give exactly one panel");
+
+        const disposed = rejections.filter((r) => String(r && r.message).includes("Webview is disposed"));
+        assert.equal(disposed.length, 0, `webview-disposed rejections: ${disposed.length}`);
+      } finally {
+        process.off("unhandledRejection", onRejection);
+      }
+    }),
+  );
+
+  results.push(
     await test("the settings it contributes are readable with their defaults", () => {
       const config = vscode.workspace.getConfiguration("hasaAgent");
       assert.equal(config.get("approvalMode"), "safe", "safe must be the default");

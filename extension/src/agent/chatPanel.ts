@@ -106,6 +106,16 @@ export class ChatPanel {
   static active: ChatPanel | null = null;
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
+  /**
+   * Whether the window is gone.
+   *
+   * Tracked here because `panel.webview` does not return undefined once the
+   * panel is disposed — its getter *throws*. So every use of it after a close
+   * is a synchronous exception from a property access, which is not what the
+   * call sites look like they are doing.
+   */
+  private closed = false;
+  private onClose: (() => void) | null = null;
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, onMessage: (m: PanelMessage) => void) {
     this.panel = panel;
@@ -114,6 +124,15 @@ export class ChatPanel {
       this.panel.webview.onDidReceiveMessage((m: PanelMessage) => onMessage(m)),
       this.panel.onDidDispose(() => this.dispose()),
     );
+  }
+
+  /** Told when the window closes, so an owner stops holding a dead panel. */
+  whenClosed(listener: () => void): void {
+    this.onClose = listener;
+  }
+
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   static show(extensionUri: vscode.Uri, onMessage: (m: PanelMessage) => void): ChatPanel {
@@ -142,23 +161,43 @@ export class ChatPanel {
     return ChatPanel.active;
   }
 
+  /**
+   * Sends a message, or does nothing because there is no window.
+   *
+   * Dropping it is the whole correct behaviour. A turn that finishes after the
+   * user closed the panel has nobody to tell, and that is not a failure — the
+   * conversation is still written to disk and is still there when they come
+   * back. Throwing instead was worse than useless: `fail` posts the error it was
+   * handling, so the error handler itself threw, and the resulting rejection had
+   * nowhere left to go. That is the "Webview is disposed" in the debug console.
+   */
   post(message: HostMessage): void {
-    void this.panel.webview.postMessage(message);
+    if (this.closed) return;
+    // `postMessage` can also reject on a webview that closes mid-send, and its
+    // rejection is nobody's news.
+    void Promise.resolve(this.panel.webview.postMessage(message)).catch(() => {});
   }
 
   /** Converts a workspace file into something the webview may load. */
-  webviewUri(uri: vscode.Uri): string {
+  webviewUri(uri: vscode.Uri): string | null {
+    if (this.closed) return null;
     return this.panel.webview.asWebviewUri(uri).toString();
   }
 
   reveal(): void {
+    if (this.closed) return;
     this.panel.reveal(vscode.ViewColumn.Beside);
   }
 
   dispose(): void {
-    ChatPanel.active = null;
+    // Re-entrant by design: VS Code's `onDidDispose` calls this, and so does an
+    // owner shutting down, and the two orders both happen.
+    if (this.closed) return;
+    this.closed = true;
+    if (ChatPanel.active === this) ChatPanel.active = null;
     for (const d of this.disposables) d.dispose();
     this.panel.dispose();
+    this.onClose?.();
   }
 }
 
