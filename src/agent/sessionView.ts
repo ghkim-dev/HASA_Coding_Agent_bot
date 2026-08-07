@@ -121,6 +121,9 @@ export interface SessionView {
 const TERMINATION: Readonly<Record<RunTerminationReason, { tone: TerminationView["tone"]; label: string }>> = {
   finished: { tone: "ok", label: "작업 완료" },
   denied: { tone: "warning", label: "승인하지 않으셔서 중단했습니다" },
+  // Warning, deliberately not "ok". The whole point is that this does not look
+  // like the turn succeeded, because it did not.
+  blocked: { tone: "warning", label: "요청하신 것을 완료하지 못했습니다" },
   aborted: { tone: "warning", label: "작업을 취소했습니다" },
   timeout: { tone: "warning", label: "실행 시간 제한을 넘어 중단했습니다" },
   loop_detected: { tone: "warning", label: "같은 행동을 반복해 중단했습니다" },

@@ -14,6 +14,7 @@ import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
+import { createBlockedTool, type BlockedReport } from "./tools/blockedTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
 import type {
@@ -123,6 +124,8 @@ export class AgentSession {
    * be a guess written into a record the model is later asked to trust.
    */
   private lastDelta: ProviderMessage[] = [];
+  /** What the last turn said it could not do, when it said so. */
+  private lastBlocked: BlockedReport | null = null;
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -251,6 +254,10 @@ export class AgentSession {
       // Also every mode. ARCHITECT plans for a living, and a user watching ASK
       // read six files deserves the same answer to "what is it doing".
       createPlanTool({ onPlan: (event) => this.emit(event) }),
+      // Every mode, including the read-only ones. ARCHITECT asked to plan
+      // against a file it cannot find is blocked in exactly the same way, and
+      // the alternative to saying so is inventing a plan for a file it imagined.
+      createBlockedTool({ onBlocked: (report) => { this.lastBlocked = report; } }),
     ]);
     return all.withCeiling(definition.maxRisk);
   }
@@ -390,6 +397,13 @@ export class AgentSession {
    * leaving it available would let a second reader attribute it to a turn that
    * did not.
    */
+  /** What the last turn reported it could not do. Cleared when read. */
+  takeBlockedReport(): BlockedReport | null {
+    const report = this.lastBlocked;
+    this.lastBlocked = null;
+    return report;
+  }
+
   takeMessageDelta(): ProviderMessage[] {
     const delta = this.lastDelta;
     this.lastDelta = [];

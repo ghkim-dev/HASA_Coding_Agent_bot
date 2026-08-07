@@ -96,6 +96,14 @@ export interface ToolResult {
    */
   meta?: TruncationMeta;
   /**
+   * This call reported that the request cannot be completed; end the turn.
+   *
+   * A field rather than the loop recognising a tool by name. The loop reads what
+   * a call *reported*, the same way it reads `changes` and `meta`, so nothing in
+   * it compares a string to decide what a turn does.
+   */
+  blocked?: true;
+  /**
    * Output the *user* should see, verbatim, not just the model.
    *
    * Opt-in, and almost nothing opts in. The panel deliberately shows a progress
@@ -214,6 +222,15 @@ export type AgentStopReason =
   | "aborted"
   /** The user refused something the agent needed. */
   | "denied"
+  /**
+   * The agent could not do part of what was asked and said so.
+   *
+   * A real outcome rather than a failure of the loop. It exists because the
+   * alternative to stopping was substituting something else for what was asked
+   * and reporting the result as though it answered — which is what happened
+   * when `finished` was the only ending available.
+   */
+  | "blocked"
   /** The model asked for the same thing repeatedly and was getting nowhere. */
   | "loop_detected"
   | "error";

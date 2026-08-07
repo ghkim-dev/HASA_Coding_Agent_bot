@@ -351,6 +351,7 @@ export function assessRestorable(delta: readonly ProviderMessage[]): {
 const TURN_STATE: Readonly<Record<RunTerminationReason, TurnState>> = {
   finished: "completed",
   denied: "aborted",
+  blocked: "aborted",
   aborted: "aborted",
   timeout: "aborted",
   loop_detected: "aborted",

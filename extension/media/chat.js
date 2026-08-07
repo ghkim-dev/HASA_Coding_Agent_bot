@@ -333,6 +333,9 @@ function attachOutput(turn, line, output, open) {
  */
 const STOP_REASON = {
   denied: "요청하신 작업을 중단했습니다. 승인하지 않으신 단계가 있습니다.",
+  // Drawn like the other unfinished endings on purpose. The agent stopping to
+  // say it could not do something must not look like the agent doing it.
+  blocked: "요청하신 것을 완료하지 못했습니다. 위에 막힌 지점과 이유가 있습니다.",
   aborted: "작업을 취소했습니다.",
   timeout: "시간이 초과되어 중단했습니다. 작업을 더 작게 나누어 다시 요청해 주세요.",
   loop_detected: "같은 시도를 반복하고 있어 중단했습니다. 요청을 조금 더 구체적으로 알려 주세요.",

@@ -69,6 +69,8 @@ export type ToolCallStatus = "success" | "failed" | "denied" | "blocked" | "canc
 export type RunTerminationReason =
   | "finished"
   | "denied"
+  /** The agent reported that part of the request could not be done. */
+  | "blocked"
   | "aborted"
   | "timeout"
   | "loop_detected"
