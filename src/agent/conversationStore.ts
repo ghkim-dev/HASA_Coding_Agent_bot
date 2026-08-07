@@ -4,7 +4,10 @@ import { SESSION_SCHEMA_VERSION, type SessionEvent } from "./sessionEvents.ts";
 import { readSession, writeSession } from "./sessionLog.ts";
 import {
   MAIN_BRANCH_ID,
+  createCheckpoint,
+  forkBranch,
   newBranch,
+  removeBranch,
   type ConversationBranch,
   type ConversationCheckpoint,
   type ConversationTurn,
@@ -174,6 +177,8 @@ export class ConversationStore {
   private readonly port: ConversationStorePort;
   private readonly dir: string;
   private readonly max: number;
+  /** The tail of each conversation's write queue. See `serialize`. */
+  private readonly writing = new Map<string, Promise<void>>();
 
   constructor(opts: ConversationStoreOptions) {
     this.port = opts.port;
@@ -240,11 +245,141 @@ export class ConversationStore {
     const messages = conversation.messages.filter((m) => m.role !== "system");
     if (messages.length === 0) return;
 
-    const existing = await this.load(conversation.id);
-    await this.write({
-      ...conversation,
-      messages,
-      createdAt: existing?.createdAt ?? conversation.createdAt,
+    return this.serialize(conversation.id, async () => {
+      const existing = await this.load(conversation.id);
+      await this.write({
+        ...conversation,
+        messages,
+        createdAt: existing?.createdAt ?? conversation.createdAt,
+      });
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Branches and checkpoints
+  //
+  // Every one of these changes the conversation and nothing else. None of them
+  // touches the working tree: no `git checkout`, no `reset`, no `restore`, and
+  // nothing automatic. Switching between two lines of a conversation changes
+  // what the model has read; the files on disk are the user's, and there is no
+  // undo for taking them away.
+  // -------------------------------------------------------------------------
+
+  /** Forks a new branch at a turn. Fails rather than guessing at a bad request. */
+  async createBranch(
+    id: string,
+    input: { branchId: string; name: string; fromTurnId: string; at: number; activate?: boolean },
+  ): Promise<{ ok: true; branch: ConversationBranch } | { ok: false; reason: string }> {
+    if (!isValidId(id)) return { ok: false, reason: "없는 대화입니다." };
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) return { ok: false as const, reason: "없는 대화입니다." };
+
+      const branches = existing.branches ?? [];
+      const result = forkBranch(existing.turns ?? [], branches, {
+        id: input.branchId,
+        name: input.name,
+        fromTurnId: input.fromTurnId,
+        at: input.at,
+      });
+      if (!result.ok) return result;
+
+      await this.write({
+        ...existing,
+        updatedAt: input.at,
+        branches: [...branches, result.branch],
+        ...(input.activate === false ? {} : { activeBranchId: result.branch.id }),
+      });
+      return result;
+    });
+  }
+
+  /** Moves the conversation onto another branch. The transcript changes; files do not. */
+  async switchBranch(id: string, branchId: string, at: number): Promise<boolean> {
+    if (!isValidId(id)) return false;
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) return false;
+      if (!(existing.branches ?? []).some((b) => b.id === branchId)) return false;
+      await this.write({ ...existing, updatedAt: at, activeBranchId: branchId });
+      return true;
+    });
+  }
+
+  /**
+   * Removes a branch.
+   *
+   * Its turns stay. They are still things that happened, this graph is tens of
+   * turns rather than millions, and a user who deletes a branch by mistake has
+   * lost only a name.
+   */
+  async deleteBranch(id: string, branchId: string, at: number): Promise<{ ok: boolean; reason?: string }> {
+    if (!isValidId(id)) return { ok: false, reason: "없는 대화입니다." };
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) return { ok: false, reason: "없는 대화입니다." };
+
+      const result = removeBranch(existing.branches ?? [], branchId);
+      if (!result.ok) return { ok: false, reason: result.reason };
+
+      const active = existing.activeBranchId === branchId ? MAIN_BRANCH_ID : existing.activeBranchId;
+      await this.write({
+        ...existing,
+        updatedAt: at,
+        branches: result.branches,
+        // Standing on a branch that was just removed is not a place to be.
+        activeBranchId: active ?? MAIN_BRANCH_ID,
+      });
+      return { ok: true };
+    });
+  }
+
+  /** Bookmarks a turn. A note about the workspace, never a handle on it. */
+  async addCheckpoint(
+    id: string,
+    input: {
+      checkpointId: string;
+      turnId: string;
+      branchId: string;
+      message: string;
+      at: number;
+      metadata?: ConversationCheckpoint["metadata"];
+    },
+  ): Promise<{ ok: true; checkpoint: ConversationCheckpoint } | { ok: false; reason: string }> {
+    if (!isValidId(id)) return { ok: false, reason: "없는 대화입니다." };
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) return { ok: false as const, reason: "없는 대화입니다." };
+
+      const checkpoints = existing.checkpoints ?? [];
+      if (checkpoints.some((c) => c.id === input.checkpointId)) {
+        return { ok: false as const, reason: "이미 있는 저장 지점입니다." };
+      }
+
+      const result = createCheckpoint(existing.turns ?? [], {
+        id: input.checkpointId,
+        turnId: input.turnId,
+        branchId: input.branchId,
+        message: input.message,
+        at: input.at,
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      });
+      if (!result.ok) return result;
+
+      await this.write({ ...existing, updatedAt: input.at, checkpoints: [...checkpoints, result.checkpoint] });
+      return result;
+    });
+  }
+
+  async deleteCheckpoint(id: string, checkpointId: string, at: number): Promise<boolean> {
+    if (!isValidId(id)) return false;
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) return false;
+      const checkpoints = (existing.checkpoints ?? []).filter((c) => c.id !== checkpointId);
+      if (checkpoints.length === (existing.checkpoints ?? []).length) return false;
+      await this.write({ ...existing, updatedAt: at, checkpoints });
+      return true;
     });
   }
 
@@ -256,6 +391,11 @@ export class ConversationStore {
    */
   async createConversation(input: NewConversation): Promise<void> {
     if (!isValidId(input.id)) throw new Error(`refusing to write id ${JSON.stringify(input.id)}`);
+    return this.serialize(input.id, () => this.createUnserialized(input));
+  }
+
+  /** The create itself. Called from inside the queue, so it does not re-enter it. */
+  private async createUnserialized(input: NewConversation): Promise<void> {
     if ((await this.load(input.id)) !== null) {
       throw new Error(`conversation ${input.id} already exists`);
     }
@@ -291,18 +431,70 @@ export class ConversationStore {
     patch: ConversationPatch = {},
   ): Promise<void> {
     if (!isValidId(id)) throw new Error(`refusing to write id ${JSON.stringify(id)}`);
-    const existing = await this.load(id);
+    // Serialised per conversation. A turn finishing while the user creates a
+    // branch is two read-modify-writes over one file, and interleaved they lose
+    // whichever finished first.
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) {
+        await this.createUnserialized({
+          id,
+          title: patch.title ?? "새 대화",
+          createdAt: turn.createdAt,
+          turn,
+        });
+        return;
+      }
+      await this.appendOnto(existing, turn, patch);
+    });
+  }
 
-    if (existing === null) {
-      await this.createConversation({
-        id,
-        title: patch.title ?? "새 대화",
-        createdAt: turn.createdAt,
-        turn,
-      });
-      return;
-    }
+  /**
+   * One writer at a time, per conversation.
+   *
+   * Every write here is read-modify-write over a whole file, so two of them
+   * overlapping means the later read misses the earlier write and then
+   * overwrites it. Within a window that is the real case — a turn being
+   * persisted while the user creates a branch — and a queue removes it
+   * completely.
+   *
+   * Two VS Code windows are two processes and a queue cannot reach across them.
+   * `write` re-reads immediately before writing and retries when the file moved
+   * under it, which does not close that window but shrinks it from the length of
+   * a turn to the length of a write. Honest about it rather than silent: a lock
+   * file would close it and would also survive a crash, leaving a conversation
+   * permanently unwritable, which is the worse failure.
+   */
+  private serialize<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.writing.get(id) ?? Promise.resolve();
+    // `catch` first: one failed write must not wedge every later one behind a
+    // rejected promise.
+    const result = previous.catch(() => {}).then(work);
+    const tail = result.then(
+      () => {},
+      () => {},
+    );
+    this.writing.set(id, tail);
+    void tail.then(() => {
+      // Only when nothing queued behind this one, so the map does not grow by
+      // one entry for every conversation ever written to.
+      if (this.writing.get(id) === tail) this.writing.delete(id);
+    });
+    return result;
+  }
 
+  /**
+   * The append itself, against a conversation already read.
+   *
+   * Separated so the concurrency retry can re-run it against a freshly read
+   * conversation without repeating the create-if-absent decision.
+   */
+  private async appendOnto(
+    existing: StoredConversation,
+    turn: Omit<ConversationTurn, "parentTurnId">,
+    patch: ConversationPatch,
+  ): Promise<void> {
+    const id = existing.id;
     const turns = existing.turns ?? [];
     const branches =
       existing.branches !== undefined && existing.branches.length > 0
@@ -337,16 +529,19 @@ export class ConversationStore {
 
   /** Changes what is not the conversation itself — its title, its branches. */
   async updateConversation(id: string, patch: ConversationPatch): Promise<void> {
-    const existing = await this.load(id);
-    if (existing === null) return;
-    await this.write({
-      ...existing,
-      title: patch.title ?? existing.title,
-      createdAt: existing.createdAt,
-      updatedAt: patch.updatedAt ?? existing.updatedAt,
-      ...(patch.branches === undefined ? {} : { branches: patch.branches }),
-      ...(patch.checkpoints === undefined ? {} : { checkpoints: patch.checkpoints }),
-      ...(patch.activeBranchId === undefined ? {} : { activeBranchId: patch.activeBranchId }),
+    if (!isValidId(id)) return;
+    return this.serialize(id, async () => {
+      const existing = await this.load(id);
+      if (existing === null) return;
+      await this.write({
+        ...existing,
+        title: patch.title ?? existing.title,
+        createdAt: existing.createdAt,
+        updatedAt: patch.updatedAt ?? existing.updatedAt,
+        ...(patch.branches === undefined ? {} : { branches: patch.branches }),
+        ...(patch.checkpoints === undefined ? {} : { checkpoints: patch.checkpoints }),
+        ...(patch.activeBranchId === undefined ? {} : { activeBranchId: patch.activeBranchId }),
+      });
     });
   }
 

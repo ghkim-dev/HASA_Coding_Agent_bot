@@ -173,18 +173,84 @@ export function turnChain(turns: readonly ConversationTurn[], turnId: string): C
 }
 
 /**
+ * What is said in place of a tool result that was never recorded.
+ *
+ * Addressed to the model, because the model is who reads it. It says what
+ * happened rather than pretending the call succeeded or that it never occurred.
+ */
+export const INTERRUPTED_TOOL_RESULT =
+  "이 도구 호출은 실행이 중단되어 결과가 기록되지 않았습니다. 결과가 필요하면 다시 호출하세요.";
+
+/** A repair the restore had to make, so the panel can say so rather than hide it. */
+export interface RepairNote {
+  callId: string;
+  toolName: string;
+}
+
+/**
+ * Makes a chain continuable without changing what it says.
+ *
+ * A turn cut off between a tool call and its result leaves a history every
+ * OpenAI-compatible gateway rejects — and once a later turn is appended, the
+ * dangling call sits in the middle of the conversation rather than at its end,
+ * so the whole conversation becomes unusable rather than just its tip.
+ *
+ * The missing result is supplied, marked as interrupted, immediately after the
+ * call it answers. Three things this deliberately does not do: it does not
+ * pretend the tool succeeded, it does not delete the record that a call was
+ * attempted, and it does not touch the stored turn. The turn on disk stays the
+ * immutable copy of what was observed; this is a reading of it.
+ */
+export function repairChain(messages: readonly ProviderMessage[]): {
+  messages: ProviderMessage[];
+  repairs: RepairNote[];
+} {
+  const answered = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "tool") answered.add(message.toolCallId);
+  }
+
+  const out: ProviderMessage[] = [];
+  const repairs: RepairNote[] = [];
+  for (const message of messages) {
+    out.push(message);
+    if (message.role !== "assistant") continue;
+    for (const call of message.toolCalls ?? []) {
+      if (answered.has(call.id)) continue;
+      // Right after its own call, which is where the protocol expects it.
+      out.push({ role: "tool", toolCallId: call.id, content: INTERRUPTED_TOOL_RESULT });
+      answered.add(call.id);
+      repairs.push({ callId: call.id, toolName: call.name });
+    }
+  }
+  return { messages: out, repairs };
+}
+
+/**
  * The model's history as it stood when `turnId` finished.
  *
  * This is the invariant the whole file is for:
  *
  *   historyAfterTurn(T) === restoreMessages(turns, T)
  *
+ * …with one qualification, which is `repair`. A chain containing a tool call
+ * whose result was never recorded is not a history any gateway will accept, so
+ * by default the gap is filled with an interrupted marker. That is a departure
+ * from "exactly what the model read", and it is the smallest one available: the
+ * alternative is a conversation that cannot be continued at all. Pass
+ * `{ repair: false }` for the unaltered chain — tests and inspection want it.
+ *
  * The system message is absent, deliberately. `AgentSession.send` re-seeds it
  * from the current mode before every turn, so restoring one from the past would
  * reinstate a prompt for a mode the user may have left.
  */
-export function restoreMessages(turns: readonly ConversationTurn[], turnId: string): ProviderMessage[] {
-  return turnChain(turns, turnId).flatMap((t) => t.messageDelta);
+export function restoreMessages(
+  turns: readonly ConversationTurn[],
+  turnId: string,
+  options: { repair?: boolean } = {},
+): ProviderMessage[] {
+  const chain = turnChain(turns, turnId).flatMap((t) => t.messageDelta);
+  return options.repair === false ? chain : repairChain(chain).messages;
 }
 
 /** What the user saw, up to and including `turnId`. */
@@ -193,30 +259,29 @@ export function restoreEvents(turns: readonly ConversationTurn[], turnId: string
 }
 
 /**
- * Whether a new turn may be grown from here.
+ * Whether a new turn may be grown from here, and what it will cost.
  *
- * Every turn on the way down has to be restorable, not just the last: the model
- * is given the whole chain, so one broken link anywhere in it produces a
- * request the gateway refuses.
+ * Only two things make a point unusable, and both are structural: the turn is
+ * not there, or the graph loops. An incomplete tool call is not one of them —
+ * `repairChain` makes that continuable — so this reports it as a repair rather
+ * than a refusal.
+ *
+ * The repairs are returned rather than swallowed because the user should be
+ * told. "이어갈 수 있지만 중단된 도구 호출 1건이 표시됩니다" is a different
+ * sentence from silence, and only one of them is true.
  */
 export function canBranchFrom(
   turns: readonly ConversationTurn[],
   turnId: string,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true; repairs: RepairNote[] } | { ok: false; reason: string } {
   let chain: ConversationTurn[];
   try {
     chain = turnChain(turns, turnId);
   } catch (err) {
     return { ok: false, reason: err instanceof GraphError ? err.message : String(err) };
   }
-  const broken = chain.find((t) => !t.restorable);
-  if (broken !== undefined) {
-    return {
-      ok: false,
-      reason: broken.unrestorableReason ?? "이 시점의 모델 기록이 완전하지 않아 정확히 이어갈 수 없습니다.",
-    };
-  }
-  return { ok: true };
+  const { repairs } = repairChain(chain.flatMap((t) => t.messageDelta));
+  return { ok: true, repairs };
 }
 
 /** Turns reachable from any branch head. Used to decide what is still needed. */
@@ -366,4 +431,131 @@ export function isValidBranchName(name: string): boolean {
 /** Ids are ours and are checked before they are trusted anywhere. */
 export function isValidGraphId(id: string): boolean {
   return /^[a-z0-9][a-z0-9-]{0,63}$/i.test(id);
+}
+
+// ---------------------------------------------------------------------------
+// Branching
+// ---------------------------------------------------------------------------
+
+/**
+ * A branch is a name and a place, and nothing else.
+ *
+ * Worth stating because the word carries baggage from git, and one piece of it
+ * must not come along: **a conversation branch does not touch the working
+ * tree.** Moving between two lines of a conversation is a change of what the
+ * model has read, not a change of what is on disk. A branch switch that quietly
+ * ran `git checkout` would discard work the user never offered up, and there is
+ * no undo for that. Files are the user's business; this is only the transcript.
+ */
+
+/**
+ * Forks a branch at a turn.
+ *
+ * The fork point may be any turn in the graph, including one in the middle of
+ * another branch — that is the whole point. What it may not be is a turn that
+ * is not there, so the caller's id is checked against the graph rather than
+ * trusted.
+ */
+export function forkBranch(
+  turns: readonly ConversationTurn[],
+  branches: readonly ConversationBranch[],
+  input: { id: string; name: string; fromTurnId: string; at: number },
+): { ok: true; branch: ConversationBranch } | { ok: false; reason: string } {
+  if (!isValidGraphId(input.id)) return { ok: false, reason: `사용할 수 없는 브랜치 id입니다.` };
+  if (!isValidBranchName(input.name)) return { ok: false, reason: "사용할 수 없는 브랜치 이름입니다." };
+  if (branches.some((b) => b.id === input.id)) return { ok: false, reason: "이미 있는 브랜치입니다." };
+  if (branches.some((b) => b.name.trim() === input.name.trim())) {
+    return { ok: false, reason: "같은 이름의 브랜치가 이미 있습니다." };
+  }
+
+  const verdict = canBranchFrom(turns, input.fromTurnId);
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
+
+  return { ok: true, branch: newBranch(input.id, input.name.trim(), input.fromTurnId, input.at) };
+}
+
+/**
+ * Removes a branch.
+ *
+ * `main` is not removable. It is where a conversation starts and where a
+ * deleted branch's user has to end up; a graph with no branch at all has turns
+ * nothing points at, which is a conversation that exists and cannot be opened.
+ */
+export function removeBranch(
+  branches: readonly ConversationBranch[],
+  branchId: string,
+): { ok: true; branches: ConversationBranch[] } | { ok: false; reason: string } {
+  if (branchId === MAIN_BRANCH_ID) return { ok: false, reason: "main 브랜치는 삭제할 수 없습니다." };
+  if (!branches.some((b) => b.id === branchId)) return { ok: false, reason: "없는 브랜치입니다." };
+  return { ok: true, branches: branches.filter((b) => b.id !== branchId) };
+}
+
+/**
+ * Turns no branch reaches any more.
+ *
+ * Reported rather than deleted. A turn that only a removed branch pointed at is
+ * still a real thing that happened, and this graph is small — a conversation has
+ * tens of turns, not millions. Callers that want to reclaim the space can; the
+ * default is to keep the record.
+ */
+export function orphanedTurns(
+  turns: readonly ConversationTurn[],
+  branches: readonly ConversationBranch[],
+): string[] {
+  const reachable = reachableTurns(turns, branches);
+  return turns.filter((t) => !reachable.has(t.id)).map((t) => t.id);
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoints
+// ---------------------------------------------------------------------------
+
+/**
+ * A checkpoint is a bookmark on a turn, and only that.
+ *
+ * The `metadata` may record what the working tree looked like — the git head,
+ * the branch, which files had changed — because that is genuinely useful to see
+ * later. It is a **note about** the workspace, never a handle on it. Restoring a
+ * checkpoint moves the conversation and leaves every file alone: no `git
+ * reset`, no `checkout`, no `restore`, and nothing automatic. If a user wants
+ * their files back they have git, and they should reach for it deliberately.
+ */
+export function createCheckpoint(
+  turns: readonly ConversationTurn[],
+  input: {
+    id: string;
+    turnId: string;
+    branchId: string;
+    message: string;
+    at: number;
+    metadata?: ConversationCheckpoint["metadata"];
+  },
+): { ok: true; checkpoint: ConversationCheckpoint } | { ok: false; reason: string } {
+  if (!isValidGraphId(input.id)) return { ok: false, reason: "사용할 수 없는 체크포인트 id입니다." };
+  if (!turns.some((t) => t.id === input.turnId)) return { ok: false, reason: "없는 지점입니다." };
+
+  const message = input.message.trim();
+  if (message.length === 0) return { ok: false, reason: "저장 지점에 이름을 붙여주세요." };
+  if (message.length > 200) return { ok: false, reason: "이름이 너무 깁니다." };
+
+  return {
+    ok: true,
+    checkpoint: {
+      id: input.id,
+      turnId: input.turnId,
+      branchId: input.branchId,
+      message,
+      createdAt: input.at,
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+    },
+  };
+}
+
+/** Checkpoints whose turn is gone. Shown as unavailable rather than followed. */
+export function danglingCheckpoints(
+  turns: readonly ConversationTurn[],
+  checkpoints: readonly ConversationCheckpoint[],
+): string[] {
+  const known = new Set(turns.map((t) => t.id));
+  return checkpoints.filter((c) => !known.has(c.turnId)).map((c) => c.id);
 }

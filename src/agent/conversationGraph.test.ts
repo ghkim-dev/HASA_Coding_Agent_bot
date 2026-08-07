@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   GraphError,
+  INTERRUPTED_TOOL_RESULT,
   MAIN_BRANCH_ID,
   assessRestorable,
   canBranchFrom,
@@ -139,7 +140,7 @@ describe("G3/G4 — a damaged graph is refused, not half-restored", () => {
   });
 });
 
-describe("G5 — branching is refused where the history is incomplete", () => {
+describe("G5 — an incomplete history is repaired to continue, never silently", () => {
   const dangling: ProviderMessage[] = [
     { role: "user", content: "실행해줘" },
     {
@@ -149,27 +150,80 @@ describe("G5 — branching is refused where the history is incomplete", () => {
     },
   ];
 
-  test("a turn cut off between a tool call and its result", () => {
+  test("the turn is still marked as what it is", () => {
+    // The fact is about the stored messages and does not change. What changed
+    // is what is done about it.
     const broken = turn("b1", null, dangling);
     assert.equal(broken.restorable, false);
-    const verdict = canBranchFrom([broken], "b1");
-    assert.equal(verdict.ok, false);
-    assert.match(verdict.ok === false ? verdict.reason : "", /run_command/);
+    assert.match(String(broken.unrestorableReason), /run_command/);
   });
 
-  test("and every turn on the way down, not only the last", () => {
-    // The model is given the whole chain, so one broken link anywhere in it
-    // produces a request the gateway refuses.
+  test("continuing from it is allowed, and the repair is reported", () => {
+    const broken = turn("b1", null, dangling);
+    const verdict = canBranchFrom([broken], "b1");
+    assert.equal(verdict.ok, true);
+    assert.deepEqual(verdict.ok === true ? verdict.repairs : [], [{ callId: "x", toolName: "run_command" }]);
+  });
+
+  test("the restored history is one the gateway will accept", () => {
+    const broken = turn("b1", null, dangling);
+    const restored = restoreMessages([broken], "b1");
+
+    const result = restored.find((m) => m.role === "tool" && (m as { toolCallId: string }).toolCallId === "x");
+    assert.ok(result !== undefined, "the call must have a result");
+    assert.equal((result as { content: string }).content, INTERRUPTED_TOOL_RESULT);
+
+    // Immediately after its own call, which is where the protocol expects it.
+    const callAt = restored.findIndex((m) => m.role === "assistant");
+    assert.equal(restored.indexOf(result), callAt + 1);
+
+    // And it says what happened rather than that the tool succeeded.
+    assert.match(INTERRUPTED_TOOL_RESULT, /중단/);
+  });
+
+  test("the stored turn is not touched by the repair", () => {
+    // C1's invariant: `messageDelta` is the immutable copy of what was
+    // observed. The repair is a reading of it, not an edit to it.
+    const broken = turn("b1", null, dangling);
+    const before = structuredClone(broken.messageDelta) as ProviderMessage[];
+    restoreMessages([broken], "b1");
+    assert.deepEqual(broken.messageDelta, before);
+    assert.equal(broken.messageDelta.filter((m) => m.role === "tool").length, 0);
+  });
+
+  test("a dangling call in the middle of a conversation is repaired too", () => {
+    // Once a later turn is appended, the gap is no longer at the tip: the
+    // history reads assistant(tool_call) → user, which is rejected outright. So
+    // the whole conversation would be unusable, not just its end.
     const broken = turn("b1", null, dangling);
     const after = turn("b2", "b1", exchange("2"));
-    assert.equal(after.restorable, true, "this turn's own messages are fine");
-    assert.equal(canBranchFrom([broken, after], "b2").ok, false, "its ancestor's are not");
+    const restored = restoreMessages([broken, after], "b2");
+
+    const callAt = restored.findIndex((m) => m.role === "assistant" && (m.toolCalls ?? []).length > 0);
+    assert.equal(restored[callAt + 1]?.role, "tool", "the result must sit between the call and the next turn");
+
+    const verdict = canBranchFrom([broken, after], "b2");
+    assert.deepEqual(verdict.ok === true ? verdict.repairs : null, [{ callId: "x", toolName: "run_command" }]);
   });
 
-  test("an unknown turn is a refusal, not a throw", () => {
+  test("a whole chain needs no repair and says so", () => {
+    const verdict = canBranchFrom(LINE, "t3");
+    assert.equal(verdict.ok, true);
+    assert.deepEqual(verdict.ok === true ? verdict.repairs : null, []);
+    // Untouched, byte for byte.
+    assert.deepEqual(restoreMessages(LINE, "t3"), restoreMessages(LINE, "t3", { repair: false }));
+  });
+
+  test("an unknown turn is still a refusal, not a throw", () => {
     // Called from the UI, where a stale id should grey a button rather than
-    // break the panel.
+    // break the panel. Structure is the only thing that can refuse now.
     assert.equal(canBranchFrom(LINE, "nope").ok, false);
+  });
+
+  test("so is a cycle", () => {
+    const a = turn("a", "b", exchange("a"));
+    const b = turn("b", "a", exchange("b"));
+    assert.equal(canBranchFrom([a, b], "a").ok, false);
   });
 });
 
