@@ -76,7 +76,7 @@ class Harnessed {
   constructor(session: AgentSession, id = "conv1") {
     this.session = session;
     this.id = id;
-    this.store = new ConversationStore({ port: this.port, home: "/home", apiKey: "k" });
+    this.store = new ConversationStore({ port: this.port, home: "/home", workspaceId: "wsaaaaaaaaaaaaaaaa" });
   }
 
   async ask(prompt: string): Promise<string> {

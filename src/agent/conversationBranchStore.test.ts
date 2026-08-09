@@ -52,7 +52,7 @@ function memory(delayMs = 0): ConversationStorePort & { files: Map<string, strin
 }
 
 function store(port: ConversationStorePort): ConversationStore {
-  return new ConversationStore({ port, home: "/home", apiKey: "k" });
+  return new ConversationStore({ port, home: "/home", workspaceId: "wsaaaaaaaaaaaaaaaa" });
 }
 
 function exchange(n: string): ProviderMessage[] {

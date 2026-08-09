@@ -184,6 +184,70 @@ Branch는 이름과 위치다. Checkpoint는 turn에 붙인 북마크다. 둘 �
 
 대화별로 직렬화한다. 모든 쓰기가 파일 하나에 대한 read-modify-write이므로, 턴이 저장되는 중에 사용자가 브랜치를 만들면 먼저 끝난 쪽이 사라졌다. 창 두 개는 별도 프로세스라 큐가 못 넘는다 — 그 한계는 덮지 않고 적어두었다. 잠금 파일은 크래시하면 남아서 대화를 영구히 잠근다.
 
+## 9-2. Workspace Identity
+
+```
+WorkspaceIdentity
+       │
+       ├── Conversation
+       │      ├── Branch
+       │      │    └── Turn ── Event
+       │      └── Branch
+       │
+       └── Conversation
+```
+
+그리고 identity가 **아닌** 것:
+
+```
+Credential  ≠ WorkspaceIdentity
+Provider    ≠ WorkspaceIdentity
+Model       ≠ WorkspaceIdentity
+GitRoot     ≠ WorkspaceIdentity
+```
+
+### 무엇으로 만드는가
+
+**작업이 있는 위치**뿐이다. 정규화된 root 경로들, 그 외에는 아무것도 아니다.
+
+- **credential이 아니다.** 대화는 `fingerprint(apiKey)` 아래에 있었고, 그래서 키를 교체하면 히스토리가 비었다 — 파일은 전부 디스크에 그대로 있는데 아무도 다시 들여다보지 않을 디렉터리 아래에. 키는 *누가* 호출하는지를 말하지, *어느 프로젝트*인지는 말하지 않는다.
+- **provider·model이 아니다.** 대화 안에서 내리는 선택이고 거기에 기록된다.
+- **git root가 아니다.** workspace는 저장소가 아닐 수도 있고, 저장소를 여러 개 품을 수도 있다. `/project`에 `/project/packages/foo` 저장소가 있어도 workspace는 하나다.
+
+### 정규화
+
+같은 폴더의 다른 철자가 다른 workspace가 되면 안 된다 — 후행 구분자, `\` 대 `/`, 상대 경로, 드라이브 문자 대소문자, symlink. `realpath`가 symlink를 풀고, 나머지는 플랫폼 규칙(`path.win32` / `path.posix`)이 처리한다. 대소문자 접기는 플랫폼에 묻는다: Linux에서 접으면 실제로 다른 두 디렉터리가 합쳐지고, Windows에서 안 접으면 하나가 갈라진다.
+
+multi-root는 **정렬 후** digest한다. 사이드바에서 폴더 순서를 바꾸는 것은 보기의 변경이지 프로젝트의 변경이 아니다.
+
+### 한계 — 경로 기반
+
+프로젝트를 옮기면 identity가 바뀐다. `C:\workoo`와 `D:\projectsoo`는 다른 workspace이고, 앞의 대화는 뒤로 따라가지 않는다.
+
+내용 기반 identity는 "편집을 거쳐도 같은 프로젝트인가"를 판정해야 하는 문제이고, 그것대로 틀린 답을 낸다. 경로는 사용자가 볼 수 있고 틀렸을 때 바로 안다.
+
+## 9-3. 작업 폴더는 identity와 다르다
+
+어느 workspace인지와 어느 폴더에서 작업하는지는 다른 질문이다. 한 창이 하나의 workspace이면서 폴더를 여럿 가질 수 있다.
+
+우선순위:
+
+1. 이 대화가 이미 쓰던 root (`boundRoot`)
+2. 사용자가 명시적으로 고른 root
+3. 열려 있는 파일이 속한 root
+4. root가 하나면 그것
+5. 그 외 — **`ambiguous`. 폴더를 고르지 않는다.**
+
+1이 3보다 위인 것은 의도적이다. 아니면 사용자가 파일 하나 열어보는 것만으로 대화의 root가 움직이고, 한 대화 안에서 같은 상대 경로가 다른 파일을 뜻하게 된다.
+
+5가 이 절의 존재 이유다. 이전 코드는 다섯 곳에서 `workspaceFolders[0]`을 썼고, 폴더가 하나면 우연히 맞고 둘이면 사용자가 보지 못하는 동전 던지기였다.
+
+## 9-4. 이전 대화
+
+workspace를 알기 전에 쓰인 대화는 키 fingerprint 아래에 있고 **어느 workspace 것인지 기록된 적이 없다.** 열려 있는 폴더에 갖다 붙이는 것은 근거 없는 사실 주장이다.
+
+그래서: 목록에는 나오되(`listLegacy`), 이 workspace의 목록에는 없고, **사용자가 여는 행위가 곧 귀속**이다(`adoptLegacy`). 원본은 지우지 않는다 — 되돌릴 수 없는 이동을 대신 결정하지 않는다.
+
 ## 10. 보안
 
 - API 키 원문은 저장되지 않는다. 대화는 `fingerprint(key)` 아래에 놓이고, 이는 키로 되돌릴 수 없다.

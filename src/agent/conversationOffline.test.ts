@@ -72,11 +72,11 @@ function diskOnly(files: Record<string, string>): ConversationStorePort {
 }
 
 function storeWith(raw: string): ConversationStore {
-  const store = new ConversationStore({ port: diskOnly({}), home: "/home", apiKey: "k" });
+  const store = new ConversationStore({ port: diskOnly({}), home: "/home", workspaceId: "wsaaaaaaaaaaaaaaaa" });
   return new ConversationStore({
     port: diskOnly({ [`${store.directory}/c1.json`]: raw }),
     home: "/home",
-    apiKey: "k",
+    workspaceId: "wsaaaaaaaaaaaaaaaa",
   });
 }
 
@@ -127,14 +127,14 @@ describe("a stored conversation is readable with nothing but the disk", () => {
   });
 
   test("a corrupt file costs one conversation, not the list", async () => {
-    const store = new ConversationStore({ port: diskOnly({}), home: "/home", apiKey: "k" });
+    const store = new ConversationStore({ port: diskOnly({}), home: "/home", workspaceId: "wsaaaaaaaaaaaaaaaa" });
     const withBadFile = new ConversationStore({
       port: diskOnly({
         [`${store.directory}/c1.json`]: V1,
         [`${store.directory}/broken.json`]: "{ this is not json",
       }),
       home: "/home",
-      apiKey: "k",
+      workspaceId: "wsaaaaaaaaaaaaaaaa",
     });
     const summaries = await withBadFile.list();
     assert.deepEqual(summaries.map((s) => s.id), ["c1"]);

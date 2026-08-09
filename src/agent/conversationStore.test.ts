@@ -19,6 +19,18 @@ import {
  * check that by looking rather than by trusting.
  */
 
+/**
+ * Two workspaces, and two keys.
+ *
+ * The keys are here because the scope used to be derived from one, and the
+ * tests below now say the opposite: rotating a key must not move a
+ * conversation. They are never passed to the store — there is no longer an
+ * argument to pass them in — which is the strongest form of "the key cannot
+ * reach this module".
+ */
+const SEPARATOR = String.fromCharCode(10);
+const WS_A = "wsaaaaaaaaaaaaaaaa";
+const WS_B = "wsbbbbbbbbbbbbbbbb";
 const KEY_A = "sk-ops-lv-aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const KEY_B = "sk-ops-lv-bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -45,8 +57,13 @@ function memory(): ConversationStorePort & { files: Map<string, string> } {
   };
 }
 
-function store(port: ConversationStorePort, apiKey = KEY_A, max?: number): ConversationStore {
-  return new ConversationStore({ port, home: "/home", apiKey, ...(max === undefined ? {} : { maxConversations: max }) });
+function store(port: ConversationStorePort, workspaceId = WS_A, max?: number): ConversationStore {
+  return new ConversationStore({
+    port,
+    home: "/home",
+    workspaceId,
+    ...(max === undefined ? {} : { maxConversations: max }),
+  });
 }
 
 const user = (text: string): ProviderMessage => ({ role: "user", content: text });
@@ -73,55 +90,72 @@ describe("the key is never written down", () => {
   test("it does not appear in any file, path or content", async () => {
     const port = memory();
     await store(port).save(conversation("c1"));
-    const everything = [...port.files.entries()].flat().join("\n");
+    const everything = [...port.files.entries()].flat().join(SEPARATOR);
     assert.ok(!everything.includes(KEY_A), "the key reached disk");
     assert.ok(!everything.includes("sk-"), "something key-shaped reached disk");
   });
 
-  test("the scope cannot be turned back into the key", () => {
-    // A truncated SHA-256, not an encoding. `fingerprint` is the same helper the
-    // rest of the codebase already uses for cache keys.
-    const scope = scopeFor(KEY_A);
-    assert.match(scope, /^sha256[a-f0-9]{12}$/);
-    assert.ok(!scope.includes(KEY_A.slice(-8)));
-  });
-
-  test("the same key always lands in the same place", () => {
-    assert.equal(scopeFor(KEY_A), scopeFor(KEY_A));
+  test("the store has nowhere to put a key at all", () => {
+    // Stronger than the two above, and why they can now be brief. The scope
+    // used to be `fingerprint(apiKey)`; the constructor no longer takes a
+    // credential, so a key cannot reach a path from here because it cannot
+    // reach here. The two keys in this file are never passed to anything.
+    const scoped = store(memory());
+    assert.ok(!scoped.directory.includes(KEY_B));
+    assert.match(scoped.directory, /conversations\/ws[a-z0-9]+$/);
   });
 
   test("the scope is a safe path segment on every platform", () => {
-    // `fingerprint` returns `sha256:...`, and a colon is not a filename
-    // character on Windows.
-    assert.ok(!scopeFor(KEY_A).includes(":"));
-    assert.match(scopeFor(KEY_A), /^[a-z0-9]+$/i);
+    assert.ok(!scopeFor(WS_A).includes(":"));
+    assert.match(scopeFor(WS_A), /^[a-z0-9-]+$/i);
+  });
+
+  test("anything that is not a workspace id cannot name a directory", () => {
+    // The scope becomes a path segment, so it is checked before it is trusted.
+    for (const bad of ["../escape", "sha256abcdef012345", "", "ws/../x"]) {
+      assert.throws(() => scopeFor(bad), /refusing to scope/, JSON.stringify(bad));
+    }
   });
 });
 
-describe("one key's conversations are not another's", () => {
-  test("a second key sees none of the first key's history", async () => {
+describe("one workspace's conversations are not another's", () => {
+  // Was "one key's". The reversal is deliberate: a credential says who is
+  // calling and nothing about which project this is, and filing conversations
+  // under a key meant rotating one emptied the history — every file still on
+  // disk, under a directory nothing would look in again.
+
+  test("a second workspace sees none of the first's history", async () => {
     const port = memory();
-    await store(port, KEY_A).save(conversation("c1"));
-    assert.equal((await store(port, KEY_A).list()).length, 1);
-    assert.deepEqual(await store(port, KEY_B).list(), []);
+    await store(port, WS_A).save(conversation("c1"));
+    assert.equal((await store(port, WS_A).list()).length, 1);
+    assert.deepEqual(await store(port, WS_B).list(), []);
   });
 
   test("nor can it load one by id", async () => {
     const port = memory();
-    await store(port, KEY_A).save(conversation("c1"));
-    assert.equal(await store(port, KEY_B).load("c1"), null);
+    await store(port, WS_A).save(conversation("c1"));
+    assert.equal(await store(port, WS_B).load("c1"), null);
   });
 
-  test("different keys write to different directories", () => {
-    assert.notEqual(store(memory(), KEY_A).directory, store(memory(), KEY_B).directory);
+  test("different workspaces write to different directories", () => {
+    assert.notEqual(store(memory(), WS_A).directory, store(memory(), WS_B).directory);
   });
 
-  test("switching back to the first key finds its history intact", async () => {
+  test("switching back to the first workspace finds its history intact", async () => {
     const port = memory();
-    await store(port, KEY_A).save(conversation("c1"));
-    await store(port, KEY_B).save(conversation("c2"));
-    assert.deepEqual((await store(port, KEY_A).list()).map((c) => c.id), ["c1"]);
-    assert.deepEqual((await store(port, KEY_B).list()).map((c) => c.id), ["c2"]);
+    await store(port, WS_A).save(conversation("c1"));
+    await store(port, WS_B).save(conversation("c2"));
+    assert.deepEqual((await store(port, WS_A).list()).map((c) => c.id), ["c1"]);
+    assert.deepEqual((await store(port, WS_B).list()).map((c) => c.id), ["c2"]);
+  });
+
+  test("the same workspace is the same place whatever key is in use", async () => {
+    // There is no second argument that could make it otherwise, which is the
+    // guarantee: two stores built for one workspace are one namespace.
+    const port = memory();
+    await store(port, WS_A).save(conversation("c1"));
+    assert.deepEqual((await store(port, WS_A).list()).map((c) => c.id), ["c1"]);
+    assert.equal(store(memory(), WS_A).directory, store(memory(), WS_A).directory);
   });
 });
 
@@ -261,7 +295,7 @@ describe("ids are not trusted as paths", () => {
 describe("the history does not grow without bound", () => {
   test("the oldest are dropped past the cap", async () => {
     const port = memory();
-    const scoped = store(port, KEY_A, 3);
+    const scoped = store(port, WS_A, 3);
     for (let i = 0; i < 6; i += 1) {
       await scoped.save(conversation(`c${i}`, { updatedAt: i * 100 }));
     }

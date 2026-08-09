@@ -3,6 +3,7 @@ import {
   SESSION_SCHEMA_VERSION,
   type PersistedSession,
   type SessionEvent,
+  type PersistedWorkspace,
   type SessionFileInput,
 } from "./sessionEvents.ts";
 import {
@@ -18,6 +19,7 @@ import {
   type TurnState,
 } from "./conversationGraph.ts";
 import type { ProviderMessage } from "../provider/types.ts";
+import { isValidWorkspaceId } from "./workspaceIdentity.ts";
 
 /**
  * Reading and writing a conversation, across three on-disk generations.
@@ -333,6 +335,28 @@ export function readBranches(value: unknown, at: number): ConversationBranch[] {
   return out;
 }
 
+/**
+ * The workspace a conversation says it belongs to.
+ *
+ * Absent for anything written before workspaces existed, and absent is not
+ * "any" — see `ConversationStore.load`, which refuses a conversation whose
+ * recorded workspace is a different one and treats an absent one as legacy.
+ */
+export function readWorkspace(value: unknown): PersistedWorkspace | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = str(value["id"]);
+  if (!isValidWorkspaceId(id)) return undefined;
+  const roots = Array.isArray(value["roots"])
+    ? value["roots"].filter((r): r is string => typeof r === "string")
+    : undefined;
+  const boundRoot = str(value["boundRoot"]);
+  return {
+    id,
+    ...(roots === undefined || roots.length === 0 ? {} : { roots }),
+    ...(boundRoot.length === 0 ? {} : { boundRoot }),
+  };
+}
+
 export function readCheckpoints(value: unknown): ConversationCheckpoint[] {
   if (!Array.isArray(value)) return [];
   const out: ConversationCheckpoint[] = [];
@@ -449,6 +473,9 @@ export function readSession(raw: string): LoadedSession | null {
         branches,
         checkpoints: readCheckpoints(value["checkpoints"]),
         activeBranchId,
+        ...(readWorkspace(value["workspace"]) === undefined
+          ? {}
+          : { workspace: readWorkspace(value["workspace"])! }),
         ...project(turns, branches, activeBranchId),
       },
     };
@@ -515,6 +542,7 @@ export function writeSession(session: SessionFileInput): string {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       activeBranchId,
+      ...(session.workspace === undefined ? {} : { workspace: session.workspace }),
       branches,
       checkpoints: session.checkpoints ?? [],
       turns,

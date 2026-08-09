@@ -18,7 +18,8 @@ import type { SessionEvent } from "./sessionEvents.ts";
  * reconstruction of what they might have contained.
  */
 
-const KEY = "test-key";
+/** A workspace id of the shape `workspaceIdentity` produces. */
+const WS = "wsaaaaaaaaaaaaaaaa";
 /** Never a real key. Searched for verbatim in everything that gets written. */
 const FAKE_SECRET = "HASA_SECRET_MUST_NOT_APPEAR_123456";
 
@@ -44,7 +45,7 @@ function memory(): ConversationStorePort & { files: Map<string, string> } {
 }
 
 function store(port: ConversationStorePort): ConversationStore {
-  return new ConversationStore({ port, home: "/home", apiKey: KEY });
+  return new ConversationStore({ port, home: "/home", workspaceId: WS });
 }
 
 function exchange(n: string): ProviderMessage[] {
@@ -393,7 +394,7 @@ describe("the file holds the graph, and only the graph", () => {
 describe("the key never reaches the file", () => {
   test("no part of a written conversation contains it", async () => {
     const port = memory();
-    const s = new ConversationStore({ port, home: "/home", apiKey: FAKE_SECRET });
+    const s = new ConversationStore({ port, home: "/home", workspaceId: "wsbbbbbbbbbbbbbbbb" });
 
     await s.appendTurn("c1", {
       ...turnAt("t0", 100),

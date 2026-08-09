@@ -221,6 +221,20 @@ export interface PersistedSession {
   activeBranchId: string;
 
   /**
+   * The workspace this conversation belongs to.
+   *
+   * Optional because conversations written before workspaces existed have none,
+   * and inventing one would attach them to whichever folder happened to be open
+   * — the exact mis-binding recording this prevents.
+   *
+   * The directory already scopes conversations by workspace, so this is
+   * defence in depth: a file moved, restored from a backup or copied between
+   * machines still says where it came from, and a reader can refuse it rather
+   * than show one project's history under another's name.
+   */
+  workspace?: PersistedWorkspace;
+
+  /**
    * The active branch, flattened — derived on read, never stored.
    *
    * Both halves are here because neither reconstructs the other faithfully: a
@@ -231,6 +245,15 @@ export interface PersistedSession {
    */
   events: SessionEvent[];
   messages: unknown[];
+}
+
+/** Where a conversation was had. Paths are for a person to read. */
+export interface PersistedWorkspace {
+  id: string;
+  /** Canonical roots at the time of writing, for diagnosis rather than matching. */
+  roots?: string[];
+  /** The folder this conversation's relative paths were resolved against. */
+  boundRoot?: string;
 }
 
 /**

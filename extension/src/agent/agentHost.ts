@@ -40,6 +40,12 @@ import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
 import type { Logger } from "../../../src/hasa-client/logger.ts";
 import type { ConnectionState } from "./chatPanel.ts";
+import { canonicalizeRoot } from "../../../src/agent/workspaceIdentity.ts";
+import {
+  describeAmbiguity,
+  resolveWorkspaceContext,
+  type WorkspaceContext,
+} from "../../../src/agent/workspaceContext.ts";
 
 // Re-exported: it started here, and callers outside the panel still ask the
 // host for it. The shape now lives at the boundary that draws it.
@@ -154,6 +160,17 @@ export class AgentHost {
   /** Why the last turn could not start, when the reason is worth showing. */
   private modelProblem: string | null = null;
   private conversations: ConversationStore | null = null;
+  /** The workspace the store above was built for. See `ensureConversations`. */
+  private conversationsFor: string | null = null;
+  /**
+   * The folder this conversation settled on.
+   *
+   * Set on the first turn and kept, so the same relative path means the same
+   * file for the whole conversation. Cleared with the conversation.
+   */
+  private boundRoot: string | null = null;
+  /** A folder the user picked, when the window has several. */
+  private chosenRoot: string | null = null;
   /** The conversation being written to, so a turn appends rather than forks. */
   private conversationId: string | null = null;
   /**
@@ -333,6 +350,8 @@ export class AgentHost {
     this.pendingEvents = [];
     this.pendingDelta = [];
     this.pendingRestore = null;
+    // A new conversation may settle on a different folder than the last one did.
+    this.boundRoot = null;
     this.turnOrdinal = 0;
     // The catalogue is public and key-independent, but a new key may reach a
     // different gateway, so it is re-read rather than carried across.
@@ -631,8 +650,20 @@ export class AgentHost {
     const provider = await this.ensureProvider();
     if (provider === null) return null;
 
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (folder === undefined) return null;
+    // Resolved, never assumed. `workspaceFolders[0]` was right by accident in a
+    // one-folder window and a coin toss in any other — and the user does not see
+    // it being flipped, while every file read and command run lands on one side
+    // of it.
+    const context = await this.workspace();
+    const root = context.activeRoot;
+    if (root === null) {
+      this.modelProblem = describeAmbiguity(context) ?? "작업할 폴더를 찾지 못했습니다.";
+      this.log.appendLine(`[hasa] no working folder: ${this.modelProblem}`);
+      return null;
+    }
+    // Bound for the rest of the conversation, so a later turn does not drift to
+    // another folder because the user opened a file there to look at it.
+    this.boundRoot ??= root.canonical;
 
     // A live session keeps the model it opened with unless the mode now needs a
     // different one. Asking first avoids re-resolving on every ordinary turn,
@@ -693,14 +724,14 @@ export class AgentHost {
     // first — a label is cheap, and the alternative is a clock counting up
     // against the word "생각".
     this.phase?.("워크스페이스에서 실행 가능한 명령을 찾는 중");
-    const workspace = await workspaceCommands(folder.uri.fsPath, this.log);
+    const workspace = await workspaceCommands(root.path, this.log);
     this.phase?.("이미지·동영상 도구를 준비하는 중");
     const media = await this.mediaTools();
     this.phase?.("대화를 준비하는 중");
 
     this.session = await AgentSession.open({
       vision: capabilities.vision,
-      workspaceRoot: folder.uri.fsPath,
+      workspaceRoot: root.path,
       model: createModelFor({
         provider,
         modelId: choice.modelId,
@@ -963,20 +994,59 @@ export class AgentHost {
   /**
    * The store for whichever key is in use.
    *
-   * Built here rather than at construction because it needs the key, and the
-   * key can change. The store digests it immediately and never keeps it — see
-   * `src/agent/conversationStore.ts`.
+   * Scoped by the workspace, not by the key.
+   *
+   * It used to be the key, and rotating one emptied the history — every
+   * conversation still on disk under a directory nothing would look in again. A
+   * credential says who is calling; it says nothing about which project this
+   * is. The store now has no argument to put a key in.
+   *
+   * Rebuilt when the workspace changes, which is why the id it was built for is
+   * remembered: a window that adds a folder is a different workspace, and
+   * continuing to write into the old one would file this project's
+   * conversations under the last one.
    */
   private async ensureConversations(): Promise<ConversationStore | null> {
-    if (this.conversations !== null) return this.conversations;
-    const key = await this.apiKey();
-    if (key === null) return null;
+    const context = await this.workspace();
+    const workspaceId = context.identity.id;
+    if (this.conversations !== null && this.conversationsFor === workspaceId) return this.conversations;
+
     this.conversations = new ConversationStore({
       port: createConversationPort(),
       home: this.context.globalStorageUri.fsPath,
-      apiKey: key,
+      workspaceId,
     });
+    this.conversationsFor = workspaceId;
     return this.conversations;
+  }
+
+  /**
+   * Which workspace this window is, and which folder to work in.
+   *
+   * Resolved once per call rather than cached across them: a user can add or
+   * remove a folder, and an identity computed at activation would outlive the
+   * thing it named. The result is cheap — a `realpath` per folder.
+   */
+  async workspace(): Promise<WorkspaceContext> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const roots = await Promise.all(folders.map((f) => canonicalizeRoot(f.uri.fsPath)));
+    return resolveWorkspaceContext({
+      folders: roots,
+      ...(vscode.workspace.workspaceFile === undefined
+        ? {}
+        : { configPath: vscode.workspace.workspaceFile.fsPath }),
+      // What this conversation has already been working in wins over anything
+      // the user has clicked on since — otherwise the same relative path would
+      // mean different files within one conversation.
+      boundRoot: this.boundRoot,
+      chosenRoot: this.chosenRoot,
+      activeFile: vscode.window.activeTextEditor?.document.uri.fsPath ?? null,
+    });
+  }
+
+  /** Records which folder the user picked, when the window has several. */
+  chooseRoot(path: string | null): void {
+    this.chosenRoot = path;
   }
 
   get currentConversationId(): string | null {
@@ -1033,6 +1103,10 @@ export class AgentHost {
     // already taken. Turns are never removed — an orphan is kept — so this only
     // ever grows, which is what keeps ids unique across forks.
     this.turnOrdinal = stored.turns?.length ?? new Set(this.recorded.map((e) => e.turnId)).size;
+    // Taken from the conversation rather than from the window. A conversation
+    // resumed a week later must resolve `src/a.ts` to the file it meant then,
+    // not to whichever folder is in front now.
+    this.boundRoot = stored.workspace?.boundRoot ?? null;
     this.log.appendLine(
       `[hasa] ${what} ${stored.id} on branch ${stored.activeBranchId ?? "main"} ` +
         `(${stored.turns?.length ?? 0} turns, ${this.recorded.length} events, ` +
@@ -1258,7 +1332,13 @@ export class AgentHost {
         // The title comes from the whole conversation, not from this turn: the
         // first thing the user said is what names it, and later turns must not
         // rename it out from under them.
-        { title: titleFrom([...session.history()]), updatedAt: completedAt },
+        {
+          title: titleFrom([...session.history()]),
+          updatedAt: completedAt,
+          // Which folder this conversation's relative paths mean. Recorded so
+          // resuming it a week later resolves them the same way.
+          ...(this.boundRoot === null ? {} : { boundRoot: this.boundRoot }),
+        },
       );
     } catch (err) {
       // A history that cannot be written must not lose the answer on screen.
@@ -1276,6 +1356,8 @@ export class AgentHost {
     // opened while it was would otherwise be restored into the new one the
     // moment a session appeared.
     this.pendingRestore = null;
+    // A new conversation settles on a folder of its own, on its first turn.
+    this.boundRoot = null;
     this.turnOrdinal = 0;
     // A new id, so the next turn starts a new file rather than overwriting the
     // conversation the user just moved away from.

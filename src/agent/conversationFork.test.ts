@@ -78,7 +78,7 @@ class Driver {
   constructor(session: AgentSession, seen: ProviderMessage[][]) {
     this.session = session;
     this.seen = seen;
-    this.store = new ConversationStore({ port: this.port, home: "/home", apiKey: "k" });
+    this.store = new ConversationStore({ port: this.port, home: "/home", workspaceId: "wsaaaaaaaaaaaaaaaa" });
   }
 
   /** What the panel would draw right now. */

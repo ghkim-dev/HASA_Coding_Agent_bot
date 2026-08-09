@@ -1,6 +1,10 @@
 import type { ProviderMessage } from "../provider/types.ts";
-import { fingerprint } from "../hasa-client/redact.ts";
-import { SESSION_SCHEMA_VERSION, type SessionEvent } from "./sessionEvents.ts";
+import { isValidWorkspaceId } from "./workspaceIdentity.ts";
+import {
+  SESSION_SCHEMA_VERSION,
+  type PersistedWorkspace,
+  type SessionEvent,
+} from "./sessionEvents.ts";
 import { readSession, writeSession } from "./sessionLog.ts";
 import {
   MAIN_BRANCH_ID,
@@ -14,21 +18,27 @@ import {
 } from "./conversationGraph.ts";
 
 /**
- * Conversations, remembered between sessions and kept apart per key.
+ * Conversations, remembered between sessions and kept apart per workspace.
  *
- * Two constraints shape this and neither is negotiable.
+ * **They used to be kept apart per key**, filed under `fingerprint(apiKey)`,
+ * and that was wrong in a way that only became visible once conversations had
+ * branches worth keeping. A credential says who is calling. It says nothing
+ * about which project this is, and a user who rotated a key watched their own
+ * history disappear — every conversation still on disk, under a directory
+ * nothing would look in again.
  *
- * **The key is never written down.** §9 of the brief: the API key lives in
- * `SecretStorage` and nowhere else — not in settings, not in workspace state,
- * not in a file, not in a log. So conversations cannot be filed under the key.
- * They are filed under `fingerprint(key)`, a truncated SHA-256 that cannot be
- * turned back into the key, and the key itself never reaches this module.
+ * So the scope is the workspace: same folder, same conversations, whatever key
+ * is in use. See `workspaceIdentity.ts` for what that means and what it costs.
  *
- * **It scopes a key, not an account.** The honest limitation: the gateway
- * exposes no account identity to an API key — `/v1/me/entitlements` refuses one
- * and charges a strike for asking — so two keys belonging to the same person
- * get separate histories, and rotating a key starts a fresh one. Calling this
- * per-account would be a claim the code cannot keep.
+ * **The key is still never written down**, and now it is not passed here at
+ * all. §9 of the brief: the API key lives in `SecretStorage` and nowhere else.
+ * The strongest form of that is a module with no parameter to put it in.
+ *
+ * Legacy directories are still readable — see `LEGACY_SCOPE` — but a
+ * conversation written before workspaces existed records no workspace, and
+ * attaching it to whichever folder happens to be open would be exactly the
+ * silent mis-binding this file now exists to prevent. They are listed, marked,
+ * and attached only when the user opens one.
  *
  * Storage is a directory of one file per conversation rather than a single
  * index. A corrupt file then costs one conversation instead of all of them,
@@ -64,6 +74,8 @@ export interface StoredConversation {
   branches?: ConversationBranch[];
   checkpoints?: ConversationCheckpoint[];
   activeBranchId?: string;
+  /** Which workspace this was had in. Absent for pre-workspace conversations. */
+  workspace?: PersistedWorkspace;
 }
 
 export interface ConversationSummary {
@@ -86,8 +98,13 @@ export interface ConversationStoreOptions {
   port: ConversationStorePort;
   /** Extension storage root. Never the workspace — this is per-machine state. */
   home: string;
-  /** The API key. Digested immediately; never stored and never returned. */
-  apiKey: string;
+  /**
+   * Which workspace these conversations belong to.
+   *
+   * There is deliberately no `apiKey` beside it. A credential cannot reach this
+   * module, so it cannot end up in a path, a filename or a log line from here.
+   */
+  workspaceId: string;
   /** Oldest conversations beyond this are dropped. */
   maxConversations?: number;
 }
@@ -95,12 +112,29 @@ export interface ConversationStoreOptions {
 const DEFAULT_MAX = 100;
 const TITLE_LENGTH = 60;
 
-/** A stable, irreversible directory name for this key. */
-export function scopeFor(apiKey: string): string {
-  // `fingerprint` returns `sha256:<12 hex>`; the colon is not a path character
-  // on Windows, so it is dropped rather than escaped.
-  return fingerprint(apiKey).replace(/[^a-z0-9]/gi, "");
+/**
+ * Where a workspace's conversations live.
+ *
+ * Checked rather than trusted: the id becomes a path segment, and an id that
+ * arrived from somewhere unexpected must not be able to name a directory
+ * elsewhere.
+ */
+export function scopeFor(workspaceId: string): string {
+  if (!isValidWorkspaceId(workspaceId)) {
+    throw new Error(`refusing to scope conversations by ${JSON.stringify(workspaceId)}`);
+  }
+  return workspaceId;
 }
+
+/**
+ * Directories written before conversations knew about workspaces.
+ *
+ * The old layout filed them under a key fingerprint — `sha256` followed by
+ * twelve hex characters. Workspace ids start with `ws`, so the two are
+ * distinguishable on sight and a reader can tell which era a directory is from
+ * without a manifest.
+ */
+export const LEGACY_SCOPE = /^sha256[0-9a-f]{6,}$/i;
 
 /** A title from the first thing the user said. */
 export function titleFrom(messages: readonly ProviderMessage[]): string {
@@ -149,6 +183,7 @@ function parse(raw: string): StoredConversation | null {
     updatedAt: session.updatedAt,
     messages: session.messages as ProviderMessage[],
     events: session.events,
+    ...(session.workspace === undefined ? {} : { workspace: session.workspace }),
     turns: session.turns,
     branches: session.branches,
     checkpoints: session.checkpoints,
@@ -162,12 +197,16 @@ export interface NewConversation {
   title: string;
   createdAt: number;
   turn: Omit<ConversationTurn, "parentTurnId">;
+  /** The folder this conversation resolves relative paths against. */
+  boundRoot?: string;
 }
 
 /** What may change after creation. `createdAt` is deliberately not in it. */
 export interface ConversationPatch {
   title?: string;
   updatedAt?: number;
+  /** The folder this conversation's relative paths are resolved against. */
+  boundRoot?: string;
   activeBranchId?: string;
   checkpoints?: ConversationCheckpoint[];
   branches?: ConversationBranch[];
@@ -175,6 +214,8 @@ export interface ConversationPatch {
 
 export class ConversationStore {
   private readonly port: ConversationStorePort;
+  private readonly home: string;
+  private readonly workspaceId: string;
   private readonly dir: string;
   private readonly max: number;
   /** The tail of each conversation's write queue. See `serialize`. */
@@ -182,13 +223,13 @@ export class ConversationStore {
 
   constructor(opts: ConversationStoreOptions) {
     this.port = opts.port;
-    // The digest is taken here and the key is not kept. Nothing else in this
-    // class can leak what it never held.
-    this.dir = `${opts.home}/conversations/${scopeFor(opts.apiKey)}`;
+    this.home = opts.home;
+    this.workspaceId = opts.workspaceId;
+    this.dir = `${opts.home}/conversations/${scopeFor(opts.workspaceId)}`;
     this.max = opts.maxConversations ?? DEFAULT_MAX;
   }
 
-  /** Where this key's conversations live. Exposed for tests, not for callers. */
+  /** Where this workspace's conversations live. Exposed for tests, not callers. */
   get directory(): string {
     return this.dir;
   }
@@ -206,6 +247,11 @@ export class ConversationStore {
       if (!file.endsWith(".json")) continue;
       const conversation = await this.readOne(file);
       if (conversation === null) continue;
+      // The same refusal `load` applies. Without it a conversation belonging to
+      // another workspace appeared in the list and then failed to open — worse
+      // than either being visible or being absent, because it looks like a bug
+      // in opening rather than a file that does not belong here.
+      if (conversation.workspace !== undefined && conversation.workspace.id !== this.workspaceId) continue;
       out.push({
         id: conversation.id,
         title: conversation.title,
@@ -218,9 +264,70 @@ export class ConversationStore {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  /**
+   * Reads one conversation, and refuses one that belongs somewhere else.
+   *
+   * The directory already scopes by workspace, so a mismatch here means the file
+   * arrived by another route — restored from a backup, copied between machines,
+   * moved by hand. Showing it would put one project's history under another's
+   * name, with the model's context to match, and that is worse than not showing
+   * it. A conversation with no recorded workspace is from before workspaces
+   * existed and is not refused; see `listLegacy`.
+   */
   async load(id: string): Promise<StoredConversation | null> {
     if (!isValidId(id)) return null;
-    return this.readOne(`${id}.json`);
+    const found = await this.readOne(`${id}.json`);
+    if (found === null) return null;
+    if (found.workspace !== undefined && found.workspace.id !== this.workspaceId) return null;
+    return found;
+  }
+
+  /**
+   * Conversations written before conversations knew about workspaces.
+   *
+   * Listed rather than adopted. They record no workspace, so attaching them to
+   * whichever folder happens to be open is a guess presented as a fact — and the
+   * one this whole file exists to prevent. They are offered, and opening one is
+   * the explicit act that binds it.
+   */
+  async listLegacy(): Promise<Array<ConversationSummary & { scope: string }>> {
+    const scopes = await this.port.listFiles(`${this.home}/conversations`).catch(() => []);
+    const out: Array<ConversationSummary & { scope: string }> = [];
+    for (const scope of scopes) {
+      if (!LEGACY_SCOPE.test(scope)) continue;
+      const files = await this.port.listFiles(`${this.home}/conversations/${scope}`).catch(() => []);
+      for (const file of files) {
+        if (!file.endsWith(".json")) continue;
+        const conversation = await this.readAt(`${this.home}/conversations/${scope}/${file}`);
+        if (conversation === null) continue;
+        out.push({
+          id: conversation.id,
+          title: conversation.title,
+          updatedAt: conversation.updatedAt,
+          messageCount: conversation.messages.filter((m) => m.role !== "system").length,
+          scope,
+        });
+      }
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /**
+   * Adopts a legacy conversation into this workspace.
+   *
+   * The explicit act §14 asks for. The user opened it here, so here is where it
+   * belongs; the file is rewritten under this workspace with its workspace
+   * recorded, and the legacy copy is left alone rather than deleted — a move
+   * that cannot be undone is not one to make on the user's behalf.
+   */
+  async adoptLegacy(scope: string, id: string): Promise<StoredConversation | null> {
+    if (!LEGACY_SCOPE.test(scope) || !isValidId(id)) return null;
+    const legacy = await this.readAt(`${this.home}/conversations/${scope}/${id}.json`);
+    if (legacy === null) return null;
+    if ((await this.readOne(`${id}.json`)) !== null) return this.load(id);
+
+    await this.serialize(id, () => this.write({ ...legacy, workspace: { id: this.workspaceId } }));
+    return this.load(id);
   }
 
   /**
@@ -410,6 +517,10 @@ export class ConversationStore {
       branches: [newBranch(MAIN_BRANCH_ID, "main", turn.id, input.createdAt)],
       checkpoints: [],
       activeBranchId: MAIN_BRANCH_ID,
+      workspace: {
+        id: this.workspaceId,
+        ...(input.boundRoot === undefined ? {} : { boundRoot: input.boundRoot }),
+      },
     });
   }
 
@@ -442,6 +553,9 @@ export class ConversationStore {
           title: patch.title ?? "새 대화",
           createdAt: turn.createdAt,
           turn,
+          // Carried through the create path too. The first turn is the one that
+          // settles the binding, and it is the one that went through here.
+          ...(patch.boundRoot === undefined ? {} : { boundRoot: patch.boundRoot }),
         });
         return;
       }
@@ -524,6 +638,14 @@ export class ConversationStore {
       branches: branches.map((b) => (b.id === active.id ? { ...b, headTurnId: complete.id, updatedAt: at } : b)),
       checkpoints: patch.checkpoints ?? existing.checkpoints ?? [],
       activeBranchId: active.id,
+      workspace: {
+        id: this.workspaceId,
+        ...(patch.boundRoot === undefined
+          ? existing.workspace?.boundRoot === undefined
+            ? {}
+            : { boundRoot: existing.workspace.boundRoot }
+          : { boundRoot: patch.boundRoot }),
+      },
     });
   }
 
@@ -561,6 +683,9 @@ export class ConversationStore {
         ...(conversation.branches === undefined ? {} : { branches: conversation.branches }),
         ...(conversation.checkpoints === undefined ? {} : { checkpoints: conversation.checkpoints }),
         ...(conversation.activeBranchId === undefined ? {} : { activeBranchId: conversation.activeBranchId }),
+        // Stamped on every write rather than only at creation, so a conversation
+        // that predates the field gains one the next time it is touched.
+        workspace: conversation.workspace ?? { id: this.workspaceId },
       }),
     );
     await this.prune();
@@ -572,8 +697,12 @@ export class ConversationStore {
   }
 
   private async readOne(file: string): Promise<StoredConversation | null> {
+    return this.readAt(`${this.dir}/${file}`);
+  }
+
+  private async readAt(path: string): Promise<StoredConversation | null> {
     try {
-      return parse(await this.port.readFile(`${this.dir}/${file}`));
+      return parse(await this.port.readFile(path));
     } catch {
       return null;
     }
