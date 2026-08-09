@@ -30,10 +30,11 @@ import {
   newConversationId,
   titleFrom,
   type ConversationSummary,
+  type StoredConversation,
 } from "../../../src/agent/conversationStore.ts";
 import type { Attachment, AttachmentOutcome } from "../../../src/agent/attachments.ts";
 import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
-import { completedTurn } from "../../../src/agent/conversationGraph.ts";
+import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/conversationGraph.ts";
 import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
 import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
@@ -1004,24 +1005,175 @@ export class AgentHost {
     if (store === null) return false;
     const stored = await store.load(id);
     if (stored === null) return false;
+    this.adopt(stored, "opened");
+    return true;
+  }
 
-    // Both halves come from the same graph traversal, so a reopened
-    // conversation cannot show one point while the model holds another.
+  /**
+   * Moves the live session onto a stored conversation, both halves at once.
+   *
+   * The only place that does. Opening a conversation, switching branch, forking
+   * and restoring a checkpoint are four ways of saying "the conversation is now
+   * here", and each one that moved the halves itself would be a fresh chance to
+   * move one and not the other — which is the failure the turn graph exists to
+   * prevent, arriving through the back door.
+   *
+   * Both come from a single `store.load`, so they are the same traversal of the
+   * same chain by construction rather than by care.
+   */
+  private adopt(stored: StoredConversation, what: string): void {
     this.pendingRestore = stored.messages;
     if (this.session !== null) this.applyPendingRestore(this.session);
     this.conversationId = stored.id;
     this.recorded = [...(stored.events ?? [])];
     this.pendingEvents = [];
     this.pendingDelta = [];
-    // Continues past the turns that exist rather than counting distinct event
-    // `turnId`s: a turn can end with no events at all, and counting those would
-    // hand the next turn an id that is already taken.
+    // Counts turns rather than distinct event `turnId`s: a turn can end with no
+    // events at all, and counting those would hand the next turn an id that is
+    // already taken. Turns are never removed — an orphan is kept — so this only
+    // ever grows, which is what keeps ids unique across forks.
     this.turnOrdinal = stored.turns?.length ?? new Set(this.recorded.map((e) => e.turnId)).size;
     this.log.appendLine(
-      `[hasa] opened conversation ${id} (${stored.turns?.length ?? 0} turns, ` +
-        `${this.recorded.length} events, ${stored.messages.length} messages)`,
+      `[hasa] ${what} ${stored.id} on branch ${stored.activeBranchId ?? "main"} ` +
+        `(${stored.turns?.length ?? 0} turns, ${this.recorded.length} events, ` +
+        `${stored.messages.length} messages)`,
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Branches and checkpoints
+  //
+  // None of these touches the working tree. Moving between two lines of a
+  // conversation changes what the model has read; the files are the user's.
+  // -------------------------------------------------------------------------
+
+  /** The open conversation's graph, for offering fork points. */
+  async conversationGraph(): Promise<StoredConversation | null> {
+    const store = await this.ensureConversations();
+    if (store === null || this.conversationId === null) return null;
+    return store.load(this.conversationId);
+  }
+
+  /** Forks at a turn and moves onto the new branch. */
+  async createBranch(
+    name: string,
+    fromTurnId: string,
+  ): Promise<{ ok: true; branchId: string } | { ok: false; reason: string }> {
+    const store = await this.ensureConversations();
+    if (store === null || this.conversationId === null) {
+      return { ok: false, reason: "열린 대화가 없습니다." };
+    }
+    const now = Date.now();
+    // Derived from the fork point rather than the name: a name is the user's and
+    // may be any text, an id is ours and is used as a key.
+    const branchId = `b${now.toString(36)}`;
+    const result = await store.createBranch(this.conversationId, {
+      branchId,
+      name,
+      fromTurnId,
+      at: now,
+      activate: true,
+    });
+    if (!result.ok) return result;
+
+    const stored = await store.load(this.conversationId);
+    if (stored !== null) this.adopt(stored, "forked");
+    return { ok: true, branchId };
+  }
+
+  async switchBranch(branchId: string): Promise<boolean> {
+    const store = await this.ensureConversations();
+    if (store === null || this.conversationId === null) return false;
+    if (!(await store.switchBranch(this.conversationId, branchId, Date.now()))) return false;
+
+    const stored = await store.load(this.conversationId);
+    if (stored === null) return false;
+    this.adopt(stored, "switched");
     return true;
+  }
+
+  async deleteBranch(branchId: string): Promise<{ ok: boolean; reason?: string }> {
+    const store = await this.ensureConversations();
+    if (store === null || this.conversationId === null) return { ok: false, reason: "열린 대화가 없습니다." };
+    const result = await store.deleteBranch(this.conversationId, branchId, Date.now());
+    if (!result.ok) return result;
+
+    const stored = await store.load(this.conversationId);
+    if (stored !== null) this.adopt(stored, "left branch on");
+    return { ok: true };
+  }
+
+  /**
+   * Bookmarks a turn, with a note about what the workspace looked like.
+   *
+   * The git head and the changed files are recorded because they are genuinely
+   * useful to read later — "this is where it worked" means little without
+   * knowing what "there" was. They are a note, not a handle: restoring this
+   * checkpoint moves the conversation and leaves every file alone.
+   */
+  async createCheckpoint(
+    message: string,
+    turnId?: string,
+  ): Promise<{ ok: true; checkpointId: string } | { ok: false; reason: string }> {
+    const store = await this.ensureConversations();
+    if (store === null || this.conversationId === null) {
+      return { ok: false, reason: "열린 대화가 없습니다." };
+    }
+    const stored = await store.load(this.conversationId);
+    if (stored === null) return { ok: false, reason: "열린 대화가 없습니다." };
+
+    const branchId = stored.activeBranchId ?? "main";
+    const head = stored.branches?.find((b) => b.id === branchId)?.headTurnId ?? null;
+    const target = turnId ?? head;
+    if (target === null) return { ok: false, reason: "저장할 지점이 아직 없습니다." };
+
+    const now = Date.now();
+    const result = await store.addCheckpoint(this.conversationId, {
+      checkpointId: `cp${now.toString(36)}`,
+      turnId: target,
+      branchId,
+      message,
+      at: now,
+      metadata: await this.workspaceNoteFor(),
+    });
+    return result.ok ? { ok: true, checkpointId: result.checkpoint.id } : result;
+  }
+
+  /**
+   * Moves the conversation to a checkpoint's turn.
+   *
+   * Deliberately does not run `git checkout`, `reset` or `restore`, and does
+   * nothing automatic with the files. The recorded git head is shown, so a user
+   * who wants their files back can reach for git themselves — which is a
+   * decision only they can make, and one there is no undo for.
+   */
+  async restoreCheckpoint(checkpointId: string): Promise<{ ok: boolean; reason?: string }> {
+    const store = await this.ensureConversations();
+    if (store === null || this.conversationId === null) return { ok: false, reason: "열린 대화가 없습니다." };
+    const stored = await store.load(this.conversationId);
+    if (stored === null) return { ok: false, reason: "열린 대화가 없습니다." };
+
+    const checkpoint = stored.checkpoints?.find((c) => c.id === checkpointId);
+    if (checkpoint === undefined) return { ok: false, reason: "없는 저장 지점입니다." };
+    if (!(stored.turns ?? []).some((t) => t.id === checkpoint.turnId)) {
+      return { ok: false, reason: "이 저장 지점이 가리키던 대화 지점이 없습니다." };
+    }
+
+    // A branch at the checkpoint, so continuing from it extends a line of its
+    // own rather than overwriting the one the user came from.
+    const created = await this.createBranch(checkpoint.message.slice(0, 40), checkpoint.turnId);
+    return created.ok ? { ok: true } : { ok: false, reason: created.reason };
+  }
+
+  /** What the workspace looked like, for a checkpoint to remember. */
+  private async workspaceNoteFor(): Promise<ConversationCheckpoint["metadata"]> {
+    const changedFiles = await this.changedFiles().catch(() => []);
+    return {
+      gitHead: await this.session?.headSha().catch(() => null) ?? null,
+      changedFiles,
+      mode: this.mode,
+      ...(this.selectedModelId === null ? {} : { modelId: this.selectedModelId }),
+    };
   }
 
   /** The conversation as the user saw it, for the panel to project. */

@@ -164,6 +164,23 @@ export class CheckpointManager {
    * first, which is fine in a throwaway worktree and an unasked-for change to
    * the index of a repository the user is sitting in.
    */
+  /**
+   * The commit the workspace is on, or null when there is no repository.
+   *
+   * Read for a checkpoint's note. It is recorded so a user can see where they
+   * were; nothing here ever moves the workspace to it.
+   */
+  async headSha(): Promise<string | null> {
+    const repo = this.repo;
+    if (repo === null) return null;
+    try {
+      return await repo.headSha();
+    } catch (err) {
+      if (err instanceof GitError) return null;
+      throw err;
+    }
+  }
+
   async changedFiles(): Promise<string[]> {
     const repo = this.repo;
     if (repo === null) return [];

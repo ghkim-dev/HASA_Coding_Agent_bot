@@ -358,6 +358,11 @@ export class AgentSession {
     this.checkpoints.release();
   }
 
+  /** The commit the workspace is on, for a checkpoint's note. Never acted on. */
+  async headSha(): Promise<string | null> {
+    return this.checkpoints.headSha();
+  }
+
   async changedFiles(): Promise<string[]> {
     return this.checkpoints.changedFiles();
   }
