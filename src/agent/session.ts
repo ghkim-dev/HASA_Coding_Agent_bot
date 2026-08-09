@@ -94,6 +94,11 @@ export interface AgentSessionOptions {
   budget?: Partial<AgentBudget>;
   logger?: Logger;
   onEvent?: (event: AgentEvent) => void;
+  /**
+   * The record of what has actually happened, for the final answer to agree
+   * with. See `AgentLoopOptions.taskRecord`.
+   */
+  taskRecord?: () => string | null;
 }
 
 export class AgentSession {
@@ -326,6 +331,10 @@ export class AgentSession {
       // Bound late, so a sink installed after the session was built is the one
       // that receives this turn.
       onEvent: (event) => this.emit(event),
+      // What the runtime observed, for the model to answer against. Supplied by
+      // the host, which holds the conversation's events; a session on its own
+      // sees only the turn it is running.
+      ...(this.opts.taskRecord === undefined ? {} : { taskRecord: this.opts.taskRecord }),
     });
 
     this.log.info("agent turn", { mode: this.mode, approval: this.approvals.currentMode });

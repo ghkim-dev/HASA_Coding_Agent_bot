@@ -167,3 +167,49 @@ reduceSession(events) === reduceSession(readSession(writeSession(events)).events
 ```
 
 그리고 그 view가 실제로 계획·reasoning·도구 호출 두 건·변경 파일·종료 사유를 담고 있다는 것 — 빈 것끼리의 동일성은 동일성이 아니므로.
+
+## 10. 무엇이 실제로 일어났는가 — Task 원장
+
+C4에서 추가됐다. 실사용 실패 하나에서 나왔다: 에이전트가 분류기를 작성하고, 모델 로드에 실패하고, `python -c "print('모든 코드가 정상적으로 작동합니다')"`를 실행한 뒤 전부 정상 동작한다고 보고했다.
+
+그 실패의 모든 단계가 런타임에는 **사실로** 있었다 — 실패한 도구 호출, 자기가 쓴 문장만 출력한 명령. 아무것도 보관되지 않았고, 유일한 기록은 모델의 산문이었으며, 주장은 거기서 나왔다.
+
+규칙:
+
+> 모델은 제안한다. 런타임은 기록한다.
+> 텍스트로 한 주장이 기록을 바꿀 수 없다.
+
+### 투영이지 저장소가 아니다
+
+`TaskState`는 `SessionEvent`에서 파생된다 — `SessionView`와 같은 방식이다. 이것이 continuation이 동작하는 이유다. timeout된 run은 이미 이벤트를 썼고, 재생하면 그 run이 있던 상태가 그대로 돌아온다. 대화를 다시 여는 것도, 브랜치로 전환하는 것도 같은 재생이고 — **브랜치에서는 그 브랜치의 상태가** 나온다. fork 이후 이벤트가 그 chain에 없기 때문이다.
+
+별도 스냅샷 파일은 두 번째 진실 원천이 되고, 둘은 정확히 문제가 되는 경로에서 어긋난다.
+
+### 증거는 도구 관측에서만 온다
+
+`evidenceFrom`이 유일한 문이다. `assistant_text`에서 증거로 가는 경로는 없다. 그래서 "테스트를 통과했습니다"라고 쓰는 모델은 **테스트 증거를 만들지 못하고**, 완료 게이트는 테스트를 보지 못한다.
+
+그리고 명령이라고 다 같지 않다:
+
+```
+pytest -q                              → test_result
+python -c "print('all tests passed')"  → command_result   (검증 아님)
+echo "ALL TESTS PASSED"                → command_result   (검증 아님)
+```
+
+exit 0은 인터프리터가 돌았다는 사실이다. 그 안의 문장에 대해서는 아무 말도 하지 않는다.
+
+### 답하기 전에 기록을 건넨다
+
+모델이 턴을 끝내려 할 때, 런타임이 관측한 것을 한 번 건넨다. 끝난 주장을 나중에 고치는 것이 아니라 — 그건 그 사람이 갖지 못했던 사실을 근거로 남의 산문을 고쳐 쓰는 일이다 — **문장을 쓰기 전에** 사실을 준다.
+
+### 구분
+
+```
+Plan                ≠ Progress
+Tool success        ≠ Task success
+Command stdout      ≠ Verification
+File exists         ≠ Feature works
+Model loaded        ≠ Model trained
+Run timeout         ≠ Task completion
+```

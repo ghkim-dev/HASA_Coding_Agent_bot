@@ -35,6 +35,8 @@ import {
 import type { Attachment, AttachmentOutcome } from "../../../src/agent/attachments.ts";
 import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
 import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/conversationGraph.ts";
+import { reduceTask } from "../../../src/agent/taskReducer.ts";
+import { describeTask } from "../../../src/agent/taskState.ts";
 import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
 import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
@@ -748,6 +750,17 @@ export class AgentHost {
       ...media,
       checkpoint,
       onEvent,
+      // Built from the conversation's events every time it is asked, so it
+      // includes the turns before this one. That is what makes a continuation
+      // after a timeout resume from the unresolved work rather than from
+      // nothing: the events were written as the run went, and the record is a
+      // projection of them.
+      taskRecord: () => {
+        const task = reduceTask(this.recorded, this.conversationId ?? "task");
+        return task === null || task.requirements.length + task.issues.length === 0
+          ? null
+          : describeTask(task);
+      },
     });
     if (carried.length > 0) this.session.restore(carried);
     // After `carried`, deliberately. A conversation the user reopened is what
