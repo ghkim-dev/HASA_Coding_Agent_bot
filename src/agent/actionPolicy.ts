@@ -142,3 +142,112 @@ export function describeContract(contract: TaskContract): string | null {
   }
   return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Before anything is done: has the request been read?
+// ---------------------------------------------------------------------------
+
+/**
+ * Actions that change something, cost something, or claim something.
+ *
+ * The line is not "dangerous". It is *substantive*: an action whose effect
+ * outlives the turn, or which the user would be entitled to see justified by
+ * what they asked for. Reading a file to work out what was meant is not on this
+ * list, because that is how a request gets understood.
+ */
+const SUBSTANTIVE: ReadonlySet<string> = new Set([
+  "create_file",
+  "write_file",
+  "apply_patch",
+  "delete_file",
+  "run_command",
+  "web_search",
+  "web_fetch",
+  "generate_image",
+  "generate_video",
+]);
+
+/** Machine-readable, so a caller can tell this apart from an ordinary refusal. */
+export const TURN_CONTRACT_REQUIRED = "TURN_CONTRACT_REQUIRED";
+
+/**
+ * Whether this turn may act yet.
+ *
+ * The gap this closes: everything the contract layer guarantees is guaranteed
+ * only for turns that produced one. A model that skips `record_request` and
+ * starts writing files gets the behaviour that existed before any of it — which
+ * is not a fallback, it is the bug with extra steps.
+ *
+ * So substantive actions wait. Reading, searching, planning and reporting stay
+ * open, because a model that cannot look at anything cannot work out what was
+ * asked for either, and a gate that blocks understanding would force a guess.
+ *
+ * `null` means go ahead.
+ */
+export function requiresContract(
+  contract: TaskContract,
+  toolName: string,
+  turnId: string,
+): string | null {
+  if (!SUBSTANTIVE.has(toolName)) return null;
+  // The contract has to be *this* turn's. One recorded three turns ago says
+  // nothing about the message just received, and treating it as cover is how a
+  // correction gets ignored.
+  if (contract.lastTurnId === turnId) return null;
+
+  return (
+    `${TURN_CONTRACT_REQUIRED}: 아직 이번 요청을 record_request로 정리하지 않았습니다. ` +
+    `무엇을 요구받았는지 먼저 기록한 다음 ${toolName}을(를) 쓰십시오. ` +
+    "읽기와 검색은 그 전에도 쓸 수 있습니다."
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Whether an action is what this turn is for
+// ---------------------------------------------------------------------------
+
+/**
+ * How well an action fits what was asked.
+ *
+ * Three levels rather than two, because the honest answer for most
+ * intent/tool pairs is neither yes nor no. Running a command during a turn that
+ * only asked to see some code is not forbidden — the file might be generated,
+ * the user might have meant something the reading did not capture — but it is
+ * not what was asked for either, and the model should be told so rather than
+ * stopped.
+ */
+export type Necessity = "allow" | "requires_justification" | "deny";
+
+export interface NecessityVerdict {
+  necessity: Necessity;
+  reason?: string;
+}
+
+/** Intents for which acting on the workspace is beside the point. */
+const PASSIVE_INTENTS: ReadonlySet<TurnIntent> = new Set(["present", "inspect", "discuss"]);
+
+/**
+ * Whether this tool is what the turn is for.
+ *
+ * `deny` comes only from a constraint the user stated — see `allowsTool`, which
+ * this delegates to. Everything else is guidance with a volume knob.
+ */
+export function assessNecessity(contract: TaskContract, toolName: string): NecessityVerdict {
+  const hard = allowsTool(contract.constraints, toolName);
+  if (!hard.allowed) return { necessity: "deny", ...(hard.reason === undefined ? {} : { reason: hard.reason }) };
+
+  if (contract.intents.length === 0) return { necessity: "allow" };
+
+  const passiveOnly = contract.intents.every((intent) => PASSIVE_INTENTS.has(intent));
+  const acts = SUBSTANTIVE.has(toolName);
+  if (passiveOnly && acts) {
+    return {
+      necessity: "requires_justification",
+      reason:
+        `이번 요청은 ${contract.intents.join("+")}입니다. ${toolName}은(는) 요청을 만족시키는 데 ` +
+        "필요하지 않을 수 있습니다 — 파일을 읽어 그 내용을 답변에 담는 것으로 충분한지 " +
+        "먼저 확인하십시오.",
+    };
+  }
+  return { necessity: "allow" };
+}

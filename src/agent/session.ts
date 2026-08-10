@@ -15,10 +15,11 @@ import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
 import { createRequestTool } from "./tools/requestTool.ts";
-import { allowsTool, describeContract } from "./actionPolicy.ts";
+import { allowsTool, assessNecessity, describeContract, requiresContract } from "./actionPolicy.ts";
 import {
   emptyContract,
   mergeContract,
+  reduceContract,
   type TaskContract,
   type TurnContract,
 } from "./turnContract.ts";
@@ -152,6 +153,26 @@ export class AgentSession {
   /** The turn being run, so the request tool can stamp what it records. */
   private turnId = "t0";
   private turnOrdinal = 0;
+
+  /**
+   * Puts back the contract a conversation had, from its events.
+   *
+   * The same fold the live path uses, over the events that were persisted — so
+   * a reload, a resumption after a timeout and a branch switch all produce the
+   * contract that chain actually had. Called by the host beside `restore`,
+   * which does the same thing for the model's messages.
+   */
+  restoreContract(events: readonly { type: string; contract?: unknown }[]): void {
+    this.contract = reduceContract(events);
+    // Continues past the turns that have been recorded, so a new turn's id does
+    // not collide with one already in the contract's history.
+    this.turnOrdinal = events.filter((e) => e.type === "turn_contract").length;
+  }
+
+  /** What the user has asked for, for a caller that needs to show or check it. */
+  get taskContract(): TaskContract {
+    return this.contract;
+  }
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -290,7 +311,12 @@ export class AgentSession {
       createRequestTool({
         turnId: () => this.turnId,
         onContract: (contract) => {
+          // Folded in now so the rest of this turn is governed by it, and
+          // emitted so the fold can be repeated from the events alone. The two
+          // must agree, which they do because they are the same function over
+          // the same input — see `reduceContract`.
           this.contract = mergeContract(this.contract, contract);
+          this.emit({ type: "contract", contract });
           this.opts.onContract?.(contract);
         },
       }),
@@ -380,8 +406,18 @@ export class AgentSession {
       // The contract is read at call time, so a constraint recorded partway
       // through a turn governs the rest of it.
       toolGate: (toolName) => {
+        // Order matters. A constraint the user stated outranks everything; a
+        // turn nobody has read yet may not act at all; and past those, the
+        // model is told when an action is beside the point rather than stopped.
         const verdict = allowsTool(this.contract.constraints, toolName);
-        return verdict.allowed ? null : (verdict.reason ?? "이 턴에서는 사용할 수 없는 도구입니다.");
+        if (!verdict.allowed) return verdict.reason ?? "이 턴에서는 사용할 수 없는 도구입니다.";
+        return requiresContract(this.contract, toolName, this.turnId);
+      },
+      // Advice, not a gate. Attached to the result so the model reads it where
+      // it reads everything else about the call it just made.
+      toolAdvice: (toolName) => {
+        const verdict = assessNecessity(this.contract, toolName);
+        return verdict.necessity === "requires_justification" ? (verdict.reason ?? null) : null;
       },
     });
 

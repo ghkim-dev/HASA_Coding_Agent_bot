@@ -108,6 +108,11 @@ export class TurnRecorder {
       case "plan":
         return [{ type: "plan", ...this.next(), steps: [...event.steps], current: event.current }];
 
+      // Kept, and kept whole. It is what the user asked for, and folding these
+      // back is how a reopened conversation still knows.
+      case "contract":
+        return [{ type: "turn_contract", ...this.next(), contract: event.contract }];
+
       case "tool_start":
         return [
           {

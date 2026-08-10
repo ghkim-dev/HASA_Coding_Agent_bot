@@ -212,6 +212,12 @@ export interface ApprovalPort {
 // Events
 // ---------------------------------------------------------------------------
 
+/** What the user asked for, as validated. Recorded so it replays. */
+export interface ContractEvent {
+  type: "contract";
+  contract: unknown;
+}
+
 export type AgentStopReason =
   /** The model produced an answer and stopped. */
   | "finished"
@@ -254,6 +260,7 @@ export interface FileChange {
 }
 
 export type AgentEvent =
+  | ContractEvent
   | { type: "step"; step: number }
   | { type: "text"; delta: string }
   | { type: "reasoning"; delta: string }

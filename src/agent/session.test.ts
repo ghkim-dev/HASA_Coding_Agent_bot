@@ -44,14 +44,39 @@ function turn(overrides: Partial<AgentCompletion> = {}): AgentCompletion {
   return { text: "", reasoning: "", toolCalls: [], inputTokens: 1, outputTokens: 1, ...overrides };
 }
 
+/**
+ * A model that replays a script, starting by reading the request.
+ *
+ * The `record_request` turn is prepended rather than written into every script
+ * because it is now how a turn begins, not a step a particular test is about: a
+ * substantive action taken before anything has read what the user asked for
+ * gets none of the guarantees the contract layer provides, so the loop refuses
+ * it. A script that means to test writing a file should not have to restate
+ * that it was asked to.
+ *
+ * `relation: "new_task"` and a permissive intent set, so these scripts exercise
+ * what they were written to exercise. Tests about the contract itself supply
+ * their own — see `turnContract.test.ts`.
+ */
 function scripted(script: AgentCompletion[]): AgentModel & { seen: unknown[] } {
+  const prelude = turn({
+    toolCalls: [
+      call("record_request", {
+        goal: "요청 수행",
+        relation: "new_task",
+        intents: "modify execute inspect research",
+        requirements: "요청한 작업 수행",
+      }),
+    ],
+  });
+  const full = [prelude, ...script];
   const model = {
     modelId: "test-model",
     seen: [] as unknown[],
     calls: 0,
     async complete(request: unknown): Promise<AgentCompletion> {
       model.seen.push(request);
-      const step = script[model.calls] ?? turn({ text: "done" });
+      const step = full[model.calls] ?? turn({ text: "done" });
       model.calls += 1;
       return step;
     },
@@ -147,9 +172,12 @@ describe("modes decide which tools exist", () => {
 
     await session.send("What does this do?", never);
     session.setMode("code");
+    // Marked rather than indexed: a turn is several model calls, so "the second
+    // request" is not "the second turn" and never reliably was.
+    const beforeSecondTurn = model.seen.length;
     await session.send("Now change it.", never);
 
-    const second = model.seen[1] as { tools?: Array<{ name: string }> };
+    const second = model.seen[beforeSecondTurn] as { tools?: Array<{ name: string }> };
     assert.ok((second.tools ?? []).some((t) => t.name === "create_file"));
   });
 });

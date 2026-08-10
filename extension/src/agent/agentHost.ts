@@ -780,6 +780,10 @@ export class AgentHost {
   private applyPendingRestore(session: AgentSession): void {
     if (this.pendingRestore === null) return;
     session.restore(this.pendingRestore);
+    // The third half, and it belongs here for the same reason the other two do:
+    // one place moves the session onto a conversation. What the user asked for
+    // is folded from the same events the screen is drawn from.
+    session.restoreContract(this.recorded);
     this.log.appendLine(`[hasa] restored ${this.pendingRestore.length} message(s) into the session`);
     this.pendingRestore = null;
   }

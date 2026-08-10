@@ -110,6 +110,16 @@ export interface Provenance {
   sourceTurnId: string;
   /** `explicit` when the user said it; `inferred` when the model read it in. */
   origin: "explicit" | "inferred";
+  /**
+   * The user's own words this came from, when the model quoted them.
+   *
+   * A weak check and worth naming as one: nothing verifies that the quote is
+   * faithful, only that it appears in what the user actually typed. That is
+   * enough to catch a requirement invented wholesale and attributed to them,
+   * and it is not a solution to requirement completeness — a requirement the
+   * model never noticed leaves no trace to check.
+   */
+  sourceText?: string;
 }
 
 export type RequirementLifecycle = "active" | "superseded";
@@ -464,4 +474,128 @@ function significantWords(text: string): string[] {
     .split(/[^\p{L}\p{N}._-]+/u)
     .filter((word) => (/[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word) ? word.length >= 2 : word.length >= 3))
     .slice(0, 8);
+}
+
+// ---------------------------------------------------------------------------
+// Replay
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads a contract back out of an event.
+ *
+ * Validated again on the way in. A conversation file can be edited, restored
+ * from a backup or written by a different build, and a contract that arrives
+ * malformed must not become an empty one that silently drops requirements —
+ * which is the failure this whole layer exists to prevent, arriving by another
+ * route.
+ */
+export function readTurnContract(value: unknown): TurnContract | null {
+  if (value === null || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+
+  const turnId = typeof raw["turnId"] === "string" ? raw["turnId"] : "";
+  const relation = relationFrom(raw["relation"]);
+  const goal = clip(raw["goal"]);
+  if (turnId.length === 0 || relation === null || goal.length === 0) return null;
+
+  const intents = Array.isArray(raw["intents"])
+    ? raw["intents"].filter((i): i is TurnIntent => (TURN_INTENTS as readonly string[]).includes(i as string))
+    : [];
+  if (intents.length === 0) return null;
+
+  return {
+    turnId,
+    relation,
+    goal,
+    intents,
+    requirements: readItems(raw["requirements"], turnId),
+    deliverables: readItems(raw["deliverables"], turnId),
+    constraints: readConstraints(raw["constraints"], turnId),
+  };
+}
+
+function readItems(value: unknown, turnId: string): Requirement[] {
+  if (!Array.isArray(value)) return [];
+  const out: Requirement[] = [];
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const description = clip(item["description"]);
+    if (description.length === 0) continue;
+    const source = typeof item["provenance"] === "object" && item["provenance"] !== null
+      ? (item["provenance"] as Record<string, unknown>)
+      : {};
+    out.push({
+      id: typeof item["id"] === "string" ? item["id"] : `${turnId}-r${out.length + 1}`,
+      description,
+      required: item["required"] !== false,
+      provenance: {
+        sourceTurnId: typeof source["sourceTurnId"] === "string" ? source["sourceTurnId"] : turnId,
+        origin: source["origin"] === "inferred" ? "inferred" : "explicit",
+        ...(typeof source["sourceText"] === "string" ? { sourceText: source["sourceText"] } : {}),
+      },
+      lifecycle: item["lifecycle"] === "superseded" ? "superseded" : "active",
+      ...(typeof item["supersededBy"] === "string" ? { supersededBy: item["supersededBy"] } : {}),
+    });
+  }
+  return out;
+}
+
+function readConstraints(value: unknown, turnId: string): Constraint[] {
+  if (!Array.isArray(value)) return [];
+  const out: Constraint[] = [];
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const text = clip(item["text"]);
+    if (text.length === 0) continue;
+    const kind = item["kind"];
+    out.push({
+      kind: (CONSTRAINT_KINDS as readonly string[]).includes(kind as string) ? (kind as ConstraintKind) : "other",
+      text,
+      sourceTurnId: typeof item["sourceTurnId"] === "string" ? item["sourceTurnId"] : turnId,
+    });
+  }
+  return out;
+}
+
+/**
+ * The task's contract, folded out of the conversation's events.
+ *
+ * The invariant this exists for:
+ *
+ *   reduceContract(events) === reduceContract(readBack(write(events)))
+ *
+ * Live and replayed are the same computation over the same inputs, so there is
+ * nothing to keep in step. A reload, a timeout, a branch — each is a different
+ * set of events through one function.
+ */
+export function reduceContract(events: readonly { type: string; contract?: unknown }[]): TaskContract {
+  let task = emptyContract();
+  for (const event of events) {
+    if (event.type !== "turn_contract") continue;
+    const contract = readTurnContract(event.contract);
+    if (contract !== null) task = mergeContract(task, contract);
+  }
+  return task;
+}
+
+/**
+ * Whether an explicit requirement's quote is really in what the user typed.
+ *
+ * Reported, not enforced. A model that paraphrases rather than quotes is being
+ * unhelpful, not dishonest, and refusing the contract over it would trade a
+ * whole requirement set for a formatting preference.
+ */
+export function unverifiedProvenance(
+  contract: TurnContract,
+  rawUserText: string,
+): Requirement[] {
+  const haystack = rawUserText.toLowerCase();
+  return contract.requirements.filter(
+    (r) =>
+      r.provenance.origin === "explicit" &&
+      r.provenance.sourceText !== undefined &&
+      !haystack.includes(r.provenance.sourceText.toLowerCase().trim()),
+  );
 }

@@ -165,6 +165,25 @@ export interface NoticeEvent extends Base {
   text: string;
 }
 
+/**
+ * What the user asked for, as the model read it and the schema accepted it.
+ *
+ * The whole contract in one event, rather than a stream of `requirement_added`
+ * and `requirement_superseded`. The reason is the same one that made a turn own
+ * its `messageDelta`: store what was *observed*, derive the rest. A contract is
+ * what one validated `record_request` produced, and supersession is what
+ * `mergeContract` computes from a sequence of them — so folding the events
+ * gives the same state live and on replay, with nothing to keep in step.
+ *
+ * It also means a branch is right for free. The events after a fork are not in
+ * that branch's chain, so neither are the requirements they carried.
+ */
+export interface TurnContractEvent extends Base {
+  type: "turn_contract";
+  /** The validated contract. Shape owned by `turnContract.ts`. */
+  contract: unknown;
+}
+
 export interface RunCompletedEvent extends Base {
   type: "run_completed";
   reason: RunTerminationReason;
@@ -183,6 +202,7 @@ export type SessionEvent =
   | ToolCompletedEvent
   | FileChangedEvent
   | NoticeEvent
+  | TurnContractEvent
   | RunCompletedEvent;
 
 export type SessionEventType = SessionEvent["type"];
