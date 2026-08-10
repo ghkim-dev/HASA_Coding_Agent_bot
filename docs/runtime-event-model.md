@@ -356,3 +356,42 @@ f4b4a30이 만든 루프: present-only 계약에서 모델이 계속 명령을 �
 ### 종료 의미
 
 `no_progress`는 **Run의 종료**이지 Task의 완료가 아니다. 요구사항도 미해결 오류도 그대로 남고, 다음 턴에서 이어갈 수 있다. `maxSteps`는 마지막 안전핀으로 남는다.
+
+## 14. 어디서 실행하는가는 명령의 일부가 아니다
+
+Windows에서 실제로 일어난 일, 연속 세 번:
+
+```
+mkdir -p …                              실패
+mkdir …                                 실패 (프로그램으로 spawn)
+cd image_classification_project/src     실패 (standalone process)
+```
+
+그 뒤 세션의 나머지는 `python -c "import sys; sys.path.append(...)"`로 자기 작업 디렉터리를 우회하는 데 쓰였다.
+
+모델이 부주의했던 게 아니다. **"이 프로그램을, 저기서 실행해"를 저기서를 표현할 방법이 없는 언어**(명령줄 한 줄)로 말하라고 요구받았고, 그래서 셸 문법에 손을 뻗었고, 셸 문법은 플랫폼마다 다르다.
+
+> 작업 디렉터리는 명령의 일부가 아니다. 필드다.
+
+### exec가 기본, shell은 명시
+
+```
+exec    executable + args[] + cwd,  shell: false
+shell   command,  플랫폼 셸로 명시적 실행
+```
+
+`exec`에서 shell로 **암묵적 fallback이 없다.** 파이프가 들어 있는 exec payload가 조용히 셸 호출이 되면, 그건 argv 경계가 가장 중요한 자리에서 사라지는 것이다.
+
+`cd`는 실행 전에 거부되고 `INVALID_COMMAND_USE_CWD`와 **써야 할 필드 이름**을 돌려준다. 세 번 다르게 철자를 바꿔보는 대신 고칠 수 있다.
+
+### 좁게 판정한다
+
+`(`를 셸 문법으로 본 첫 구현은 `node -e "console.log(1)"`을 PowerShell 호출로 바꿔 깨뜨렸다. 실제로 셸이 필요한 것은 **따옴표 밖의** `|` `>` `<` `;` `&&` 뿐이다.
+
+### 하나의 executor
+
+structured / legacy 한 줄 / 텍스트 프로토콜 — 셋 다 `toSpec`에서 하나의 `AgentCommandSpec`이 되고 그 아래에 spawn이 하나뿐이다. 두 번째 executor는 argv 경계가 사라질 자리가 두 곳이 되는 것이다.
+
+### 경계는 그대로
+
+`cwd`는 `realpath` 비교로 workspace 안인지 검사한다 — `Sandbox`와 같은 기준이다. 구조화된 필드가 경로 인자로는 못 하던 우회로가 되면 안 된다.

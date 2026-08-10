@@ -220,8 +220,6 @@ async function spawnChecked(spec: CommandSpec, opts: RunCommandOptions): Promise
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
     let timedOut = false;
     let settled = false;
 
@@ -254,14 +252,10 @@ async function spawnChecked(spec: CommandSpec, opts: RunCommandOptions): Promise
     // a real child process printing Korean: the character straddling the
     // boundary came back as replacement characters, in the output a user reads
     // to find out whether their program worked.
-    const outDecoder = new StringDecoder("utf8");
-    const errDecoder = new StringDecoder("utf8");
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length < MAX_CAPTURE * 2) stdout += outDecoder.write(chunk);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      if (stderr.length < MAX_CAPTURE * 2) stderr += errDecoder.write(chunk);
-    });
+    const outDecoder = new CappedDecoder(MAX_CAPTURE * 2);
+    const errDecoder = new CappedDecoder(MAX_CAPTURE * 2);
+    child.stdout?.on("data", (chunk: Buffer) => outDecoder.write(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => errDecoder.write(chunk));
 
     const finish = (exitCode: number | null): void => {
       if (settled) return;
@@ -275,15 +269,59 @@ async function spawnChecked(spec: CommandSpec, opts: RunCommandOptions): Promise
         exitCode,
         timedOut,
         durationMs: Date.now() - started,
-        stdout: truncate(stdout),
-        stderr: truncate(stderr),
+        stdout: truncate(outDecoder.text),
+        stderr: truncate(errDecoder.text),
       });
     };
 
     child.on("error", (err) => {
-      stderr += `\n[spawn error] ${err.message}`;
+      // Onto the same stream the process would have written to, so a caller
+      // reading `stderr` finds the reason whether the failure came from the
+      // program or from spawning it at all.
+      errDecoder.append(`\n[spawn error] ${err.message}`);
       finish(null);
     });
     child.on("close", (code) => finish(code));
   });
+}
+
+/**
+ * Decodes a stream across chunks, and stops accumulating past a cap.
+ *
+ * Extracted so the property can be tested at all. Held inline it could only be
+ * exercised through a real child process, and the cap meant the interesting
+ * case — a boundary landing mid-character — happened after the point where
+ * output stopped being kept, so a mutation to per-chunk decoding passed every
+ * test.
+ *
+ * The rule it keeps: `chunk.toString("utf8")` decodes each Buffer in isolation,
+ * and a pipe flushes wherever it likes. A three-byte Hangul character split
+ * across two reads becomes two replacement characters — in the output a user
+ * reads to find out whether their program worked.
+ *
+ * The decoder keeps running after the cap so the *stream* stays correctly
+ * framed; only the accumulation stops.
+ */
+export class CappedDecoder {
+  private readonly decoder = new StringDecoder("utf8");
+  private readonly cap: number;
+  private accumulated = "";
+
+  constructor(cap: number) {
+    this.cap = cap;
+  }
+
+  write(chunk: Buffer): void {
+    const decoded = this.decoder.write(chunk);
+    if (this.accumulated.length < this.cap) this.accumulated += decoded;
+  }
+
+  /** Adds text the runtime produced rather than the process — a spawn error. */
+  append(text: string): void {
+    this.accumulated += text;
+  }
+
+  get text(): string {
+    return this.accumulated;
+  }
 }

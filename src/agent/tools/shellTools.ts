@@ -1,4 +1,12 @@
 import type { CommandSpec } from "../../protocol/index.ts";
+import { realpath, stat } from "node:fs/promises";
+import {
+  displayCwd,
+  resolveCwd,
+  specFromLine,
+  validateSpec,
+  type AgentCommandSpec,
+} from "../commandSpec.ts";
 import {
   CommandRejected,
   candidateEnv,
@@ -83,48 +91,97 @@ function runCommandTool(opts: ShellToolOptions): AgentTool {
     name: "run_command",
     risk: "execute",
     description:
-      "Run a command in the workspace — install a dependency, run a script, run the tests. " +
-      "One command per call, given as a single line; there is no shell, so pipes, redirection " +
-      "and && are not available. The user approves it before it runs. " +
-      "Use it to check your work: a change you have not run is a change you are guessing about." +
+      "Run a program in the workspace — install a dependency, run a script, run the tests. " +
+      "Give the program and its arguments separately, and say where to run it with `cwd`. " +
+      "There is no shell: nothing is re-parsed, so a path with a space in it is one argument " +
+      "and needs no quoting, and the same call works the same on Windows and Linux. " +
+      "`cd` is not a program — to run somewhere else, set `cwd`. " +
+      "The user approves it before it runs. Use it to check your work: a change you have not " +
+      "run is a change you are guessing about." +
       suggestions(opts.allowlist),
     parameters: {
       type: "object",
       properties: {
+        executable: {
+          type: "string",
+          description: "The program to run, e.g. `python`, `pip`, `pytest`, `node`. Not a command line.",
+        },
+        args: {
+          type: "string",
+          description:
+            "The arguments, one per line, exactly as the program should receive them. " +
+            "Do not quote them — `my file.txt` on its own line is one argument.",
+        },
+        cwd: {
+          type: "string",
+          description:
+            "Where to run it, relative to the workspace root, e.g. `image_classification_project/src`. " +
+            "Leave it out for the workspace root. This replaces `cd`.",
+        },
         command: {
           type: "string",
           description:
-            "The command line, e.g. `pip install transformers` or `python train.py --epochs 1`.",
+            "A whole command line, only when you genuinely need a shell — a pipeline or a " +
+            "redirection. Prefer `executable` and `args`; this one is re-parsed by the platform " +
+            "shell and behaves differently on Windows and Linux.",
         },
         timeout_seconds: {
           type: "number",
           description: `How long to allow. Default ${DEFAULT_TIMEOUT_MS / 1000}, maximum ${MAX_TIMEOUT_MS / 1000}. Raise it for a large install.`,
         },
       },
-      required: ["command"],
+      required: [],
       additionalProperties: false,
     },
-    summarize: (args) => `\`${str(args, "command")}\` 을(를) 실행합니다`,
+    summarize: (args) => `\`${describeArgs(args)}\` 을(를) 실행합니다`,
     async execute(args, ctx): Promise<ToolResult> {
-      const line = str(args, "command").trim();
-      let parsed: ParsedCommandLine;
-      try {
-        parsed = parseCommandLine(line);
-      } catch (err) {
-        if (err instanceof UnparsableCommand) return { ok: false, content: err.guidance };
-        throw err;
-      }
-
       const seconds = typeof args["timeout_seconds"] === "number" ? args["timeout_seconds"] : 0;
       const timeoutMs = Math.min(
         MAX_TIMEOUT_MS,
         Math.max(1_000, seconds > 0 ? Math.round(seconds * 1000) : DEFAULT_TIMEOUT_MS),
       );
 
+      // One place a call becomes a spec, whichever shape it arrived in. The
+      // structured form and the legacy one-liner converge here, and there is
+      // exactly one spawn below them — a second executor for the text protocol
+      // would be two places for the argv boundary to be lost.
+      let spec: AgentCommandSpec;
+      try {
+        spec = toSpec(args);
+      } catch (err) {
+        if (err instanceof UnparsableCommand) return { ok: false, content: err.guidance };
+        throw err;
+      }
+
+      const problem = validateSpec(spec);
+      if (problem !== null) {
+        // Machine-readable and actionable: the model reads which field it
+        // should have used and fixes the call, rather than trying a different
+        // spelling of the same mistake three times.
+        return { ok: false, content: `${problem.code}: ${problem.message}` };
+      }
+
+      const where = await resolveCwd(spec.cwd, opts.workspaceRoot, {
+        realpath,
+        isDirectory: async (path) => (await stat(path)).isDirectory(),
+      });
+      if (!where.ok) {
+        return { ok: false, content: `${where.problem.code}: ${where.problem.message}` };
+      }
+
+      const parsed = asParsed(spec);
+      const line = describeSpec(spec, where.path, opts.workspaceRoot);
+
       try {
         const outcome = await runApprovedCommand(
           { gate: gateFor(parsed), kind: "regression", cmd: parsed.cmd, args: parsed.args, timeoutMs },
-          { cwd: opts.workspaceRoot, signal: ctx.signal, env: candidateEnv() },
+          {
+            cwd: where.path,
+            signal: ctx.signal,
+            // The user's own env wins over ours: a project that sets
+            // PYTHONIOENCODING deliberately should keep it.
+            env: { ...candidateEnv(), ...interpreterEnv(parsed.cmd), ...(spec.env ?? {}) },
+          },
         );
         // A binary that does not exist comes back as a resolved outcome with
         // ENOENT on stderr, not as a thrown error, so it is read here. Left as
@@ -311,4 +368,99 @@ function gitDiff(opts: ShellToolOptions): AgentTool {
       return { ok: true, content: `${changed.length} file(s) changed:\n${changed.join("\n")}\n\n${body}` };
     },
   };
+}
+
+/**
+ * Everything a call may arrive as, reduced to one spec.
+ *
+ * Three shapes reach here: the structured form, the legacy one-liner, and the
+ * text protocol's version of either — all parameters are strings there, so
+ * `args` is newline-separated rather than an array. They converge before
+ * anything is validated or spawned, which is what keeps the argv boundary in
+ * one place instead of two.
+ */
+function toSpec(args: Record<string, unknown>): AgentCommandSpec {
+  const cwd = str(args, "cwd").trim();
+  const executable = str(args, "executable").trim();
+
+  if (executable.length > 0) {
+    return {
+      mode: "exec",
+      executable,
+      args: argLines(args["args"]),
+      ...(cwd.length === 0 ? {} : { cwd }),
+    };
+  }
+
+  // Legacy: one line, no mode. Kept so calls already in flight do not all break
+  // at once; it produces a spec like everything else and gets no second path.
+  const line = str(args, "command").trim();
+  return specFromLine(line, (text) => {
+    const parsed = parseCommandLine(text);
+    return { cmd: parsed.cmd, args: parsed.args };
+  }, cwd.length === 0 ? undefined : cwd);
+}
+
+/**
+ * Arguments, one per line.
+ *
+ * A line rather than a JSON array because the text tool protocol writes every
+ * parameter as a tag body, where an array has no natural spelling — the same
+ * reason `update_plan` takes its steps this way. An empty line is dropped; a
+ * line with spaces in it is one argument, which is the whole point.
+ */
+function argLines(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((a) => String(a)).filter((a) => a.length > 0);
+  if (typeof raw !== "string") return [];
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/** The spec as `core/commands.ts` wants it. */
+function asParsed(spec: AgentCommandSpec): ParsedCommandLine {
+  if (spec.mode === "exec") return { cmd: spec.executable, args: spec.args };
+  // A shell spec runs through the platform's shell, named explicitly rather
+  // than by turning `shell: true` on somewhere — the interpreter is an argument
+  // like any other, so the argv boundary holds here too.
+  return process.platform === "win32"
+    ? { cmd: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", spec.command] }
+    : { cmd: "/bin/sh", args: ["-c", spec.command] };
+}
+
+/** What the user sees, including where it ran. */
+function describeSpec(spec: AgentCommandSpec, resolvedCwd: string, root: string): string {
+  const where = displayCwd(resolvedCwd, root);
+  const body =
+    spec.mode === "shell" ? spec.command : [spec.executable, ...spec.args].join(" ");
+  return where === "." ? body : `${where}$ ${body}`;
+}
+
+/** The same sentence for the approval prompt, before anything is resolved. */
+function describeArgs(args: Record<string, unknown>): string {
+  const executable = str(args, "executable").trim();
+  const body =
+    executable.length > 0 ? [executable, ...argLines(args["args"])].join(" ") : str(args, "command").trim();
+  const cwd = str(args, "cwd").trim();
+  return cwd.length === 0 ? body : `${cwd}$ ${body}`;
+}
+
+/**
+ * What an interpreter needs to print Korean without mangling it.
+ *
+ * Python on Windows defaults its stdio to the console codepage, so a `print`
+ * of Korean text arrives as mojibake however well the reader decodes it. This
+ * is the writer's half; `core/commands.ts` already keeps the reader's, holding
+ * a `StringDecoder` across chunks so a multi-byte character split down the
+ * middle of a Buffer survives.
+ *
+ * Only for interpreters known to need it, and always beneath an explicit `env`
+ * from the caller.
+ */
+function interpreterEnv(executable: string): Record<string, string> {
+  const bare = executable.toLowerCase().replace(/\.(exe|cmd|bat)$/, "").split(/[\/]/).pop() ?? "";
+  return bare.startsWith("python")
+    ? { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }
+    : {};
 }
