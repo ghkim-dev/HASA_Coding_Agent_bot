@@ -167,8 +167,27 @@ const SUBSTANTIVE: ReadonlySet<string> = new Set([
   "generate_video",
 ]);
 
-/** Machine-readable, so a caller can tell this apart from an ordinary refusal. */
+/**
+ * Actions that need the request to have been read first.
+ *
+ * A superset of the one above, and the extra member is the plan. A plan is
+ * persistent, task-affecting state — it is what the panel shows and what
+ * coverage is measured against — so announcing a strategy before anything has
+ * read the request is announcing one for a request nobody has stated.
+ *
+ * It is not in `SUBSTANTIVE` because that set answers a different question:
+ * whether an action *acts on the world*, which is what `assessNecessity`
+ * weighs. Planning during a turn that only asked to be shown some code is
+ * perfectly sensible; running a command is the thing that needs asking about.
+ */
+const REQUIRES_CONTRACT: ReadonlySet<string> = new Set([...SUBSTANTIVE, "update_plan"]);
+
+/** Machine-readable, so a caller can tell these apart from an ordinary refusal. */
 export const TURN_CONTRACT_REQUIRED = "TURN_CONTRACT_REQUIRED";
+/** The action was not run: it does not answer what this turn was asked for. */
+export const ACTION_REQUIRES_JUSTIFICATION = "ACTION_REQUIRES_JUSTIFICATION";
+/** The action was not run: the user forbade it in words. */
+export const ACTION_DENIED_BY_CONSTRAINT = "ACTION_DENIED_BY_CONSTRAINT";
 
 /**
  * Whether this turn may act yet.
@@ -189,7 +208,7 @@ export function requiresContract(
   toolName: string,
   turnId: string,
 ): string | null {
-  if (!SUBSTANTIVE.has(toolName)) return null;
+  if (!REQUIRES_CONTRACT.has(toolName)) return null;
   // The contract has to be *this* turn's. One recorded three turns ago says
   // nothing about the message just received, and treating it as cover is how a
   // correction gets ignored.
@@ -221,6 +240,81 @@ export type Necessity = "allow" | "requires_justification" | "deny";
 export interface NecessityVerdict {
   necessity: Necessity;
   reason?: string;
+}
+
+/**
+ * What the loop does with a proposed call.
+ *
+ * Three outcomes and only one of them runs anything. `requires_justification`
+ * was a warning attached to a result, which meant the command had already run
+ * by the time anyone objected — the failure it was written for happened anyway
+ * and got a footnote. Deferring is the only version of it that is worth having.
+ */
+export interface ActionDecision {
+  decision: Necessity;
+  /** Machine-readable, first token. Present when the call did not run. */
+  code?: string;
+  reason?: string;
+}
+
+/**
+ * Whether a proposed call runs, and why not when it does not.
+ *
+ * The one place the loop asks. Order is deliberate: a constraint the user
+ * stated outranks everything, then a turn nobody has read may not act at all,
+ * then an action that does not answer what was asked is held back.
+ *
+ * A model cannot argue past any of these. Asserting that a command is necessary
+ * is not evidence that it is — the contract is what the user said, and only a
+ * new contract changes what this turn is for. The way forward from a deferral
+ * is a different action or `report_blocked`, not a better sentence.
+ */
+export function decideAction(
+  contract: TaskContract,
+  toolName: string,
+  turnId: string,
+): ActionDecision {
+  const hard = allowsTool(contract.constraints, toolName);
+  if (!hard.allowed) {
+    return {
+      decision: "deny",
+      code: ACTION_DENIED_BY_CONSTRAINT,
+      ...(hard.reason === undefined ? {} : { reason: hard.reason }),
+    };
+  }
+
+  const missing = requiresContract(contract, toolName, turnId);
+  if (missing !== null) {
+    return { decision: "deny", code: TURN_CONTRACT_REQUIRED, reason: missing };
+  }
+
+  const necessity = assessNecessity(contract, toolName);
+  if (necessity.necessity === "requires_justification") {
+    return {
+      decision: "requires_justification",
+      code: ACTION_REQUIRES_JUSTIFICATION,
+      ...(necessity.reason === undefined ? {} : { reason: necessity.reason }),
+    };
+  }
+  return { decision: "allow" };
+}
+
+/** The sentence the model reads when a call is held back. */
+export function describeDeferral(decision: ActionDecision, toolName: string, contract: TaskContract): string {
+  const deliverables = contract.deliverables
+    .filter((d) => d.lifecycle === "active")
+    .map((d) => d.description);
+  return [
+    `${decision.code}: ${toolName}을(를) 실행하지 않았습니다.`,
+    decision.reason ?? "",
+    deliverables.length === 0
+      ? ""
+      : `이번 요청이 받아야 할 것: ${deliverables.join(", ")}.`,
+    "필요하다고 주장하는 것만으로는 실행되지 않습니다 — 사용자가 요청한 것이 기준입니다. " +
+      "요청을 만족시키는 다른 행동을 고르거나, 그것 없이는 불가능하면 report_blocked로 알리십시오.",
+  ]
+    .filter((line) => line.length > 0)
+    .join(" ");
 }
 
 /** Intents for which acting on the workspace is beside the point. */

@@ -15,7 +15,7 @@ import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
 import { createRequestTool } from "./tools/requestTool.ts";
-import { allowsTool, assessNecessity, describeContract, requiresContract } from "./actionPolicy.ts";
+import { decideAction, describeContract, describeDeferral } from "./actionPolicy.ts";
 import {
   emptyContract,
   mergeContract,
@@ -405,19 +405,14 @@ export class AgentSession {
       ...(this.opts.taskRecord === undefined ? {} : { taskRecord: this.opts.taskRecord }),
       // The contract is read at call time, so a constraint recorded partway
       // through a turn governs the rest of it.
+      // One question, asked before anything runs. `allow` is the only answer
+      // that lets a call through; the other two hold it back and say why in a
+      // form the model can act on.
       toolGate: (toolName) => {
-        // Order matters. A constraint the user stated outranks everything; a
-        // turn nobody has read yet may not act at all; and past those, the
-        // model is told when an action is beside the point rather than stopped.
-        const verdict = allowsTool(this.contract.constraints, toolName);
-        if (!verdict.allowed) return verdict.reason ?? "이 턴에서는 사용할 수 없는 도구입니다.";
-        return requiresContract(this.contract, toolName, this.turnId);
-      },
-      // Advice, not a gate. Attached to the result so the model reads it where
-      // it reads everything else about the call it just made.
-      toolAdvice: (toolName) => {
-        const verdict = assessNecessity(this.contract, toolName);
-        return verdict.necessity === "requires_justification" ? (verdict.reason ?? null) : null;
+        const decision = decideAction(this.contract, toolName, this.turnId);
+        return decision.decision === "allow"
+          ? null
+          : describeDeferral(decision, toolName, this.contract);
       },
     });
 
