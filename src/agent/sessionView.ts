@@ -127,6 +127,7 @@ const TERMINATION: Readonly<Record<RunTerminationReason, { tone: TerminationView
   aborted: { tone: "warning", label: "작업을 취소했습니다" },
   timeout: { tone: "warning", label: "실행 시간 제한을 넘어 중단했습니다" },
   loop_detected: { tone: "warning", label: "같은 행동을 반복해 중단했습니다" },
+  no_progress: { tone: "warning", label: "진전이 없어 중단했습니다" },
   max_steps: { tone: "warning", label: "한 번에 처리할 수 있는 단계 수를 넘었습니다" },
   max_model_calls: { tone: "warning", label: "모델 호출 예산을 소진했습니다" },
   max_tool_calls: { tone: "warning", label: "도구 호출 예산을 소진했습니다" },

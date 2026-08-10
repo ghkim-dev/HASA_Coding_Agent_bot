@@ -239,6 +239,15 @@ export type AgentStopReason =
   | "blocked"
   /** The model asked for the same thing repeatedly and was getting nowhere. */
   | "loop_detected"
+  /**
+   * The model kept acting and stopped getting anywhere.
+   *
+   * Distinct from `loop_detected`, which is about repetition of a *request*.
+   * This is about repetition of an *outcome*: different calls, no new
+   * verification, no change, no discovery. It exists because `maxSteps` was
+   * catching this, forty actions later.
+   */
+  | "no_progress"
   | "error";
 
 /**

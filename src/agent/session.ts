@@ -405,6 +405,12 @@ export class AgentSession {
       ...(this.opts.taskRecord === undefined ? {} : { taskRecord: this.opts.taskRecord }),
       // The contract is read at call time, so a constraint recorded partway
       // through a turn governs the rest of it.
+      // Named in a stall challenge, so "다른 방법을 시도하십시오" points
+      // somewhere rather than being a scolding.
+      outstandingWork: () =>
+        this.contract.requirements
+          .filter((r) => r.lifecycle === "active" && r.required)
+          .map((r) => r.description),
       // One question, asked before anything runs. `allow` is the only answer
       // that lets a call through; the other two hold it back and say why in a
       // form the model can act on.

@@ -74,6 +74,8 @@ export type RunTerminationReason =
   | "aborted"
   | "timeout"
   | "loop_detected"
+  /** The run kept acting without getting anywhere, and stopped saying so. */
+  | "no_progress"
   | "max_steps"
   | "max_model_calls"
   | "max_tool_calls"

@@ -288,6 +288,10 @@ describe("G8 — a turn's state is stated, never inferred into 'completed'", () 
       "aborted",
       "timeout",
       "loop_detected",
+      // A run that stopped because it was getting nowhere. Aborted, never
+      // completed: the requirements it did not meet are still not met, and the
+      // next turn has to be able to carry on from them.
+      "no_progress",
       "max_steps",
       "max_model_calls",
       "max_tool_calls",
