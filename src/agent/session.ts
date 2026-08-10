@@ -14,6 +14,14 @@ import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
+import { createRequestTool } from "./tools/requestTool.ts";
+import { allowsTool, describeContract } from "./actionPolicy.ts";
+import {
+  emptyContract,
+  mergeContract,
+  type TaskContract,
+  type TurnContract,
+} from "./turnContract.ts";
 import { createBlockedTool, type BlockedReport } from "./tools/blockedTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
@@ -99,6 +107,8 @@ export interface AgentSessionOptions {
    * with. See `AgentLoopOptions.taskRecord`.
    */
   taskRecord?: () => string | null;
+  /** Told what the user asked for, once the model has recorded it. */
+  onContract?: (contract: TurnContract) => void;
 }
 
 export class AgentSession {
@@ -131,6 +141,17 @@ export class AgentSession {
   private lastDelta: ProviderMessage[] = [];
   /** What the last turn said it could not do, when it said so. */
   private lastBlocked: BlockedReport | null = null;
+  /**
+   * What the user has asked for, across the conversation.
+   *
+   * Held by the session rather than rebuilt per turn because a refinement adds
+   * to it and a correction supersedes part of it — both need what came before.
+   * Restored with the conversation; see `restoreContract`.
+   */
+  private contract: TaskContract = emptyContract();
+  /** The turn being run, so the request tool can stamp what it records. */
+  private turnId = "t0";
+  private turnOrdinal = 0;
 
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
@@ -263,6 +284,16 @@ export class AgentSession {
       // against a file it cannot find is blocked in exactly the same way, and
       // the alternative to saying so is inventing a plan for a file it imagined.
       createBlockedTool({ onBlocked: (report) => { this.lastBlocked = report; } }),
+      // First in intent if not in order: what the user asked for, fixed into
+      // something the runtime keeps. Every mode — a question misread is a
+      // question misanswered whether or not files are involved.
+      createRequestTool({
+        turnId: () => this.turnId,
+        onContract: (contract) => {
+          this.contract = mergeContract(this.contract, contract);
+          this.opts.onContract?.(contract);
+        },
+      }),
     ]);
     return all.withCeiling(definition.maxRisk);
   }
@@ -280,6 +311,16 @@ export class AgentSession {
     attachments: readonly Attachment[] = [],
   ): Promise<AgentTurnResult> {
     const definition = modeDefinition(this.mode);
+    // Named before the tools are built, so `record_request` stamps what it
+    // records with the turn it belongs to rather than with whatever the model
+    // supplies. Provenance the model can write is provenance it can get wrong.
+    this.turnId = `t${this.turnOrdinal++}`;
+
+    // What the user has asked for so far, carried into the prompt. This is the
+    // point of the contract: a requirement recorded three turns ago is in front
+    // of the model now, whether or not the current plan mentions it.
+    const standing = describeContract(this.contract);
+
     const system: ProviderMessage = {
       role: "system",
       content:
@@ -288,7 +329,8 @@ export class AgentSession {
           canRunCommands: (this.opts.commands ?? []).length > 0,
           isGitRepo: this.isGitRepo,
           runtimeGaps: this.opts.runtimeGaps,
-        }),
+        }) +
+        (standing === null ? "" : `\n\n지금까지 확인된 요청:\n${standing}\n`),
     };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];
 
@@ -335,6 +377,12 @@ export class AgentSession {
       // the host, which holds the conversation's events; a session on its own
       // sees only the turn it is running.
       ...(this.opts.taskRecord === undefined ? {} : { taskRecord: this.opts.taskRecord }),
+      // The contract is read at call time, so a constraint recorded partway
+      // through a turn governs the rest of it.
+      toolGate: (toolName) => {
+        const verdict = allowsTool(this.contract.constraints, toolName);
+        return verdict.allowed ? null : (verdict.reason ?? "이 턴에서는 사용할 수 없는 도구입니다.");
+      },
     });
 
     this.log.info("agent turn", { mode: this.mode, approval: this.approvals.currentMode });

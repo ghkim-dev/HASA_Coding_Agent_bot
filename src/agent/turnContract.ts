@@ -1,0 +1,467 @@
+/**
+ * What the user asked for, fixed into something the runtime owns.
+ *
+ * The gap this closes was found by reading the previous slice honestly: the
+ * runtime kept an accurate record of what happened, but the list of *what was
+ * wanted* still came from `update_plan` — the model's own account of how it
+ * meant to proceed. So a model that never planned to touch Hugging Face
+ * produced a task with no Hugging Face requirement, and the runtime tracked its
+ * absence perfectly.
+ *
+ *   Plan is how. Requirement is what.
+ *
+ * A plan may be revised, abandoned or wrong. A requirement the user stated is
+ * none of the runtime's business to drop.
+ *
+ * ## Where the boundary is
+ *
+ * Interpreting Korean prose is not something a runtime can do, and pretending
+ * otherwise would mean a wall of keyword matching that is wrong in a different
+ * way every week. The model does interpret. What changes is what happens next:
+ *
+ *     model interpretation
+ *          ↓  schema validation
+ *     TurnContract          ← from here the runtime owns it
+ *          ↓
+ *     requirements · constraints · corrections
+ *
+ * Below that line the model proposes actions and writes prose. It does not get
+ * to quietly drop a requirement by planning around it, and it does not get to
+ * decide that an instruction not to run anything no longer applies.
+ */
+
+/**
+ * What the user wants done with this turn.
+ *
+ * A set rather than one value: "이 코드를 수정하고 테스트도 해줘" is two, and
+ * flattening it to one loses whichever came second.
+ */
+export type TurnIntent =
+  /** Talk about it. Answering may need no tool at all. */
+  | "discuss"
+  /** Look at the code and report what is there. */
+  | "inspect"
+  /** Put something in front of the user — the file, the output, the diff. */
+  | "present"
+  /** Change files. */
+  | "modify"
+  /** Run something. */
+  | "execute"
+  /** Run something *in order to find out whether it works*. */
+  | "verify"
+  /** Go and read outside the workspace. */
+  | "research"
+  /** Carry on with what was already happening. */
+  | "continue";
+
+export const TURN_INTENTS: readonly TurnIntent[] = [
+  "discuss",
+  "inspect",
+  "present",
+  "modify",
+  "execute",
+  "verify",
+  "research",
+  "continue",
+];
+
+/**
+ * How this message relates to what came before.
+ *
+ * `correct` is the one that earns the type. Treated as an ordinary new message,
+ * "아니 실행하라는 게 아니라 코드를 보여달라는 말이야" adds a request while the
+ * old one stays live, and the agent keeps executing — which is exactly what
+ * happened.
+ */
+export type TurnRelation = "new_task" | "continue" | "refine" | "correct" | "question";
+
+export const TURN_RELATIONS: readonly TurnRelation[] = [
+  "new_task",
+  "continue",
+  "refine",
+  "correct",
+  "question",
+];
+
+/**
+ * A prohibition or obligation the user stated in words.
+ *
+ * Structured rather than left in the prose because prose does not survive
+ * context compaction and cannot be enforced. "실행하지 마" is a fact about what
+ * this turn may do, and the tool gate reads it.
+ */
+export type ConstraintKind =
+  | "no_execute"
+  | "no_modify"
+  | "no_research"
+  | "must_execute"
+  | "present_only"
+  | "other";
+
+export interface Constraint {
+  kind: ConstraintKind;
+  /** The user's own words, so a refusal can quote what it is honouring. */
+  text: string;
+  sourceTurnId: string;
+}
+
+/** Where a requirement came from, so the runtime can tell one apart from its own. */
+export interface Provenance {
+  sourceTurnId: string;
+  /** `explicit` when the user said it; `inferred` when the model read it in. */
+  origin: "explicit" | "inferred";
+}
+
+export type RequirementLifecycle = "active" | "superseded";
+
+/**
+ * One thing the user asked for.
+ *
+ * Distinct from a plan step, and distinct from `RequirementState` in
+ * `taskState.ts` — that one carries how far along the work is. This carries
+ * what was asked and who asked it.
+ */
+export interface Requirement {
+  id: string;
+  description: string;
+  /** False for something the agent proposed on its own initiative. */
+  required: boolean;
+  provenance: Provenance;
+  lifecycle: RequirementLifecycle;
+  /** The turn that superseded it, when it was. */
+  supersededBy?: string;
+}
+
+export interface Deliverable {
+  id: string;
+  description: string;
+  provenance: Provenance;
+  lifecycle: RequirementLifecycle;
+  /** The turn that retired it, when a correction did. */
+  supersededBy?: string;
+}
+
+export interface TurnContract {
+  turnId: string;
+  intents: TurnIntent[];
+  relation: TurnRelation;
+  /** The user's request in one line, as the model understood it. */
+  goal: string;
+  requirements: Requirement[];
+  deliverables: Deliverable[];
+  constraints: Constraint[];
+  /** What the model could not decide. Present so a caller can ask. */
+  ambiguities?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Reading one out of what the model sent
+// ---------------------------------------------------------------------------
+
+const MAX_ITEMS = 20;
+const MAX_TEXT = 200;
+
+function clip(value: unknown, limit = MAX_TEXT): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+/**
+ * Splits a newline list the way `parsePlan` does.
+ *
+ * The text tool protocol writes parameters as tag bodies, where an array has no
+ * natural spelling; models also add their own numbering, which would otherwise
+ * be rendered as part of the requirement.
+ */
+function lines(raw: unknown): string[] {
+  if (typeof raw !== "string") return [];
+  return raw
+    .split("\n")
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .filter((line) => line.length > 0)
+    .slice(0, MAX_ITEMS)
+    .map((line) => clip(line));
+}
+
+function intentsFrom(raw: unknown): TurnIntent[] {
+  const found = lines(raw)
+    .flatMap((line) => line.toLowerCase().split(/[\s,+/]+/))
+    .filter((word): word is TurnIntent => (TURN_INTENTS as readonly string[]).includes(word));
+  return [...new Set(found)];
+}
+
+function relationFrom(raw: unknown): TurnRelation | null {
+  const text = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return (TURN_RELATIONS as readonly string[]).includes(text) ? (text as TurnRelation) : null;
+}
+
+const CONSTRAINT_KINDS: readonly ConstraintKind[] = [
+  "no_execute",
+  "no_modify",
+  "no_research",
+  "must_execute",
+  "present_only",
+  "other",
+];
+
+function constraintsFrom(raw: unknown, turnId: string): Constraint[] {
+  return lines(raw).map((line) => {
+    // `kind: text`, with the kind optional. A model that writes only prose
+    // still produces a constraint — as `other`, which is recorded and shown but
+    // not enforced, because enforcing something nobody classified would be
+    // guessing at what to forbid.
+    const split = /^([a-z_]+)\s*[:=]\s*(.+)$/i.exec(line);
+    const kind = split === null ? null : split[1]!.toLowerCase();
+    return {
+      kind: (CONSTRAINT_KINDS as readonly string[]).includes(kind ?? "") ? (kind as ConstraintKind) : "other",
+      text: split === null ? line : split[2]!.trim(),
+      sourceTurnId: turnId,
+    };
+  });
+}
+
+/** Why a contract could not be read, for the model to be told once. */
+export interface ContractProblem {
+  reason: string;
+}
+
+/**
+ * Validates what the model sent into a contract, or says why not.
+ *
+ * The schema boundary the whole design rests on. Above it, prose the model
+ * wrote; below it, something the runtime will hold to for the rest of the task.
+ * A contract with no goal and no requirements is not a contract — it is a
+ * shrug, and accepting it would put an empty requirement set into the record
+ * with the authority of a real one.
+ */
+export function parseTurnContract(
+  args: Record<string, unknown>,
+  turnId: string,
+): { ok: true; contract: TurnContract } | { ok: false; problem: ContractProblem } {
+  const goal = clip(args["goal"]);
+  const requirementText = lines(args["requirements"]);
+  const relation = relationFrom(args["relation"]);
+  const intents = intentsFrom(args["intents"]);
+
+  if (goal.length === 0) {
+    return { ok: false, problem: { reason: "요청을 한 줄로 요약한 goal이 필요합니다." } };
+  }
+  if (relation === null) {
+    return {
+      ok: false,
+      problem: { reason: `relation은 ${TURN_RELATIONS.join(", ")} 중 하나여야 합니다.` },
+    };
+  }
+  if (intents.length === 0) {
+    return { ok: false, problem: { reason: `intents는 ${TURN_INTENTS.join(", ")} 중에서 고르십시오.` } };
+  }
+  // `continue` and `question` legitimately add nothing new; everything else
+  // that claims to be a request has to say what was requested.
+  if (requirementText.length === 0 && relation !== "continue" && relation !== "question") {
+    return { ok: false, problem: { reason: "사용자가 요구한 것을 requirements에 한 줄씩 적으십시오." } };
+  }
+
+  const provenance: Provenance = { sourceTurnId: turnId, origin: "explicit" };
+  return {
+    ok: true,
+    contract: {
+      turnId,
+      intents,
+      relation,
+      goal,
+      requirements: requirementText.map((description, i) => ({
+        id: `${turnId}-r${i + 1}`,
+        description,
+        required: true,
+        provenance,
+        lifecycle: "active",
+      })),
+      deliverables: lines(args["deliverables"]).map((description, i) => ({
+        id: `${turnId}-d${i + 1}`,
+        description,
+        provenance,
+        lifecycle: "active",
+      })),
+      constraints: constraintsFrom(args["constraints"], turnId),
+      ...(lines(args["ambiguities"]).length === 0 ? {} : { ambiguities: lines(args["ambiguities"]) }),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// What the task holds, across turns
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything the user has asked for in this conversation, still standing.
+ *
+ * Accumulated rather than replaced. The failure that motivates every rule below
+ * is the same one: a later turn quietly losing what an earlier turn asked for.
+ */
+export interface TaskContract {
+  goal: string;
+  requirements: Requirement[];
+  deliverables: Deliverable[];
+  constraints: Constraint[];
+  /** The intents of the most recent turn. What the tool gate reads. */
+  intents: TurnIntent[];
+  relation: TurnRelation;
+  lastTurnId: string;
+}
+
+export function emptyContract(): TaskContract {
+  return {
+    goal: "",
+    requirements: [],
+    deliverables: [],
+    constraints: [],
+    intents: [],
+    relation: "new_task",
+    lastTurnId: "",
+  };
+}
+
+/**
+ * Folds a turn's contract into the task's.
+ *
+ * The algebra, one relation at a time:
+ *
+ * - `new_task` replaces everything. The user started over and saying so.
+ * - `refine` adds. "오픈소스 모델도 추가해줘" must not lose CNN and ViT, which
+ *   is the case that made this a merge rather than an assignment.
+ * - `correct` supersedes what it contradicts and adds what it asks for.
+ *   Superseded rather than deleted: the history stays readable, and a
+ *   requirement that was retracted is a different thing from one that never
+ *   existed.
+ * - `continue` and `question` add nothing. "이어서 해줘" is not a new request,
+ *   and inventing requirements from it is how a continuation turns into a
+ *   restart.
+ *
+ * Constraints follow their turn: a prohibition stated for one turn does not
+ * silently govern the next, but one stated as a standing rule can be restated.
+ */
+export function mergeContract(task: TaskContract, turn: TurnContract): TaskContract {
+  const next: TaskContract = {
+    ...task,
+    intents: turn.intents,
+    relation: turn.relation,
+    lastTurnId: turn.turnId,
+    // Constraints are this turn's. Carrying them forever would mean a single
+    // "실행하지 마" disables execution for the rest of the conversation.
+    constraints: turn.constraints,
+  };
+
+  if (turn.relation === "new_task") {
+    return {
+      ...next,
+      goal: turn.goal,
+      requirements: turn.requirements,
+      deliverables: turn.deliverables,
+    };
+  }
+
+  if (turn.relation === "continue" || turn.relation === "question") {
+    // Deliberately nothing. The goal stays whatever it was — a question about a
+    // task is not a new goal for it.
+    return next;
+  }
+
+  if (turn.relation === "correct") {
+    // What the correction contradicts is the *current* turn's work, so the
+    // deliverables of the turn being corrected are retired. Requirements from
+    // earlier turns stand: correcting how a result should be shown does not
+    // retract the request that produced it.
+    const supersededDeliverables = task.deliverables.map((d) =>
+      d.lifecycle === "active" && d.provenance.sourceTurnId === task.lastTurnId
+        ? { ...d, lifecycle: "superseded" as const, supersededBy: turn.turnId }
+        : d,
+    );
+    return {
+      ...next,
+      goal: turn.goal.length > 0 ? turn.goal : task.goal,
+      requirements: addNew(task.requirements, turn.requirements),
+      deliverables: [...supersededDeliverables, ...turn.deliverables],
+    };
+  }
+
+  // refine
+  return {
+    ...next,
+    goal: task.goal.length > 0 ? task.goal : turn.goal,
+    requirements: addNew(task.requirements, turn.requirements),
+    deliverables: [...task.deliverables, ...turn.deliverables],
+  };
+}
+
+/** Adds what is not already there, by description rather than by id. */
+function addNew<T extends { id: string; description: string }>(existing: T[], incoming: T[]): T[] {
+  const seen = new Set(existing.map((r) => r.description.trim().toLowerCase()));
+  return [...existing, ...incoming.filter((r) => !seen.has(r.description.trim().toLowerCase()))];
+}
+
+/** Requirements still standing. Superseded ones are kept but do not count. */
+export function activeRequirements(contract: TaskContract): Requirement[] {
+  return contract.requirements.filter((r) => r.lifecycle === "active");
+}
+
+// ---------------------------------------------------------------------------
+// What the plan does and does not cover
+// ---------------------------------------------------------------------------
+
+/** A requirement no plan step appears to address. */
+export interface CoverageGap {
+  requirementId: string;
+  description: string;
+}
+
+/**
+ * Requirements the plan does not mention.
+ *
+ * Reported, never acted on. The temptation is to drop what the plan omits —
+ * that is precisely the bug this layer exists to prevent, and it is how "Hugging
+ * Face와 HASA도 활용" vanished from a task that had been given it.
+ *
+ * The matching is a word overlap and is meant to be loose. A false "covered" is
+ * a missed warning; a false "not covered" is a warning the model can dismiss in
+ * a sentence. The second is the cheaper mistake.
+ */
+export function planCoverage(contract: TaskContract, planSteps: readonly string[]): CoverageGap[] {
+  const planText = planSteps.join(" ").toLowerCase();
+  const planWords = planSteps.flatMap((step) => significantWords(step));
+  const gaps: CoverageGap[] = [];
+
+  for (const requirement of activeRequirements(contract)) {
+    if (!requirement.required) continue;
+    const words = significantWords(requirement.description);
+    if (words.length === 0) continue;
+
+    const hit = words.some(
+      (word) =>
+        planText.includes(word) ||
+        // A Korean requirement and a Korean plan step rarely share a whole
+        // token: "웹에서 내용 보충" against "웹 검색으로 보충" agrees on the
+        // stem and differs by a particle. Matching stems in both directions
+        // catches that without a morphological analyser.
+        planWords.some((step) => step.startsWith(word) || word.startsWith(step)),
+    );
+    if (!hit) gaps.push({ requirementId: requirement.id, description: requirement.description });
+  }
+  return gaps;
+}
+
+/**
+ * Words worth matching on.
+ *
+ * Two characters is the floor for CJK and three for everything else, because
+ * they carry different amounts per character: "학습" and "추론" are whole
+ * concepts, while a two-letter Latin token is almost always a preposition.
+ * Getting this wrong in the Korean direction is what let a real requirement —
+ * "웹에서 내용 보충" — read as covered by nothing.
+ */
+function significantWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}._-]+/u)
+    .filter((word) => (/[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(word) ? word.length >= 2 : word.length >= 3))
+    .slice(0, 8);
+}
