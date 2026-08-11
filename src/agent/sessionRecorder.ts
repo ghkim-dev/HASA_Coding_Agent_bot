@@ -108,6 +108,12 @@ export class TurnRecorder {
       case "plan":
         return [{ type: "plan", ...this.next(), steps: [...event.steps], current: event.current }];
 
+      // Already checked against the page it names, and the page is not kept.
+      // Dropping this would leave a reopened conversation knowing which sites
+      // were read and nothing about what was on them.
+      case "source_fact":
+        return [{ type: "source_fact", ...this.next(), fact: event.fact }];
+
       // Kept, and kept whole. It is what the user asked for, and folding these
       // back is how a reopened conversation still knows.
       case "contract":

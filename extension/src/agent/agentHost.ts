@@ -770,7 +770,7 @@ export class AgentHost {
         // The URLs the user named are part of the question. A service nothing
         // was read from is the one a confident sentence is most likely to be
         // about, because nothing observed can contradict it.
-        const claims = unsupportedClaims(task.evidence, text, task.sources);
+        const claims = unsupportedClaims(task.evidence, text, task.sources, task.facts);
         return claims.length === 0 ? null : describeUnsupportedClaims(claims);
       },
     });

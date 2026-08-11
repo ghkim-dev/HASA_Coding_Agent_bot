@@ -25,6 +25,8 @@ import {
 } from "./turnContract.ts";
 import { createBlockedTool, type BlockedReport } from "./tools/blockedTool.ts";
 import { exactSourcesIn, type SourceRequirement } from "./sourceProvenance.ts";
+import { SourceLedger } from "./sourceFacts.ts";
+import { createSourceFactTool } from "./tools/sourceFactTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
 import type {
@@ -170,6 +172,17 @@ export class AgentSession {
    * hostname can be asked.
    */
   private namedSources: SourceRequirement[] = [];
+  /**
+   * The pages this session has read, so a fact about one can be checked.
+   *
+   * Session-scoped rather than turn-scoped: "그 페이지에서 뭘 봤는지 정리해줘"
+   * arrives as a new turn, and refusing to let the model record what it read a
+   * moment ago would make the mechanism useless exactly when it is asked for.
+   * Bounded, and never written to disk — see `SourceLedger`.
+   */
+  private readonly ledger = new SourceLedger();
+  /** Facts recorded this session, for ids the model cannot choose. */
+  private factOrdinal = 0;
   /** The turn being run, so the request tool can stamp what it records. */
   private turnId = "t0";
   private turnOrdinal = 0;
@@ -328,7 +341,19 @@ export class AgentSession {
             // by the time the model fetches it. Origin only — see
             // `WebToolOptions.userSources`.
             userSources: () => this.namedSources,
+            ledger: this.ledger,
           })),
+      // Beside the web tools, and only when they exist: recording what a page
+      // said is meaningless without something that reads pages.
+      ...(this.opts.web?.enabled === false
+        ? []
+        : [
+            createSourceFactTool({
+              ledger: this.ledger,
+              nextId: () => `sf-${this.turnId}-${++this.factOrdinal}`,
+              onFact: (fact) => this.emit({ type: "source_fact", fact }),
+            }),
+          ]),
       // Also every mode. ARCHITECT plans for a living, and a user watching ASK
       // read six files deserves the same answer to "what is it doing".
       createPlanTool({ onPlan: (event) => this.emit(event) }),

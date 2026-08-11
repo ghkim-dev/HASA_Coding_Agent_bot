@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import {
   describeSources,
   describeUnsupportedClaims,
+  entityLevel,
   knownServices,
   levelFor,
+  serviceApiAnswered,
   sourceMetrics,
   unsupportedClaims,
 } from "./claimGrounding.ts";
@@ -76,6 +78,37 @@ function fetched(hostname: string, body: string, opts: { truncated?: boolean; js
   };
 }
 
+/**
+ * One thing the model recorded out of a page it read.
+ *
+ * Built as the event the tool emits, so the tests exercise the same fold the
+ * runtime does. Whether the tool would have *accepted* it is checked separately
+ * against a real page in `sourceFacts.test.ts`.
+ */
+function factEvent(
+  hostname: string,
+  subject: string,
+  predicate: "mentioned" | "listed" | "downloadable",
+  body: string,
+  sourceText?: string,
+): SessionEvent {
+  return {
+    type: "source_fact",
+    ...id(),
+    fact: {
+      id: `sf-${seq}`,
+      subject,
+      predicate,
+      hostname,
+      sourceUrl: `https://${hostname}/models`,
+      sourceFingerprint: fingerprint(body),
+      ...(sourceText === undefined ? {} : { sourceText }),
+      origin: sourceText === undefined ? "inferred" : "explicit",
+      at: 1,
+    },
+  };
+}
+
 /** A tool call that ran, with whatever it read from. */
 function toolRun(
   toolName: string,
@@ -116,20 +149,43 @@ describe("10 — a level is reached, never inferred", () => {
     assert.equal(levelFor(evidence, HF), "discovered");
   });
 
-  test("a page that was read reaches listed", () => {
+  test("a page that was read reaches fetched, and stops there", () => {
     const evidence = evidenceOf([
       userMessage("확인해줘"),
       ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, "qwen-x")] }),
     ]);
-    assert.equal(levelFor(evidence, HASA), "listed");
+    // The C4.6.1 correction. Reading the page is not knowing what was on it,
+    // and while those were the same rung a model seen on one site inherited
+    // another site's standing.
+    assert.equal(levelFor(evidence, HASA), "fetched");
+    assert.equal(entityLevel(evidence, [], HASA, "qwen-x"), "fetched", "no fact, no listing");
   });
 
-  test("a JSON answer from the host reaches accessible, and no further", () => {
+  test("a fact recorded out of that page raises that one subject", () => {
+    const events = [
+      userMessage("확인해줘"),
+      ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, "qwen-x")] }),
+      factEvent(HASA, "qwen-x", "listed", "qwen-x"),
+    ];
+    const task = reduceTask(events);
+    assert.ok(task !== null);
+    assert.equal(entityLevel(task.evidence, task.facts, HASA, "qwen-x"), "listed");
+    // And only that one. The page is not a licence for everything named in the
+    // conversation.
+    assert.equal(entityLevel(task.evidence, task.facts, HASA, "llama-y"), "fetched");
+  });
+
+  test("19 — a JSON catalog answering is beside the ladder, not above it", () => {
     const evidence = evidenceOf([
       userMessage("확인해줘"),
-      ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, '{"models":[]}', { json: true })] }),
+      ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, '{"models":["Model B"]}', { json: true })] }),
     ]);
-    assert.equal(levelFor(evidence, HASA), "accessible");
+    // It answered, and that is a fact about the endpoint.
+    assert.equal(serviceApiAnswered(evidence, HASA), true);
+    // It is not a fact about any model. `accessible` used to sit above
+    // `listed`, so one successful GET outranked having found the thing.
+    assert.equal(levelFor(evidence, HASA), "fetched");
+    assert.equal(entityLevel(evidence, [], HASA, "Model A"), "fetched");
     assert.notEqual(levelFor(evidence, HASA), "invocation_verified", "the API answering is not a model running");
   });
 
@@ -152,7 +208,7 @@ describe("10 — a level is reached, never inferred", () => {
         sources: [fetched(HASA, "qwen-x")],
       }),
     ]);
-    assert.equal(levelFor(evidence, HASA), "listed");
+    assert.equal(levelFor(evidence, HASA), "fetched");
   });
 
   test("a spoof host contributes nothing to the real one", () => {
@@ -161,7 +217,7 @@ describe("10 — a level is reached, never inferred", () => {
       ...toolRun("web_fetch", "읽기", { sources: [fetched(`${HASA}.evil.example.com`, "qwen-x")] }),
     ]);
     assert.equal(levelFor(evidence, HASA), null);
-    assert.equal(levelFor(evidence, `${HASA}.evil.example.com`), "listed");
+    assert.equal(levelFor(evidence, `${HASA}.evil.example.com`), "fetched");
   });
 
   test("services are listed with what each was shown to be", () => {
@@ -174,7 +230,7 @@ describe("10 — a level is reached, never inferred", () => {
       knownServices(evidence).map((s) => [s.hostname, s.level]),
       [
         [HF, "discovered"],
-        [HASA, "listed"],
+        [HASA, "fetched"],
       ],
     );
   });
@@ -265,7 +321,7 @@ describe("29 — a snippet that says something is not that thing being confirmed
     assert.equal(levelFor(evidence, HF), "discovered");
     const claims = unsupportedClaims(evidence, `${HF} 에서 Model X를 사용할 수 있습니다.`);
     assert.equal(claims.length, 1, "even about the host that was in the results");
-    assert.equal(claims[0]?.needed, "listed");
+    assert.equal(claims[0]?.needed, "fetched", "the sentence names no entity, so reading the page is the bar");
   });
 });
 
@@ -291,7 +347,7 @@ describe("31 — being in the list is not having run", () => {
       const claims = unsupportedClaims(catalogOnly(), answer);
       assert.equal(claims.length, 1, answer);
       assert.equal(claims[0]?.kind, "invocation");
-      assert.equal(claims[0]?.have, "listed");
+      assert.equal(claims[0]?.have, "fetched");
     }
   });
 
@@ -317,7 +373,7 @@ describe("31 — being in the list is not having run", () => {
       ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, "qwen-x")] }),
       ...toolRun("run_command", "python call.py", { ok: false, detail: `${HASA} 연결 실패` }),
     ]);
-    assert.equal(levelFor(evidence, HASA), "listed");
+    assert.equal(levelFor(evidence, HASA), "fetched");
     assert.equal(unsupportedClaims(evidence, `${HASA} 호출에 성공했습니다.`).length, 1);
   });
 });
@@ -346,12 +402,33 @@ describe("33 — half a page cannot say what a whole one does not contain", () =
     );
   });
 
-  test("from a whole page the flat denial stands", () => {
-    const whole = evidenceOf([
+  test("15 — a whole page is still not enough on its own", () => {
+    // Stronger than C4.6, and deliberately. Reading a page and recording
+    // nothing out of it leaves the runtime unable to say what was on it, so it
+    // cannot back a claim about what was *not*.
+    const whole = reduceTask([
       userMessage(`https://${HASA}/models 확인해줘`),
       ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, "qwen-x, llama-y")] }),
     ]);
-    assert.deepEqual(unsupportedClaims(whole, `${HASA} 는 Model X를 지원하지 않습니다.`), []);
+    assert.ok(whole !== null);
+    assert.equal(
+      unsupportedClaims(whole.evidence, `${HASA} 는 Model X를 지원하지 않습니다.`, [], whole.facts).length,
+      1,
+    );
+  });
+
+  test("having enumerated it, the flat denial stands", () => {
+    const enumerated = reduceTask([
+      userMessage(`https://${HASA}/models 확인해줘`),
+      ...toolRun("web_fetch", "읽기", { sources: [fetched(HASA, "qwen-x, llama-y")] }),
+      factEvent(HASA, "qwen-x", "listed", "qwen-x, llama-y"),
+      factEvent(HASA, "llama-y", "listed", "qwen-x, llama-y"),
+    ]);
+    assert.ok(enumerated !== null);
+    assert.deepEqual(
+      unsupportedClaims(enumerated.evidence, `${HASA} 는 Model X를 지원하지 않습니다.`, [], enumerated.facts),
+      [],
+    );
   });
 
   test("and the correction names the range rather than only refusing", () => {
@@ -506,16 +583,58 @@ describe("26 — the dog/cat provenance failure, end to end", () => {
     assert.equal(wrong[0]?.have, null);
   });
 
-  test("once both pages are read, which model came from which is the model's to say", () => {
-    // The honest boundary. The runtime keeps which *site* each observation came
-    // from; it does not keep the pages, so it cannot check that Model A was on
-    // one of them. What it can do is put both facts in front of the model —
-    // see the brief below — and refuse a claim about a site with nothing behind
-    // it, which is the failure that actually happened.
-    const evidence = evidenceOf(transcript());
-    assert.deepEqual(unsupportedClaims(evidence, `Model A는 ${HASA} 에서 사용할 수 있습니다.`), []);
-    assert.equal(levelFor(evidence, HASA), "listed");
-    assert.equal(levelFor(evidence, HF), "listed");
+  test("9 — with both pages read, the cross-attribution is still caught", () => {
+    // The gap C4.6 left open and C4.6.1 closes. Both hosts are `fetched`, so
+    // every service-level check passes; what separates them is which page each
+    // model was actually recorded out of.
+    const task = reduceTask([
+      ...transcript(),
+      factEvent(HF, "Model A", "listed", "Model A"),
+      factEvent(HASA, "Model B", "listed", "Model B"),
+    ]);
+    assert.ok(task !== null);
+    const claim = (text: string): number =>
+      unsupportedClaims(task.evidence, text, task.sources, task.facts).length;
+
+    assert.equal(claim(`Model A는 ${HASA} 에서 사용할 수 있습니다.`), 1, "A came from the other site");
+    assert.equal(claim("Model A는 Hugging Face에서 확인했습니다."), 0);
+    assert.equal(claim(`Model B는 ${HASA} 카탈로그에서 확인했습니다.`), 0);
+    assert.equal(claim(`Model B를 ${HASA} 에서 사용할 수 있습니다.`), 0);
+    // And it names what is wrong rather than only refusing.
+    const message = describeUnsupportedClaims(
+      unsupportedClaims(task.evidence, `Model A는 ${HASA} 에서 사용할 수 있습니다.`, task.sources, task.facts),
+    );
+    assert.match(message, /Model A/);
+    assert.match(message, /record_source_fact/);
+  });
+
+  test("18 — a sentence claiming both at once is judged per entity", () => {
+    const task = reduceTask([
+      ...transcript(),
+      factEvent(HF, "Model A", "listed", "Model A"),
+      factEvent(HASA, "Model B", "listed", "Model B"),
+    ]);
+    assert.ok(task !== null);
+    const claims = unsupportedClaims(
+      task.evidence,
+      `Model A, Model B 모두 ${HASA} 에서 제공됩니다.`,
+      task.sources,
+      task.facts,
+    );
+    assert.equal(claims.length, 1, "one of the two is wrong, and only that one");
+    assert.equal(claims[0]?.subject, "Model A");
+  });
+
+  test("the brief names what each source carried", () => {
+    const task = reduceTask([
+      ...transcript(),
+      factEvent(HF, "Model A", "listed", "Model A"),
+      factEvent(HASA, "Model B", "listed", "Model B"),
+    ]);
+    assert.ok(task !== null);
+    const brief = describeTask(task);
+    assert.match(brief, new RegExp(`${HF}:[^\n]*\n  이 출처에서 확인된 항목: Model A`));
+    assert.match(brief, /이 출처에서 확인된 항목: Model B/);
   });
 
   test("Model B is in the catalog, and that is not a run", () => {
@@ -566,10 +685,11 @@ describe("44 — the numbers come out of the record, not out of a counter", () =
       ...toolRun("web_fetch", "HASA 읽기", { sources: [fetched(HASA, "qwen-x")] }),
       ...toolRun("web_fetch", "HASA 다시 읽기", { sources: [fetched(HASA, "qwen-x")] }),
       ...toolRun("web_fetch", "HF 읽기", { sources: [fetched(HF, "vit", { truncated: true })] }),
+      factEvent(HASA, "qwen-x", "listed", "qwen-x"),
     ]);
     assert.ok(task !== null);
 
-    assert.deepEqual(sourceMetrics(task.evidence, task.sources), {
+    assert.deepEqual(sourceMetrics(task.evidence, task.sources, task.facts), {
       userSuppliedUrls: 2,
       successfulExactFetches: 2,
       unreadUserSources: 0,
@@ -578,15 +698,19 @@ describe("44 — the numbers come out of the record, not out of a counter", () =
       fetchedSources: 3,
       duplicateFetches: 1,
       truncatedFetches: 1,
-      listedServices: 2,
+      // One, not two. Both sites were read; only one had anything recorded out
+      // of it, and that is what `listed` now means.
+      listedServices: 1,
       invocationVerifiedServices: 0,
+      recordedFacts: 1,
+      distinctSubjects: 1,
     });
   });
 
   test("and a task that never went to the web counts nothing", () => {
     const task = reduceTask([userMessage("테스트 실행해줘"), plan("테스트"), ...toolRun("run_command", "pnpm test")]);
     assert.ok(task !== null);
-    const metrics = sourceMetrics(task.evidence, task.sources);
+    const metrics = sourceMetrics(task.evidence, task.sources, task.facts);
     assert.equal(metrics.fetchedSources, 0);
     assert.equal(metrics.searchResults, 0);
     assert.equal(metrics.listedServices, 0);

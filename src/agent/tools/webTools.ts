@@ -9,6 +9,7 @@ import {
   type SourceRequirement,
   type WebSourceProvenance,
 } from "../sourceProvenance.ts";
+import type { SourceLedger } from "../sourceFacts.ts";
 import type { AgentTool, ToolResult, TruncationMeta } from "../types.ts";
 
 /**
@@ -81,6 +82,14 @@ export interface WebToolOptions extends WebClientOptions {
    * design, and `sourceProvenance.ts` for why no `first_party` field exists.
    */
   userSources?: () => readonly SourceRequirement[];
+  /**
+   * Where fetched bodies go, so a fact recorded about one can be checked.
+   *
+   * The page itself is never persisted — see `SourceLedger`. What this hands
+   * over is the text, in memory, for as long as it takes the model to say what
+   * was in it.
+   */
+  ledger?: SourceLedger;
 }
 
 export function createWebTools(opts: WebToolOptions = {}): AgentTool[] {
@@ -246,6 +255,10 @@ function webFetch(opts: WebToolOptions): AgentTool {
           ...(meta === undefined ? {} : { truncated: true }),
           contentFingerprint: fingerprint(whole),
         };
+
+        // The body, in memory, so `record_source_fact` can be checked against
+        // what actually arrived rather than believed.
+        opts.ledger?.remember(fetched.url, normalizeHost(finalHost), whole);
 
         const redirected = !hostMatches(normalizeHost(finalHost), normalizeHost(requestedHost));
         const note = redirected

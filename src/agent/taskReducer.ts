@@ -8,6 +8,7 @@ import {
   type TaskState,
 } from "./taskState.ts";
 import { exactSourcesIn, hostMatches } from "./sourceProvenance.ts";
+import { factKey } from "./sourceFacts.ts";
 
 /**
  * The record, rebuilt from the events that were already being written.
@@ -84,6 +85,19 @@ export function reduceTask(events: readonly SessionEvent[], taskId = "task"): Ta
           if (task.sources.some((s) => s.url === source.url)) continue;
           task.sources.push({ ...source, status: "pending", evidence: [] });
         }
+        break;
+      }
+
+      case "source_fact": {
+        // Joined to its observation by content, not by an id nobody had at the
+        // time. See `GroundedFact`.
+        if (task.facts.some((f) => factKey(f) === factKey(event.fact))) break;
+        const evidence = task.evidence.find((e) =>
+          (e.sources ?? []).some(
+            (s) => s.contentFingerprint === event.fact.sourceFingerprint && hostMatches(s.hostname, event.fact.hostname),
+          ),
+        );
+        task.facts.push({ ...event.fact, sourceEvidenceId: evidence?.id ?? null });
         break;
       }
 

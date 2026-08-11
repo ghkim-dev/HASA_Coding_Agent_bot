@@ -141,6 +141,13 @@ export function structuralKey(observation: ActionObservation): string {
   if (toolName === "web_search" || toolName === "web_fetch") {
     return `${toolName}:${String(args["query"] ?? args["url"] ?? "")}`;
   }
+  // What was recorded, not how it was worded. Re-recording the same thing about
+  // the same page with a different quote is the same note taken twice.
+  if (toolName === "record_source_fact") {
+    return `record_source_fact:${String(args["url"] ?? "")}:${String(args["predicate"] ?? "")}:${String(
+      args["subject"] ?? "",
+    ).toLowerCase()}`;
+  }
   // A plan or a contract is one shape regardless of content: rewriting either
   // is the same move, and rewriting it repeatedly is the churn this catches.
   if (toolName === "update_plan" || toolName === "record_request") return toolName;

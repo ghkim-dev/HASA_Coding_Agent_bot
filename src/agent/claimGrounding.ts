@@ -1,4 +1,5 @@
 import type { Evidence } from "./taskState.ts";
+import { factsFor, knownSubjects, type SourceFact } from "./sourceFacts.ts";
 import {
   atLeast,
   describeLevel,
@@ -56,6 +57,8 @@ export interface ServiceKnowledge {
 
 export interface UnsupportedClaim {
   kind: ClaimKind;
+  /** The entity the sentence is about, when it names one the runtime knows. */
+  subject?: string;
   /** The host the sentence is about. */
   hostname: string;
   name: string;
@@ -83,10 +86,14 @@ function sourcesOf(evidence: readonly Evidence[]): WebSourceProvenance[] {
  * - `invocation_verified` — a *non-web* observation that succeeded and names
  *   this host. A command that called the API is the only thing that produces
  *   it, which is the point: a catalog page cannot.
- * - `accessible` — the host answered a fetch with JSON. Its API replied; that
- *   is not the same as a model call having worked.
- * - `listed` — something on this host was read.
+ * - `fetched` — a page on this host was read. What was *on* it is a separate
+ *   question, answered by `entityLevel` and by nothing here.
  * - `discovered` — a search result pointed here and nobody opened it.
+ *
+ * `listed` is deliberately unreachable from evidence alone. It used to be what
+ * a read page earned, and that is what let a model seen on one site inherit
+ * another site's standing: both hosts were `listed`, so a sentence about either
+ * passed.
  */
 export function levelFor(evidence: readonly Evidence[], hostname: string): AvailabilityLevel | null {
   const host = normalizeHost(hostname);
@@ -106,15 +113,61 @@ export function levelFor(evidence: readonly Evidence[], hostname: string): Avail
     }
     for (const source of item.sources ?? []) {
       if (!hostMatches(source.hostname, host)) continue;
-      if (source.retrieval === "fetched") {
-        const json = (source.contentType ?? "").toLowerCase().includes("json");
-        take(json ? "accessible" : "listed");
-      } else {
-        take("discovered");
-      }
+      take(source.retrieval === "fetched" ? "fetched" : "discovered");
     }
   }
   return best;
+}
+
+/**
+ * Whether this host's own API answered a request.
+ *
+ * Beside the ladder rather than on it. A catalog endpoint returning JSON is a
+ * fact about the endpoint and says nothing about any particular model; when it
+ * sat above `listed` in the ordering, one successful GET outranked having
+ * actually found the thing being claimed.
+ */
+export function serviceApiAnswered(evidence: readonly Evidence[], hostname: string): boolean {
+  return sourcesOf(evidence).some(
+    (s) =>
+      hostMatches(s.hostname, hostname) &&
+      s.retrieval === "fetched" &&
+      (s.contentType ?? "").toLowerCase().includes("json"),
+  );
+}
+
+/**
+ * How far one *thing* on one service has been shown to go.
+ *
+ * The distinction the previous slice could not draw. `fetched` says the page
+ * was read; only a fact recorded out of that page — checked against its bytes,
+ * see `sourceFacts.verifyFact` — raises a particular subject to `listed`, and
+ * only an execution naming it reaches the top.
+ */
+export function entityLevel(
+  evidence: readonly Evidence[],
+  facts: readonly SourceFact[],
+  hostname: string,
+  subject: string,
+): AvailabilityLevel | null {
+  const executed = evidence.some(
+    (e) =>
+      e.kind !== "web_source" &&
+      e.status === "passed" &&
+      e.observation.toLowerCase().includes(subject.toLowerCase()) &&
+      mentionsHost(e.observation, hostname),
+  );
+  if (executed) return "invocation_verified";
+  if (factsFor(facts, hostname, subject).length > 0) return "listed";
+  // Known nowhere on this host: it falls back to whatever the *service* reached,
+  // which is what stops a fetched page from carrying an entity it never named.
+  return levelFor(evidence, hostname);
+}
+
+function mentionsHost(text: string, hostname: string): boolean {
+  const lower = text.toLowerCase();
+  const name = serviceName(hostname);
+  return lower.includes(normalizeHost(hostname)) || (name.length > 2 && lower.includes(name));
 }
 
 /**
@@ -130,10 +183,12 @@ export function levelFor(evidence: readonly Evidence[], hostname: string): Avail
 export function knownServices(
   evidence: readonly Evidence[],
   named: readonly { hostname: string }[] = [],
+  facts: readonly SourceFact[] = [],
 ): ServiceKnowledge[] {
   const hosts = new Set<string>();
   for (const source of sourcesOf(evidence)) hosts.add(normalizeHost(source.hostname));
   for (const source of named) hosts.add(normalizeHost(source.hostname));
+  for (const fact of facts) hosts.add(normalizeHost(fact.hostname));
 
   const out: ServiceKnowledge[] = [];
   for (const hostname of hosts) {
@@ -207,8 +262,24 @@ function mentions(sentence: string, service: ServiceKnowledge): boolean {
   const text = sentence.toLowerCase();
   if (text.includes(service.hostname)) return true;
   if (service.name.length < 3) return false;
-  const name = service.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-z0-9])${name}([^a-z0-9]|$)`, "i").test(text);
+  return wholeWord(text, service.name);
+}
+
+/**
+ * Whether a sentence is about a recorded entity.
+ *
+ * The same boundary rule, and it matters more here: model ids are substrings of
+ * each other often enough — `vit-base` inside `vit-base-patch16` — that a
+ * substring test would attribute a claim about one to the other.
+ */
+function mentionsSubject(sentence: string, subject: string): boolean {
+  return subject.length >= 3 && wholeWord(sentence.toLowerCase(), subject.toLowerCase());
+}
+
+/** A boundary against ASCII word characters, so Korean particles do not block it. */
+function wholeWord(text: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(text);
 }
 
 /**
@@ -221,11 +292,13 @@ export function unsupportedClaims(
   evidence: readonly Evidence[],
   text: string,
   named: readonly { hostname: string }[] = [],
+  facts: readonly SourceFact[] = [],
 ): UnsupportedClaim[] {
-  const services = knownServices(evidence, named);
+  const services = knownServices(evidence, named, facts);
   if (services.length === 0) return [];
   /** The one service a sentence can be about without naming it. */
   const only = services.length === 1 ? services[0] : undefined;
+  const subjects = knownSubjects(facts);
 
   const out: UnsupportedClaim[] = [];
   for (const sentence of sentences(text)) {
@@ -243,25 +316,67 @@ export function unsupportedClaims(
     for (const service of services) {
       if (!mentions(sentence, service)) continue;
 
+      // Which recorded entities this sentence is about. Only names the runtime
+      // has seen on *some* source count — a name it has never encountered
+      // cannot be checked, and guessing at one would be the scraper this
+      // deliberately is not.
+      const named = subjects.filter((s) => mentionsSubject(sentence, s));
+      const level = (subject?: string): AvailabilityLevel | null =>
+        subject === undefined ? service.level : entityLevel(evidence, facts, service.hostname, subject);
+
       // Invocation first: "HASA에서 호출에 성공했습니다" is also an availability
       // sentence, and the stronger reading is the one to answer.
       if (INVOCATION.test(sentence)) {
-        if (!atLeast(service.level, "invocation_verified")) {
-          out.push({ kind: "invocation", hostname: service.hostname, name: service.name, have: service.level, needed: "invocation_verified", sentence });
+        for (const subject of named.length > 0 ? named : [undefined]) {
+          if (atLeast(level(subject), "invocation_verified")) continue;
+          out.push({
+            kind: "invocation",
+            hostname: service.hostname,
+            name: service.name,
+            have: level(subject),
+            needed: "invocation_verified",
+            sentence,
+            ...(subject === undefined ? {} : { subject }),
+          });
         }
         continue;
       }
       if (AVAILABILITY.test(sentence)) {
-        if (!atLeast(service.level, "listed")) {
-          out.push({ kind: "availability", hostname: service.hostname, name: service.name, have: service.level, needed: "listed", sentence });
+        // The cross-attribution case. A subject the runtime knows from another
+        // source needs a fact from *this* one; a sentence naming nothing needs
+        // only that the service's own page was read.
+        for (const subject of named.length > 0 ? named : [undefined]) {
+          const needed: AvailabilityLevel = subject === undefined ? "fetched" : "listed";
+          if (atLeast(level(subject), needed)) continue;
+          out.push({
+            kind: "availability",
+            hostname: service.hostname,
+            name: service.name,
+            have: level(subject),
+            needed,
+            sentence,
+            ...(subject === undefined ? {} : { subject }),
+          });
         }
         continue;
       }
-      // A negative claim about the whole service, made from a page that was
-      // cut. "확인한 목록에서는 없었습니다" is fine and is what QUALIFIED lets
-      // through; "HASA는 지원하지 않습니다" from half a page is not.
-      if (ABSENCE.test(sentence) && !QUALIFIED.test(sentence) && service.truncated) {
-        out.push({ kind: "absence", hostname: service.hostname, name: service.name, have: service.level, needed: "listed", sentence });
+      // A negative claim about the whole of a service. "확인한 목록에서는
+      // 없었습니다" is fine and is what QUALIFIED lets through; a flat denial
+      // needs the service to have been enumerated, and a page that arrived cut
+      // was not enumerated whatever was recorded from it.
+      if (ABSENCE.test(sentence) && !QUALIFIED.test(sentence)) {
+        const enumerated = factsFor(facts, service.hostname).length > 0 && !service.truncated;
+        if (!enumerated) {
+          out.push({
+            kind: "absence",
+            hostname: service.hostname,
+            name: service.name,
+            have: service.level,
+            needed: "listed",
+            sentence,
+            ...(named[0] === undefined ? {} : { subject: named[0] }),
+          });
+        }
       }
     }
   }
@@ -303,13 +418,18 @@ function needText(claim: UnsupportedClaim): string {
         "목록에 있다는 것과 호출에 성공했다는 것은 다른 사실입니다."
       );
     case "availability":
-      return (
-        `${claim.hostname}의 페이지를 직접 읽지 않았으므로 그곳에서 사용할 수 있다고 쓸 수 없습니다. ` +
-        "다른 사이트에서 찾은 것은 그 사이트에서 찾은 것입니다."
-      );
+      // The two shapes are genuinely different problems. One is "you never
+      // opened that site"; the other is "you opened it, and this is not what
+      // you found there".
+      return claim.subject === undefined
+        ? `${claim.hostname}의 페이지를 직접 읽지 않았으므로 그곳에서 사용할 수 있다고 쓸 수 없습니다. ` +
+          "다른 사이트에서 찾은 것은 그 사이트에서 찾은 것입니다."
+        : `${claim.hostname}의 내용에서 ${claim.subject} 을(를) 확인한 기록이 없습니다. ` +
+          `다른 출처에서 본 것을 ${claim.name}의 것으로 쓸 수 없습니다. ` +
+          `실제로 그 페이지에 있다면 record_source_fact로 먼저 기록하십시오.`;
     case "absence":
       return (
-        "가져온 내용이 잘렸으므로 전체에 없다고 쓸 수 없습니다. " +
+        "그 출처에 무엇이 있었는지 기록되지 않았거나 내용이 잘렸으므로, 전체에 없다고 쓸 수 없습니다. " +
         '"확인한 범위에서는 찾지 못했습니다"처럼 범위를 밝히십시오.'
       );
   }
@@ -342,11 +462,16 @@ export interface SourceMetrics {
   truncatedFetches: number;
   listedServices: number;
   invocationVerifiedServices: number;
+  /** Entities recorded out of a page, checked against it. */
+  recordedFacts: number;
+  /** Distinct things any source was recorded as carrying. */
+  distinctSubjects: number;
 }
 
 export function sourceMetrics(
   evidence: readonly Evidence[],
   named: readonly { hostname: string; status?: string }[] = [],
+  facts: readonly SourceFact[] = [],
 ): SourceMetrics {
   const sources = sourcesOf(evidence);
   const searches = sources.filter((s) => s.retrieval === "search_discovery");
@@ -360,7 +485,7 @@ export function sourceMetrics(
     seen.add(key);
   }
 
-  const services = knownServices(evidence, named);
+  const services = knownServices(evidence, named, facts);
   return {
     userSuppliedUrls: named.length,
     successfulExactFetches: named.filter((n) => n.status === "fetched").length,
@@ -370,8 +495,12 @@ export function sourceMetrics(
     fetchedSources: fetches.length,
     duplicateFetches: duplicates,
     truncatedFetches: fetches.filter((s) => s.truncated === true).length,
-    listedServices: services.filter((s) => atLeast(s.level, "listed")).length,
+    // A service counts as `listed` when something was actually recorded out of
+    // its own pages — not when one of its pages was opened.
+    listedServices: services.filter((s) => factsFor(facts, s.hostname).length > 0).length,
     invocationVerifiedServices: services.filter((s) => atLeast(s.level, "invocation_verified")).length,
+    recordedFacts: facts.length,
+    distinctSubjects: knownSubjects(facts).length,
   };
 }
 
@@ -385,15 +514,26 @@ export function sourceMetrics(
 export function describeSources(
   evidence: readonly Evidence[],
   named: readonly { hostname: string }[] = [],
+  facts: readonly SourceFact[] = [],
 ): string | null {
-  const services = knownServices(evidence, named);
+  const services = knownServices(evidence, named, facts);
   if (services.length === 0) return null;
 
   const lines = ["출처별로 확인된 것:"];
   for (const service of services) {
     const cut = service.truncated ? " (내용이 잘렸으므로 전체를 본 것은 아닙니다)" : "";
     const level = service.level === null ? "확인된 것이 없습니다" : describeLevel(service.level);
-    lines.push(`- ${service.hostname}: ${level}${cut}`);
+    // What was actually found there, by name. This is the line that lets a
+    // model group its answer correctly instead of being corrected afterwards.
+    const found = factsFor(facts, service.hostname).map((f) => f.subject);
+    const carried =
+      found.length > 0
+        ? `\n  이 출처에서 확인된 항목: ${[...new Set(found)].join(", ")}`
+        : atLeast(service.level, "fetched")
+          ? "\n  이 출처에서 기록된 항목이 없습니다. 여기서 무엇을 찾았는지는 " +
+            "record_source_fact로 남겨야 근거가 됩니다."
+          : "";
+    lines.push(`- ${service.hostname}: ${level}${cut}${carried}`);
   }
   if (services.length > 1) {
     lines.push(

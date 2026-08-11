@@ -387,7 +387,11 @@ describe("8 — the levels compare, and nothing raises one", () => {
   test("atLeast is an ordering", () => {
     assert.equal(atLeast("listed", "discovered"), true);
     assert.equal(atLeast("discovered", "listed"), false);
-    assert.equal(atLeast("invocation_verified", "accessible"), true);
+    assert.equal(atLeast("invocation_verified", "listed"), true);
+    // The rung the C4.6.1 correction added. Having read a page is above having
+    // seen it in search results and below having found the thing on it.
+    assert.equal(atLeast("fetched", "discovered"), true);
+    assert.equal(atLeast("fetched", "listed"), false, "reading a page is not finding a thing on it");
     assert.equal(atLeast(null, "discovered"), false, "nothing observed reaches nothing");
   });
 });

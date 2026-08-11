@@ -1,5 +1,6 @@
 import type { NormalizedToolCall, ProviderChatRequest } from "../provider/types.ts";
 import type { WebSourceProvenance } from "./sourceProvenance.ts";
+import type { SourceFact } from "./sourceFacts.ts";
 
 /**
  * The Coding Agent's contract.
@@ -294,6 +295,15 @@ export type AgentEvent =
    * in a workspace that is not a repository. `meta` says when what is here is
    * not all there was.
    */
+  /**
+   * One thing a fetched page was recorded as saying, already checked against it.
+   *
+   * Emitted rather than inferred from the tool call, for the same reason the
+   * contract is: what matters downstream is the validated object, and rebuilding
+   * it from the call's arguments would mean re-running the validation somewhere
+   * that no longer has the page.
+   */
+  | { type: "source_fact"; fact: SourceFact }
   | {
       type: "tool_end";
       callId: string;

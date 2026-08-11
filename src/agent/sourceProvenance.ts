@@ -206,17 +206,25 @@ export type SourceStrength = "discovered" | "fetched" | "supported" | "execution
 /**
  * How available something has been shown to be, on a particular service.
  *
- * `listed` is the one that gets overstated. A model ID appearing in a catalog
- * is a fact about the catalog page; it is not a fact about whether the API will
- * answer, and it is very much not a fact about whether this machine's
- * credential may call it.
+ * The ladder is about *one thing on one service*, and the rung that used to be
+ * wrong is the second one. Reading a service's catalog page told us the page
+ * exists; it was being read as though it told us what was on it, so a model
+ * nobody had seen anywhere near that service inherited the page's standing.
+ * `fetched` is now what a read page earns, and `listed` has to be earned per
+ * entity — see `sourceFacts.ts`.
+ *
+ * `accessible` is gone from the ladder for the same reason in a different
+ * spelling. A catalog endpoint answering with JSON is a fact about the
+ * endpoint; it says nothing about any particular model, and having it sit above
+ * `listed` meant one successful GET outranked actually finding the thing. It
+ * survives as `serviceApiAnswered`, beside the ladder rather than on it.
  */
-export type AvailabilityLevel = "discovered" | "listed" | "accessible" | "invocation_verified";
+export type AvailabilityLevel = "discovered" | "fetched" | "listed" | "invocation_verified";
 
 const LEVEL_ORDER: Record<AvailabilityLevel, number> = {
   discovered: 0,
-  listed: 1,
-  accessible: 2,
+  fetched: 1,
+  listed: 2,
   invocation_verified: 3,
 };
 
@@ -229,10 +237,10 @@ export function describeLevel(level: AvailabilityLevel): string {
   switch (level) {
     case "discovered":
       return "검색 결과에서 언급됨 (페이지를 읽지는 않음)";
+    case "fetched":
+      return "해당 사이트의 페이지를 직접 읽음";
     case "listed":
-      return "해당 사이트에서 직접 읽음";
-    case "accessible":
-      return "해당 사이트의 API가 응답함";
+      return "해당 사이트의 내용에서 실제로 확인됨";
     case "invocation_verified":
       return "실제 호출이 성공함";
   }

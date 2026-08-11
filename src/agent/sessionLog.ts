@@ -95,6 +95,7 @@ const KNOWN: ReadonlySet<string> = new Set([
   "file_changed",
   "notice",
   "turn_contract",
+  "source_fact",
   "run_completed",
 ]);
 

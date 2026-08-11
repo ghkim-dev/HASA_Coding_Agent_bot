@@ -1,5 +1,6 @@
 import type { ToolRisk } from "./types.ts";
 import type { WebSourceProvenance } from "./sourceProvenance.ts";
+import type { SourceFact } from "./sourceFacts.ts";
 import type {
   ConversationBranch,
   ConversationCheckpoint,
@@ -134,6 +135,20 @@ export interface PlanEvent extends Base {
   current: number;
 }
 
+/**
+ * One thing a page the agent read was recorded as saying.
+ *
+ * Persisted rather than derived, because it cannot be derived: the page body is
+ * never written to storage and the model's reading of it is not reproducible
+ * from anything that is. Checked against the bytes before it was emitted — see
+ * `sourceFacts.verifyFact` — so what is stored is a fact the runtime confirmed
+ * was in the source, not a claim it accepted.
+ */
+export interface SourceFactEvent extends Base {
+  type: "source_fact";
+  fact: SourceFact;
+}
+
 export interface ToolStartedEvent extends Base {
   type: "tool_started";
   callId: string;
@@ -211,6 +226,7 @@ export type SessionEvent =
   | AssistantTextEvent
   | ReasoningEvent
   | PlanEvent
+  | SourceFactEvent
   | ToolStartedEvent
   | ToolCompletedEvent
   | FileChangedEvent

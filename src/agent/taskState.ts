@@ -1,6 +1,7 @@
 import type { SessionEvent, ToolCallStatus } from "./sessionEvents.ts";
 import { hostMatches, type SourceRequirement, type WebSourceProvenance } from "./sourceProvenance.ts";
 import { describeSources } from "./claimGrounding.ts";
+import type { SourceFact } from "./sourceFacts.ts";
 
 /**
  * What has actually happened, as opposed to what was said about it.
@@ -126,6 +127,23 @@ export interface Evidence {
 }
 
 /**
+ * A recorded fact, joined to the observation it came out of.
+ *
+ * The link is resolved here rather than carried on the event, because the event
+ * is written while the fetch is still in flight as far as ids are concerned —
+ * an `Evidence` id exists only once the completion has been reduced. Content
+ * addressing does the join: the fact carries the fingerprint of the body it was
+ * read from, and exactly one piece of evidence has provenance with that
+ * fingerprint.
+ *
+ * `sourceEvidenceId` is null for a fact whose evidence is not in this chain,
+ * which is what a branch looks like from the inside.
+ */
+export interface GroundedFact extends SourceFact {
+  sourceEvidenceId: string | null;
+}
+
+/**
  * A source the user named, and how far the agent got with it.
  *
  * Held on the task rather than derived at the end, so a turn can be asked "did
@@ -150,6 +168,14 @@ export interface TaskState {
   changedFiles: string[];
   /** URLs the user named, and whether any of them was actually read. */
   sources: SourceRequirementState[];
+  /**
+   * What the pages that were read were recorded as carrying.
+   *
+   * Distinct from `evidence`, which says a page was read. This says what was on
+   * it, per entity, and it is the difference between "the agent visited the
+   * catalog" and "the catalog has this model in it".
+   */
+  facts: GroundedFact[];
   startedAt: number;
   updatedAt: number;
 }
@@ -164,6 +190,7 @@ export function emptyTask(taskId: string, goal: string, at: number): TaskState {
     evidence: [],
     changedFiles: [],
     sources: [],
+    facts: [],
     startedAt: at,
     updatedAt: at,
   };
@@ -380,7 +407,7 @@ export function describeTask(task: TaskState): string {
 
   // What each site was actually shown to be. Placed before the verdict because
   // it is the fact most likely to be overstated in the sentence that follows.
-  const sources = describeSources(task.evidence, task.sources);
+  const sources = describeSources(task.evidence, task.sources, task.facts);
   if (sources !== null) lines.push(sources);
 
   for (const unread of verdict.unreadSources) {
