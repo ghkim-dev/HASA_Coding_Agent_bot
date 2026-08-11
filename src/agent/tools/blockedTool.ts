@@ -1,4 +1,5 @@
 import type { AgentTool, ToolResult } from "../types.ts";
+import { classifyFailure, isExternalBlocker } from "../commandSemantics.ts";
 
 /**
  * A way to stop and say the requested thing could not be done.
@@ -45,6 +46,16 @@ export interface BlockedReport {
 
 export interface BlockedToolOptions {
   onBlocked: (report: BlockedReport) => void;
+  /**
+   * What the runtime has actually observed failing, this turn.
+   *
+   * Consulted before a blocked report is accepted. A model that has only ever
+   * mistyped a command has not discovered that something cannot be done — and
+   * in the session this gate was written for, that is exactly what happened:
+   * `pip install` with nothing to install, four times, then "패키지 설치가
+   * 불가능한 환경입니다."
+   */
+  observedFailures?: () => readonly string[];
 }
 
 /** The report as the user reads it. */
@@ -116,6 +127,26 @@ export function createBlockedTool(opts: BlockedToolOptions): AgentTool {
             "A blocked report needs both what could not be done and what stopped it, " +
             "with the actual error rather than a paraphrase.",
         };
+      }
+
+      // A blocker is a claim about the world, and a claim about the world needs
+      // something outside the model to rest on. What is refused here is the
+      // report whose only evidence is the agent's own malformed commands.
+      const failures = opts.observedFailures?.() ?? null;
+      if (failures !== null && failures.length > 0) {
+        const kinds = failures.map(classifyFailure);
+        if (!kinds.some(isExternalBlocker)) {
+          const invocation = kinds.filter((k) => k === "invalid_invocation").length;
+          return {
+            ok: false,
+            content:
+              (invocation > 0
+                ? `이번 턴에서 실패한 ${failures.length}건 중 ${invocation}건은 명령 구성이 잘못된 것이었습니다. `
+                : "이번 턴에서 관측된 실패는 환경 문제라는 근거가 되지 않습니다. ") +
+              "권한 거부, 네트워크 차단, 실행 파일 부재처럼 바깥에서 온 근거가 있어야 막혔다고 " +
+              "보고할 수 있습니다. 먼저 명령을 고쳐서 다시 시도하십시오.",
+          };
+        }
       }
 
       const report: BlockedReport = { goal, obstacle, tried, ...(needed.length === 0 ? {} : { needed }) };

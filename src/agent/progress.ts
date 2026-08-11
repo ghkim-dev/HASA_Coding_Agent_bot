@@ -1,4 +1,5 @@
 import { isSelfAuthoredOutput, verifierFor } from "./taskState.ts";
+import { classifyFailure } from "./commandSemantics.ts";
 
 /**
  * Whether the agent is getting anywhere, as opposed to being busy.
@@ -195,10 +196,20 @@ export interface ProgressState {
   /** Files whose content this turn has already written once. */
   written: Map<string, string>;
   meaningful: number;
+  /** What each recent action was, for saying why a stall happened. */
+  observed: Array<{ shape: string; failed: boolean; deferred: boolean; invalidInvocation: boolean }>;
 }
 
 export function newProgressState(): ProgressState {
-  return { streak: 0, challenged: false, seen: new Set(), recent: [], written: new Map(), meaningful: 0 };
+  return {
+    streak: 0,
+    challenged: false,
+    seen: new Set(),
+    recent: [],
+    written: new Map(),
+    meaningful: 0,
+    observed: [],
+  };
 }
 
 const RECENT_WINDOW = 8;
@@ -225,6 +236,17 @@ export function observeAction(state: ProgressState, observation: ActionObservati
   const shape = structuralKey(observation);
   state.recent.push(shape);
   if (state.recent.length > RECENT_WINDOW) state.recent.shift();
+
+  state.observed.push({
+    shape,
+    failed: observation.outcome === "failed",
+    deferred: observation.outcome === "deferred" || observation.outcome === "denied",
+    // Read from the result the runtime produced, not guessed from the text: a
+    // refusal before spawning and an interpreter complaining about its own
+    // arguments are the same mistake one step apart.
+    invalidInvocation: classifyFailure(observation.detail) === "invalid_invocation",
+  });
+  if (state.observed.length > RECENT_WINDOW) state.observed.shift();
 
   const result = classify(state, observation, key);
 
@@ -311,6 +333,63 @@ export function stallVerdict(state: ProgressState): "ok" | "warn" | "stop" {
 export const NO_PROGRESS_DETECTED = "NO_PROGRESS_DETECTED";
 
 /**
+ * Why the run stopped getting anywhere.
+ *
+ * Kept apart because they need different things said. The panel's one line —
+ * "요청을 조금 더 구체적으로 알려 주세요" — was written for `contract_ambiguity`
+ * and was flatly wrong in the session that motivated this: the request named
+ * CNN, Transformer, dataset, training, evaluation and comparison, and what
+ * repeated was `pip install` with nothing to install. Telling that user their
+ * request was vague is blaming them for the agent's typing.
+ */
+export type StallReason =
+  /** The same malformed command, over and over. */
+  | "repeated_invalid_invocation"
+  /** The same call, held back by policy, over and over. */
+  | "repeated_policy_mismatch"
+  /** The same failure, with nothing changed in between. */
+  | "repeated_same_failure"
+  /** The plan rewritten instead of acted on. */
+  | "plan_churn"
+  /** Nothing more specific. */
+  | "no_new_information";
+
+/**
+ * Reads why, from what was observed rather than from a guess.
+ *
+ * Ordered by how much it tells the user. An invalid invocation is the most
+ * actionable finding — it names a mistake with a fix — so it wins over the
+ * generic answer whenever it is present.
+ */
+export function stallReason(state: ProgressState): StallReason {
+  const recent = state.observed.slice(-STALL_WINDOW);
+  if (recent.some((o) => o.invalidInvocation)) return "repeated_invalid_invocation";
+  if (recent.some((o) => o.deferred)) return "repeated_policy_mismatch";
+  if (recent.every((o) => o.shape === "update_plan") && recent.length > 0) return "plan_churn";
+  if (recent.some((o) => o.failed)) return "repeated_same_failure";
+  return "no_new_information";
+}
+
+/** How far back `stallReason` looks. The streak that triggered it, and no more. */
+const STALL_WINDOW = 6;
+
+/** What to tell the user, grounded in what actually repeated. */
+const STALL_MESSAGE: Readonly<Record<StallReason, string>> = {
+  repeated_invalid_invocation:
+    "명령을 반복해서 잘못 구성해 중단했습니다. 요청이 모호해서가 아니라, 인자가 빠진 명령을 " +
+    "여러 번 보냈기 때문입니다.",
+  repeated_policy_mismatch:
+    "요청과 맞지 않는 행동을 반복해 중단했습니다. 위에 어떤 행동이 왜 보류됐는지 남아 있습니다.",
+  repeated_same_failure: "같은 실패를 고치지 못한 채 반복해 중단했습니다.",
+  plan_churn: "계획만 고쳐 쓰고 실제로 아무것도 하지 않아 중단했습니다.",
+  no_new_information: "같은 자리를 맴돌고 있어 중단했습니다.",
+};
+
+export function describeStallReason(reason: StallReason): string {
+  return STALL_MESSAGE[reason];
+}
+
+/**
  * What the model is told when it has stopped getting anywhere.
  *
  * Names the pattern rather than scolding: a model that can see it repeated the
@@ -319,8 +398,10 @@ export const NO_PROGRESS_DETECTED = "NO_PROGRESS_DETECTED";
  */
 export function describeStall(state: ProgressState, outstanding: readonly string[]): string {
   const period = cyclePeriod(state.recent);
+  const reason = stallReason(state);
   const lines = [
-    `${NO_PROGRESS_DETECTED}: 최근 ${state.streak}개 행동이 아무것도 진전시키지 못했습니다.`,
+    `${NO_PROGRESS_DETECTED}(${reason}): 최근 ${state.streak}개 행동이 아무것도 진전시키지 못했습니다.`,
+    describeStallReason(reason),
     period === null ? "" : `같은 행동을 ${period === 1 ? "" : `${period}개씩 번갈아 `}반복하고 있습니다.`,
     "새로 검증된 것도, 바뀐 파일도, 해결된 오류도, 처음 보는 관측도 없습니다.",
     outstanding.length === 0 ? "" : `아직 남은 요구사항: ${outstanding.join(", ")}.`,

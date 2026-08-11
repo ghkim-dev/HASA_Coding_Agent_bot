@@ -414,3 +414,57 @@ mkdir …       실패 (프로그램으로 spawn)
 3. `mkdir`·`md`·`New-Item`을 `cd`와 같은 방식으로 돌려세우고 **쓸 도구 이름을 알려준다**
 
 3이 필요한 이유: 거부만 하고 대안을 말하지 않으면 같은 실수를 세 번 철자만 바꿔 시도하게 된다. 그게 원래 기록에 있는 그대로다. 정말 그 프로그램이 필요하면 `mode: "shell"`이 있다.
+
+## 15. 잘못 친 명령은 고장난 기계가 아니다
+
+실사용에서 순서대로:
+
+```
+pip matplotlib   → unknown command "matplotlib"
+pip install      → you must give at least one requirement
+pip install      → (같은 결과)
+python -m        → argument expected for the -m option
+python -m        → (같은 결과)
+python -c        → argument expected for the -c option
+python           → REPL 배너, exit 0
+```
+
+그리고 에이전트: **"패키지 설치가 불가능한 환경입니다."**
+
+전부 정상적으로 spawn됐다. `pip`은 찾아졌고, 실행됐고, **인자에 대해 불평했다** — 그건 환경이 동작한다는 증거다. 에이전트는 그것을 환경이 동작하지 않는다는 증거로 읽었다.
+
+### 먼저 확인한 것
+
+인자가 파이프라인에서 사라진 것인지부터 봤다. **아니다.** `pip install torch torchvision matplotlib einops`를 legacy 한 줄·텍스트 프로토콜·structured 세 경로에 통과시키면 다섯 개가 전부 남는다. 모델이 그렇게 썼다.
+
+### 실행 전 의미 검증
+
+문법이 맞다고 뜻이 있는 것은 아니다. 확실한 것만 잡는다:
+
+```
+python -m           모듈 이름 없음
+python -c           코드 없음
+pip install         설치 대상 없음
+pip matplotlib      하위 명령 없음
+python (인자 없음)   터미널이 없는데 REPL — exit 0이 성공이 아니다
+```
+
+`npm install`은 인자 없이도 뜻이 있으므로 건드리지 않는다. **모르는 것은 통과시킨다** — 잘못된 거부의 비용은 못 하게 된 작업이고, 잘못된 허용의 비용은 명확한 오류 메시지 하나다.
+
+### 실패의 종류
+
+```
+invalid_invocation     에이전트가 친 것에 대한 사실
+executable_not_found   ┐
+permission_denied      │ 기계에 대한 사실 —
+network_failure        │ 이것만 "여기서는 안 된다"를
+sandbox_denied         │ 뒷받침할 수 있다
+approval_denied        ┘
+process_failed         그 자체로는 아무 말도 안 함
+```
+
+`report_blocked`는 이제 **바깥에서 온 근거**를 요구한다. 이번 턴에 관측된 실패가 전부 자기가 잘못 친 명령이면 보고가 거부되고, 고쳐서 다시 시도하라고 한다.
+
+### 왜 멈췄는지 정확히 말한다
+
+`no_progress`의 사유를 나눴다. 이번 사례는 `repeated_invalid_invocation`이고, 사용자에게 할 말은 **"요청을 더 구체적으로 알려 주세요"가 아니다.** 요청은 CNN·Transformer·데이터셋·학습·평가·비교까지 충분히 구체적이었다. 반복된 것은 에이전트의 타이핑이었고, 그렇게 말해야 한다.

@@ -1,5 +1,6 @@
 import type { CommandSpec } from "../../protocol/index.ts";
 import { realpath, stat } from "node:fs/promises";
+import { describeSemanticProblem, validateSemantics } from "../commandSemantics.ts";
 import {
   displayCwd,
   resolveCwd,
@@ -151,6 +152,16 @@ function runCommandTool(opts: ShellToolOptions): AgentTool {
       } catch (err) {
         if (err instanceof UnparsableCommand) return { ok: false, content: err.guidance };
         throw err;
+      }
+
+      // Two checks, in order. The first is about shape — a shell built-in in
+      // the executable field, shell syntax where there is no shell. The second
+      // is about meaning: `pip install` with nothing to install parses fine and
+      // cannot do anything, and spawning it produces an error the agent then
+      // read as a broken environment.
+      const semantic = validateSemantics(spec);
+      if (semantic !== null) {
+        return { ok: false, content: describeSemanticProblem(semantic, spec) };
       }
 
       const problem = validateSpec(spec);

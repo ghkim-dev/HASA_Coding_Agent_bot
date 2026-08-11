@@ -150,6 +150,14 @@ export class AgentSession {
    * Restored with the conversation; see `restoreContract`.
    */
   private contract: TaskContract = emptyContract();
+  /**
+   * What failed while this turn ran.
+   *
+   * Collected from the events the loop emits rather than kept by whatever
+   * noticed: a blocked report is judged on what the runtime observed, and the
+   * runtime observes through its own event stream.
+   */
+  private turnFailures: string[] = [];
   /** The turn being run, so the request tool can stamp what it records. */
   private turnId = "t0";
   private turnOrdinal = 0;
@@ -196,6 +204,9 @@ export class AgentSession {
   }
 
   private emit(event: AgentEvent): void {
+    // Every failed call, kept for the length of the turn. `report_blocked`
+    // is judged against these.
+    if (event.type === "tool_end" && !event.ok) this.turnFailures.push(event.detail);
     this.eventSink?.(event);
   }
 
@@ -304,7 +315,14 @@ export class AgentSession {
       // Every mode, including the read-only ones. ARCHITECT asked to plan
       // against a file it cannot find is blocked in exactly the same way, and
       // the alternative to saying so is inventing a plan for a file it imagined.
-      createBlockedTool({ onBlocked: (report) => { this.lastBlocked = report; } }),
+      createBlockedTool({
+        onBlocked: (report) => {
+          this.lastBlocked = report;
+        },
+        // What actually failed this turn, so a blocked report has to rest on
+        // something the runtime saw rather than on the model's reading of it.
+        observedFailures: () => this.turnFailures,
+      }),
       // First in intent if not in order: what the user asked for, fixed into
       // something the runtime keeps. Every mode — a question misread is a
       // question misanswered whether or not files are involved.
@@ -341,6 +359,7 @@ export class AgentSession {
     // records with the turn it belongs to rather than with whatever the model
     // supplies. Provenance the model can write is provenance it can get wrong.
     this.turnId = `t${this.turnOrdinal++}`;
+    this.turnFailures = [];
 
     // What the user has asked for so far, carried into the prompt. This is the
     // point of the contract: a requirement recorded three turns ago is in front
