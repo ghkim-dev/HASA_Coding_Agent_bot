@@ -59,6 +59,8 @@ export type AgentCommandSpec = ExecCommandSpec | ShellCommandSpec;
 
 /** Machine-readable, so a model can act on the refusal rather than reword it. */
 export const INVALID_COMMAND_USE_CWD = "INVALID_COMMAND_USE_CWD";
+/** A filesystem job that has a tool, being asked of the shell instead. */
+export const INVALID_COMMAND_USE_FILE_TOOL = "INVALID_COMMAND_USE_FILE_TOOL";
 export const COMMAND_CWD_NOT_FOUND = "COMMAND_CWD_NOT_FOUND";
 export const COMMAND_CWD_OUTSIDE_WORKSPACE = "COMMAND_CWD_OUTSIDE_WORKSPACE";
 export const INVALID_COMMAND_SHELL_SYNTAX = "INVALID_COMMAND_SHELL_SYNTAX";
@@ -69,21 +71,57 @@ export interface SpecProblem {
 }
 
 /**
- * Programs that are not programs.
+ * Programs that are not programs, and jobs that already have a tool.
  *
  * `cd` is the one that actually happened. It is a shell built-in on every
  * platform — there is no `cd` to spawn — and a model reaching for it is a model
- * trying to say "over there" with the only vocabulary it was given. The refusal
- * names the field it should have used instead.
+ * trying to say "over there" with the only vocabulary it was given.
+ *
+ * `mkdir` is the same failure one step earlier in that transcript, and it is
+ * here for a slightly different reason. On Windows it is a `cmd` built-in and
+ * spawning it fails outright; on Linux it is a real binary and would work. But
+ * the same call has to mean the same thing on both, and it already does
+ * somewhere better: `create_file` creates every parent directory on the way
+ * through `Sandbox.writeFile`, with a filesystem API and no shell at all. A
+ * model that genuinely wants the program can still ask for `mode: "shell"`.
+ *
+ * Each entry names what to use instead. A refusal that only says no leaves a
+ * model to try three spellings of the same mistake, which is exactly what the
+ * transcript contains.
  */
-const NOT_EXECUTABLES: Readonly<Record<string, string>> = {
-  cd: "작업 디렉터리는 cwd 필드로 지정하십시오. cd는 실행할 수 있는 프로그램이 아닙니다.",
-  chdir: "작업 디렉터리는 cwd 필드로 지정하십시오.",
-  pushd: "작업 디렉터리는 cwd 필드로 지정하십시오.",
-  popd: "작업 디렉터리는 cwd 필드로 지정하십시오.",
-  export: "환경 변수는 env 필드로 지정하십시오.",
-  set: "환경 변수는 env 필드로 지정하십시오.",
-  source: "셸 스크립트를 읽어야 하면 mode: \"shell\"을 명시하십시오.",
+const NOT_EXECUTABLES: Readonly<Record<string, { code: string; message: string }>> = {
+  cd: {
+    code: INVALID_COMMAND_USE_CWD,
+    message: "작업 디렉터리는 cwd 필드로 지정하십시오. cd는 실행할 수 있는 프로그램이 아닙니다.",
+  },
+  chdir: { code: INVALID_COMMAND_USE_CWD, message: "작업 디렉터리는 cwd 필드로 지정하십시오." },
+  pushd: { code: INVALID_COMMAND_USE_CWD, message: "작업 디렉터리는 cwd 필드로 지정하십시오." },
+  popd: { code: INVALID_COMMAND_USE_CWD, message: "작업 디렉터리는 cwd 필드로 지정하십시오." },
+  export: { code: INVALID_COMMAND_USE_CWD, message: "환경 변수는 env 필드로 지정하십시오." },
+  set: { code: INVALID_COMMAND_USE_CWD, message: "환경 변수는 env 필드로 지정하십시오." },
+  source: {
+    code: INVALID_COMMAND_USE_CWD,
+    message: '셸 스크립트를 읽어야 하면 mode: "shell"을 명시하십시오.',
+  },
+  mkdir: {
+    code: INVALID_COMMAND_USE_FILE_TOOL,
+    message:
+      "디렉터리를 따로 만들 필요가 없습니다. create_file이 경로에 필요한 상위 디렉터리를 " +
+      "전부 만들어 줍니다 — a/b/c/main.py 를 그대로 쓰면 a/b/c 가 생깁니다. " +
+      "운영체제마다 다른 mkdir 문법을 맞출 필요도 없습니다.",
+  },
+  md: {
+    code: INVALID_COMMAND_USE_FILE_TOOL,
+    message: "디렉터리는 create_file이 경로대로 만들어 줍니다.",
+  },
+  "new-item": {
+    code: INVALID_COMMAND_USE_FILE_TOOL,
+    message: "파일과 디렉터리는 create_file로 만드십시오. PowerShell을 거칠 필요가 없습니다.",
+  },
+  rmdir: {
+    code: INVALID_COMMAND_USE_FILE_TOOL,
+    message: "삭제는 되돌리기 어렵습니다. 무엇을 왜 지워야 하는지 사용자에게 먼저 말하십시오.",
+  },
 };
 
 /**
@@ -147,9 +185,7 @@ export function validateSpec(spec: AgentCommandSpec): SpecProblem | null {
 
   const bare = executable.toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
   const builtin = NOT_EXECUTABLES[bare];
-  if (builtin !== undefined) {
-    return { code: INVALID_COMMAND_USE_CWD, message: builtin };
-  }
+  if (builtin !== undefined) return builtin;
 
   if (NOT_AN_EXECUTABLE.test(executable)) {
     return {

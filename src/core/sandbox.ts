@@ -180,6 +180,19 @@ export class Sandbox {
     return readFile(full, "utf8");
   }
 
+  /**
+   * Writes a file, creating every directory on the way.
+   *
+   * The recursive `mkdir` is load-bearing rather than a convenience, and it is
+   * what closes half of a real failure: on Windows the agent tried `mkdir -p`,
+   * then `mkdir` as though it were a program, and neither worked. Nothing needs
+   * to be created first — the path is the instruction, and it is followed with
+   * a filesystem call rather than a command whose spelling differs per
+   * platform.
+   *
+   * `resolvePath(forWrite)` runs first, so the directories are only ever made
+   * inside the workspace.
+   */
   async writeFile(relativePath: string, contents: string): Promise<void> {
     const full = await this.resolvePath(relativePath, { forWrite: true });
     await mkdir(dirname(full), { recursive: true });

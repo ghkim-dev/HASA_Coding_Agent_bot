@@ -458,8 +458,11 @@ function describeArgs(args: Record<string, unknown>): string {
  * Only for interpreters known to need it, and always beneath an explicit `env`
  * from the caller.
  */
-function interpreterEnv(executable: string): Record<string, string> {
-  const bare = executable.toLowerCase().replace(/\.(exe|cmd|bat)$/, "").split(/[\/]/).pop() ?? "";
+export function interpreterEnv(executable: string): Record<string, string> {
+  // Both separators. Windows is where this matters most — `C:\Python311\python.exe`
+  // is exactly the case that produced mojibake — and a class missing the
+  // backslash would leave the whole path as the name and match nothing.
+  const bare = executable.toLowerCase().replace(/\.(exe|cmd|bat)$/, "").split(/[\\/]/).pop() ?? "";
   return bare.startsWith("python")
     ? { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" }
     : {};

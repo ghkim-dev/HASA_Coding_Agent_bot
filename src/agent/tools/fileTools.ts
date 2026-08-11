@@ -310,12 +310,19 @@ function createFile(sandbox: Sandbox): AgentTool {
     risk: "write",
     description:
       "Create a file, or replace one entirely, with the complete new contents. " +
+      "Every directory on the path is created for you — `a/b/c/main.py` makes `a/b/c` — so there " +
+      "is nothing to mkdir first, on any platform. " +
       "For a small change to a large file prefer apply_patch — rewriting a file to change one line " +
       "loses anything you did not remember to include.",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Relative file path." },
+        path: {
+          type: "string",
+          description:
+            "Relative file path. Missing directories on the way are created, so write the path " +
+            "you want and nothing else is needed.",
+        },
         contents: { type: "string", description: "The complete file contents." },
       },
       required: ["path", "contents"],
