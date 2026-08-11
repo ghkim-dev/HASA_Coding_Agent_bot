@@ -28,7 +28,7 @@ import { exactSourcesIn, type SourceRequirement } from "./sourceProvenance.ts";
 import { SourceLedger } from "./sourceFacts.ts";
 import { createSourceFactTool } from "./tools/sourceFactTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
-import { createShellTools } from "./tools/shellTools.ts";
+import { createShellTools, type ShellToolOptions } from "./tools/shellTools.ts";
 import type {
   AgentBudget,
   AgentEvent,
@@ -113,6 +113,13 @@ export interface AgentSessionOptions {
   taskRecord?: () => string | null;
   /** Whether the answer claims more than the record supports. See `claimGrounding.ts`. */
   claimCheck?: (text: string) => string | null;
+  /**
+   * What runs commands. The real spawn unless a caller injects one.
+   *
+   * Used by the evaluator so two models meet the same world — see
+   * `src/eval/world.ts`. Production never sets it.
+   */
+  runCommand?: ShellToolOptions["run"];
   /** Told what the user asked for, once the model has recorded it. */
   onContract?: (contract: TurnContract) => void;
 }
@@ -326,6 +333,7 @@ export class AgentSession {
         workspaceRoot: this.workspaceRoot,
         allowlist: this.opts.commands ?? [],
         isGitRepo: this.isGitRepo,
+        ...(this.opts.runCommand === undefined ? {} : { run: this.opts.runCommand }),
       }),
       ...(this.opts.media === undefined
         ? []

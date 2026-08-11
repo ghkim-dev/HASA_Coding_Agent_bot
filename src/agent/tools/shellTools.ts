@@ -46,6 +46,16 @@ export interface ShellToolOptions {
   /** Whether the workspace is a git repository. Decided once, by the caller. */
   isGitRepo?: boolean;
   openRepo?: (dir: string) => Promise<GitRepo>;
+  /**
+   * What actually runs the command. The real spawn unless something injects one.
+   *
+   * The same shape `WebClientOptions.fetchImpl` already has, and for the same
+   * reason: comparing two models on how they behave means the world has to
+   * answer identically both times, and a real `pip install` does not. Every
+   * check above it — semantic validation, the cwd resolver, the argv boundary,
+   * the denylist — is unchanged and still runs, because the seam is below them.
+   */
+  run?: typeof runApprovedCommand;
 }
 
 /**
@@ -184,7 +194,7 @@ function runCommandTool(opts: ShellToolOptions): AgentTool {
       const line = describeSpec(spec, where.path, opts.workspaceRoot);
 
       try {
-        const outcome = await runApprovedCommand(
+        const outcome = await (opts.run ?? runApprovedCommand)(
           { gate: gateFor(parsed), kind: "regression", cmd: parsed.cmd, args: parsed.args, timeoutMs },
           {
             cwd: where.path,
