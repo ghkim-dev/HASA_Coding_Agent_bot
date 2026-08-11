@@ -24,6 +24,7 @@ import {
   type TurnContract,
 } from "./turnContract.ts";
 import { createBlockedTool, type BlockedReport } from "./tools/blockedTool.ts";
+import { exactSourcesIn, type SourceRequirement } from "./sourceProvenance.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools } from "./tools/shellTools.ts";
 import type {
@@ -108,6 +109,8 @@ export interface AgentSessionOptions {
    * with. See `AgentLoopOptions.taskRecord`.
    */
   taskRecord?: () => string | null;
+  /** Whether the answer claims more than the record supports. See `claimGrounding.ts`. */
+  claimCheck?: (text: string) => string | null;
   /** Told what the user asked for, once the model has recorded it. */
   onContract?: (contract: TurnContract) => void;
 }
@@ -158,6 +161,15 @@ export class AgentSession {
    * runtime observes through its own event stream.
    */
   private turnFailures: string[] = [];
+  /**
+   * URLs the user has named, across the conversation.
+   *
+   * Accumulated, because a page named two turns ago is still the page they
+   * pointed at — "이어서 해줘" does not retract it. The list marks who chose a
+   * URL and nothing more; whether a site is official is not something a
+   * hostname can be asked.
+   */
+  private namedSources: SourceRequirement[] = [];
   /** The turn being run, so the request tool can stamp what it records. */
   private turnId = "t0";
   private turnOrdinal = 0;
@@ -308,7 +320,15 @@ export class AgentSession {
       // Every mode gets these, including the read-only ones: looking something
       // up is reading, and ARCHITECT planning against a library it half
       // remembers is the failure this exists to prevent.
-      ...(this.opts.web?.enabled === false ? [] : createWebTools(this.opts.web)),
+      ...(this.opts.web?.enabled === false
+        ? []
+        : createWebTools({
+            ...this.opts.web,
+            // Read at call time, so a URL the user gave in this turn is theirs
+            // by the time the model fetches it. Origin only — see
+            // `WebToolOptions.userSources`.
+            userSources: () => this.namedSources,
+          })),
       // Also every mode. ARCHITECT plans for a living, and a user watching ASK
       // read six files deserves the same answer to "what is it doing".
       createPlanTool({ onPlan: (event) => this.emit(event) }),
@@ -360,6 +380,12 @@ export class AgentSession {
     // supplies. Provenance the model can write is provenance it can get wrong.
     this.turnId = `t${this.turnOrdinal++}`;
     this.turnFailures = [];
+
+    // Before the tools are built, so this turn's own URLs are already the
+    // user's when the model reaches for one.
+    for (const source of exactSourcesIn(prompt)) {
+      if (!this.namedSources.some((s) => s.url === source.url)) this.namedSources.push(source);
+    }
 
     // What the user has asked for so far, carried into the prompt. This is the
     // point of the contract: a requirement recorded three turns ago is in front
@@ -422,6 +448,7 @@ export class AgentSession {
       // the host, which holds the conversation's events; a session on its own
       // sees only the turn it is running.
       ...(this.opts.taskRecord === undefined ? {} : { taskRecord: this.opts.taskRecord }),
+      ...(this.opts.claimCheck === undefined ? {} : { claimCheck: this.opts.claimCheck }),
       // The contract is read at call time, so a constraint recorded partway
       // through a turn governs the rest of it.
       // Named in a stall challenge, so "다른 방법을 시도하십시오" points

@@ -1,5 +1,6 @@
 import type { AgentTool, ToolResult } from "../types.ts";
 import { classifyFailure, isExternalBlocker } from "../commandSemantics.ts";
+import { classifyWebFailure, isWebBlocker } from "../sourceProvenance.ts";
 
 /**
  * A way to stop and say the requested thing could not be done.
@@ -135,7 +136,13 @@ export function createBlockedTool(opts: BlockedToolOptions): AgentTool {
       const failures = opts.observedFailures?.() ?? null;
       if (failures !== null && failures.length > 0) {
         const kinds = failures.map(classifyFailure);
-        if (!kinds.some(isExternalBlocker)) {
+        // Two taxonomies over the same failures, because a turn can be stopped
+        // by either kind of outside. A 403 or a timeout is a blocker; "no
+        // results for …" and a 404 are answers, and neither taxonomy calls them
+        // blockers — which is e613c05's rule in its web spelling.
+        const external =
+          kinds.some(isExternalBlocker) || failures.map(classifyWebFailure).some(isWebBlocker);
+        if (!external) {
           const invocation = kinds.filter((k) => k === "invalid_invocation").length;
           return {
             ok: false,

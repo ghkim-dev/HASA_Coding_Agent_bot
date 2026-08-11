@@ -7,6 +7,7 @@ import {
   type RuntimeIssue,
   type TaskState,
 } from "./taskState.ts";
+import { exactSourcesIn, hostMatches } from "./sourceProvenance.ts";
 
 /**
  * The record, rebuilt from the events that were already being written.
@@ -74,6 +75,18 @@ export function reduceTask(events: readonly SessionEvent[], taskId = "task"): Ta
     task.updatedAt = Math.max(task.updatedAt, event.at);
 
     switch (event.type) {
+      case "user_message": {
+        // A URL the user typed is a fact about the request, and it is one of
+        // the few the runtime can read without interpreting anything. What it
+        // means — whether it must be opened — is decided in `assessCompletion`,
+        // from what the turn went on to do.
+        for (const source of exactSourcesIn(event.text)) {
+          if (task.sources.some((s) => s.url === source.url)) continue;
+          task.sources.push({ ...source, status: "pending", evidence: [] });
+        }
+        break;
+      }
+
       case "plan": {
         applyPlan(task, event.steps, event.at);
         break;
@@ -101,6 +114,7 @@ export function reduceTask(events: readonly SessionEvent[], taskId = "task"): Ta
             status: "open",
           });
         }
+        settleSources(task, evidence);
         settleRequirements(task, event.toolName, event.status, evidence);
         break;
       }
@@ -148,6 +162,46 @@ function applyPlan(task: TaskState, steps: readonly string[], at: number): void 
   void at;
 }
 
+/**
+ * Marks a named source read, and only when it was read.
+ *
+ * The three ways this refuses to advance, each of which was the whole bug in
+ * one of the transcripts:
+ *
+ * - A search that returned the host is `search_discovery`. A search engine
+ *   saying the page exists is not the page.
+ * - A fetch of a *different* host does not count, whatever it was searching
+ *   for. `hostMatches` compares on a dot boundary, so
+ *   `open.hasa.re.kr.evil.example.com` is somebody else.
+ * - A fetch that failed is `attempted`, not `fetched`. Trying is not reading,
+ *   and the final answer has to say which one happened.
+ */
+function settleSources(task: TaskState, evidence: Evidence | null): void {
+  if (evidence === null) return;
+  for (const source of evidence.sources ?? []) {
+    for (const required of task.sources) {
+      if (!hostMatches(source.hostname, required.hostname)) continue;
+      if (source.retrieval !== "fetched") continue;
+      if (evidence.status !== "passed") {
+        if (required.status === "pending") required.status = "attempted";
+        continue;
+      }
+      required.status = "fetched";
+      if (!required.evidence.includes(evidence.id)) required.evidence.push(evidence.id);
+    }
+  }
+  // A fetch that failed produces no provenance at all — the tool threw before
+  // it had a page. The URL it was given is still what it tried, and that is the
+  // difference between "not read" and "could not be read".
+  if (evidence.kind === "web_source" && evidence.status !== "passed") {
+    for (const required of task.sources) {
+      if (required.status === "pending" && evidence.observation.includes(required.hostname)) {
+        required.status = "attempted";
+      }
+    }
+  }
+}
+
 function raise(task: TaskState, issue: RuntimeIssue): void {
   // One issue per failing call. A retry of the same thing raises its own, and
   // the successful one resolves whichever it can.
@@ -177,6 +231,15 @@ function settleRequirements(
     (r) => (r.status === "pending" || r.status === "in_progress") && toolsForStep(r.description).includes(toolName),
   );
   if (target === undefined) return;
+
+  // The line the failing transcript walked straight through.
+  //
+  // "open.hasa.re.kr에서 모델 찾아줘" becomes a plan step containing 찾아, which
+  // matches the web keywords, which meant *any* successful `web_search` marked
+  // it passed — including one whose every result came from another site. A
+  // search cannot settle a step about looking something up while a page the
+  // user named is still unread. `web_fetch` can, and that is the difference.
+  if (toolName === "web_search" && task.sources.some((s) => s.status !== "fetched")) return;
 
   if (status === "success") {
     target.status = "passed";

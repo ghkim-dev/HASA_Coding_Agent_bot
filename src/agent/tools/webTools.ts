@@ -1,5 +1,14 @@
 import { AddressRefused } from "../web/address.ts";
 import { FetchFailed, fetchPage, searchWeb, type WebClientOptions } from "../web/client.ts";
+import {
+  fingerprint,
+  hostMatches,
+  normalizeHost,
+  parseSourceUrl,
+  redactUrl,
+  type SourceRequirement,
+  type WebSourceProvenance,
+} from "../sourceProvenance.ts";
 import type { AgentTool, ToolResult, TruncationMeta } from "../types.ts";
 
 /**
@@ -60,10 +69,28 @@ function refusalFrom(err: unknown): ToolResult | null {
 export interface WebToolOptions extends WebClientOptions {
   /** Off by default at the session level; see `AgentSessionOptions.web`. */
   enabled?: boolean;
+  /**
+   * URLs the user named, so a fetch of one can be recorded as theirs.
+   *
+   * A callback rather than a value because it changes every turn, and the same
+   * reason `blockedTool` takes `observedFailures` this way: the tool is built
+   * once and the fact it needs is about the turn it happens to be running in.
+   *
+   * It marks *origin*, not authority. That the user gave a URL says who chose
+   * it and nothing about whether it is the official anything — see §6 of the
+   * design, and `sourceProvenance.ts` for why no `first_party` field exists.
+   */
+  userSources?: () => readonly SourceRequirement[];
 }
 
 export function createWebTools(opts: WebToolOptions = {}): AgentTool[] {
   return [webSearch(opts), webFetch(opts)];
+}
+
+/** Whether the user named this host themselves. Origin, not endorsement. */
+function originFor(opts: WebToolOptions, hostname: string): "user_supplied" | "model_discovered" {
+  const named = opts.userSources?.() ?? [];
+  return named.some((s) => hostMatches(hostname, s.hostname)) ? "user_supplied" : "model_discovered";
 }
 
 function webSearch(opts: WebToolOptions): AgentTool {
@@ -74,7 +101,11 @@ function webSearch(opts: WebToolOptions): AgentTool {
       "Search the web and get titles, URLs and snippets. Use it when the answer is not in this " +
       "repository and you are not certain of it — a library's current API, an error message you " +
       "do not recognise, whether a package still exists. Snippets are short: follow up with " +
-      "web_fetch on the URL that looks right rather than answering from the snippet alone.",
+      "web_fetch on the URL that looks right rather than answering from the snippet alone.\n" +
+      "What comes back is a list of pages that exist, not their contents, and the results belong " +
+      "to whatever site served them — not to whatever you searched for. Searching for " +
+      '"models on example.com" and getting a page on another site tells you about that other ' +
+      "site. If the user named a site, read that site.",
     parameters: {
       type: "object",
       properties: {
@@ -102,7 +133,34 @@ function webSearch(opts: WebToolOptions): AgentTool {
         const body = results
           .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`)
           .join("\n\n");
-        return { ok: true, content: quarantine(`a web search for "${query}"`, body) };
+        // One source per result, and every one of them `search_discovery`.
+        //
+        // This is the line the whole slice turns on. A search for "HASA models"
+        // that returns huggingface.co has discovered a Hugging Face page; the
+        // subject of the query does not travel to the results. Recording the
+        // result hosts is what lets anything downstream notice.
+        const at = Date.now();
+        const sources: WebSourceProvenance[] = [];
+        for (const result of results) {
+          const url = parseSourceUrl(result.url);
+          if (url === null) continue;
+          sources.push({
+            requestedUrl: redactUrl(result.url),
+            hostname: normalizeHost(url.hostname),
+            sourceOrigin: "search_result",
+            retrieval: "search_discovery",
+            retrievedAt: at,
+            query,
+          });
+        }
+        return {
+          ok: true,
+          content: quarantine(`a web search for "${query}"`, body),
+          // Said in the text as well, because the model reads prose and the
+          // sentence it is about to write is a sentence about where something
+          // came from.
+          ...(sources.length === 0 ? {} : { sources }),
+        };
       } catch (err) {
         return refusalFrom(err) ?? { ok: false, content: `The search failed: ${(err as Error).message}` };
       }
@@ -166,7 +224,39 @@ function webFetch(opts: WebToolOptions): AgentTool {
         // The note goes to the model inside the content as well as to the panel
         // as metadata: the panel can render a badge, and the model reads prose.
         const body = meta === undefined ? text : `${text}\n\n[${meta.hint}]`;
-        return { ok: true, content: quarantine(heading, body), ...(meta === undefined ? {} : { meta }) };
+
+        // Both ends of the request. A 302 from the host the user named to a
+        // host they did not is a change of source, and the only way to see it
+        // afterwards is to have kept both.
+        const finalHost = parseSourceUrl(fetched.url)?.hostname ?? "";
+        const requestedHost = parseSourceUrl(fetched.requestedUrl)?.hostname ?? finalHost;
+        const source: WebSourceProvenance = {
+          // Redacted here rather than at the reader, because this is the value
+          // that gets written to the conversation file.
+          requestedUrl: redactUrl(fetched.requestedUrl),
+          finalUrl: redactUrl(fetched.url),
+          // The host that answered, not the one that was asked. Content belongs
+          // to whoever served it.
+          hostname: normalizeHost(finalHost),
+          sourceOrigin: originFor(opts, normalizeHost(requestedHost)),
+          retrieval: "fetched",
+          retrievedAt: Date.now(),
+          status: fetched.status,
+          contentType: fetched.contentType,
+          ...(meta === undefined ? {} : { truncated: true }),
+          contentFingerprint: fingerprint(whole),
+        };
+
+        const redirected = !hostMatches(normalizeHost(finalHost), normalizeHost(requestedHost));
+        const note = redirected
+          ? `\n\n[${fetched.requestedUrl} 은(는) ${finalHost} 로 이동했습니다. 이 내용은 ${finalHost} 의 것입니다.]`
+          : "";
+        return {
+          ok: true,
+          content: quarantine(heading, body) + note,
+          sources: [source],
+          ...(meta === undefined ? {} : { meta }),
+        };
       } catch (err) {
         return refusalFrom(err) ?? { ok: false, content: `Could not read ${url}: ${(err as Error).message}` };
       }

@@ -1,4 +1,6 @@
 import type { SessionEvent, ToolCallStatus } from "./sessionEvents.ts";
+import { hostMatches, type SourceRequirement, type WebSourceProvenance } from "./sourceProvenance.ts";
+import { describeSources } from "./claimGrounding.ts";
 
 /**
  * What has actually happened, as opposed to what was said about it.
@@ -112,6 +114,27 @@ export interface Evidence {
   /** A short description of what was observed. Never a conclusion drawn from it. */
   observation: string;
   at: number;
+  /**
+   * Where it was read from, when it was read from outside the workspace.
+   *
+   * `kind: "web_source"` says a web tool produced this. It does not say which
+   * site, or whether the page was read at all rather than listed by a search
+   * engine — and those are the two facts a claim about a service stands on. See
+   * `sourceProvenance.ts`.
+   */
+  sources?: WebSourceProvenance[];
+}
+
+/**
+ * A source the user named, and how far the agent got with it.
+ *
+ * Held on the task rather than derived at the end, so a turn can be asked "did
+ * you read what they pointed at" while it still has time to.
+ */
+export interface SourceRequirementState extends SourceRequirement {
+  /** `fetched` only when something was actually read from that host. */
+  status: "pending" | "attempted" | "fetched";
+  evidence: string[];
 }
 
 export type TaskStatus = "active" | "blocked" | "completed" | "cancelled";
@@ -125,6 +148,8 @@ export interface TaskState {
   evidence: Evidence[];
   /** Files this task has changed, as reported by the tools that changed them. */
   changedFiles: string[];
+  /** URLs the user named, and whether any of them was actually read. */
+  sources: SourceRequirementState[];
   startedAt: number;
   updatedAt: number;
 }
@@ -138,6 +163,7 @@ export function emptyTask(taskId: string, goal: string, at: number): TaskState {
     issues: [],
     evidence: [],
     changedFiles: [],
+    sources: [],
     startedAt: at,
     updatedAt: at,
   };
@@ -208,7 +234,15 @@ export function evidenceFrom(
   event: Extract<SessionEvent, { type: "tool_completed" }>,
   command?: string,
 ): Evidence | null {
-  const base = { id: `ev-${event.id}`, source: event.callId, at: event.at };
+  const base = {
+    id: `ev-${event.id}`,
+    source: event.callId,
+    at: event.at,
+    // Carried onto every kind, not only `web_source`. A tool that reads from
+    // outside the workspace has said where, and dropping that here would put it
+    // back where it was: a fact the runtime had and did not keep.
+    ...(event.sources === undefined || event.sources.length === 0 ? {} : { sources: event.sources }),
+  };
 
   if (event.toolName === "run_command") {
     const verifier = command === undefined ? null : verifierFor(command);
@@ -248,6 +282,26 @@ export interface CompletionVerdict {
   outstanding: RequirementState[];
   failed: RequirementState[];
   openIssues: RuntimeIssue[];
+  /** Named sources the agent went to the web without ever reading. */
+  unreadSources: SourceRequirementState[];
+}
+
+/**
+ * Whether an unread named source counts against completeness.
+ *
+ * Only once the turn has been to the web at all. A user who pastes a repository
+ * URL and asks for a commit has named a source they never asked anyone to read,
+ * and holding the task open for it would be the runtime inventing a
+ * requirement — the exact thing `turnContract.ts` exists to stop.
+ *
+ * When the agent *did* search or fetch, the question is live: it went looking
+ * for something on the web while the user had already said where to look, and a
+ * generic search is not that place. That is the failure this slice is for, and
+ * it is decided from what happened rather than from anyone's reading of the
+ * request.
+ */
+function sourcesAreLive(task: TaskState): boolean {
+  return task.evidence.some((e) => e.kind === "web_source");
 }
 
 /**
@@ -266,13 +320,19 @@ export function assessCompletion(task: TaskState): CompletionVerdict {
   const outstanding = required.filter((r) => !DONE.has(r.status));
   const failed = required.filter((r) => r.status === "failed");
   const openIssues = task.issues.filter((i) => i.status === "open");
+  const unreadSources = sourcesAreLive(task) ? task.sources.filter((s) => s.status !== "fetched") : [];
 
   return {
-    complete: required.length > 0 && outstanding.length === 0 && openIssues.length === 0,
+    // A named page nobody opened is outstanding work, not a detail. The
+    // transcript this comes from ended with a confident answer about a service
+    // whose site was never visited.
+    complete:
+      required.length > 0 && outstanding.length === 0 && openIssues.length === 0 && unreadSources.length === 0,
     partial: required.some((r) => DONE.has(r.status)) && outstanding.length > 0,
     outstanding,
     failed,
     openIssues,
+    unreadSources,
   };
 }
 
@@ -318,10 +378,26 @@ export function describeTask(task: TaskState): string {
     lines.push(`변경한 파일: ${task.changedFiles.join(", ")}`);
   }
 
+  // What each site was actually shown to be. Placed before the verdict because
+  // it is the fact most likely to be overstated in the sentence that follows.
+  const sources = describeSources(task.evidence, task.sources);
+  if (sources !== null) lines.push(sources);
+
+  for (const unread of verdict.unreadSources) {
+    const attempted = unread.status === "attempted";
+    lines.push(
+      attempted
+        ? `${unread.url} 은(는) 가져오지 못했습니다. 직접 확인했다고 쓰지 말고, ` +
+          "가져오지 못했다는 것과 대신 무엇을 봤는지 적으십시오."
+        : `사용자가 지정한 ${unread.url} 을(를) 아직 읽지 않았습니다. ` +
+          "검색 결과는 이 페이지를 대신하지 못합니다. web_fetch로 직접 읽으십시오.",
+    );
+  }
+
   lines.push(
     verdict.complete
       ? "이 기록상 요구사항이 모두 확인되었습니다."
-      : verdict.outstanding.length > 0
+      : verdict.outstanding.length > 0 || verdict.unreadSources.length > 0
         ? "확인되지 않은 요구사항이 남아 있으므로 전체 완료라고 말하지 마십시오. " +
           "무엇을 했고 무엇이 남았는지 그대로 적으십시오."
         : "요구사항이 기록되지 않았습니다. 완료를 주장하지 마십시오.",

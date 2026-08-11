@@ -141,6 +141,7 @@ export class TurnRecorder {
           detail: event.detail,
           ...(event.output === undefined ? {} : { output: event.output }),
           ...(event.meta === undefined ? {} : { meta: event.meta }),
+          ...(event.sources === undefined ? {} : { sources: event.sources }),
         };
         const changes = (event.changedFiles ?? []).map(
           (change): SessionEvent => ({

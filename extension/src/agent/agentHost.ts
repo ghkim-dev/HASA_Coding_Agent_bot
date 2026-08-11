@@ -37,6 +37,7 @@ import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
 import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/conversationGraph.ts";
 import { reduceTask } from "../../../src/agent/taskReducer.ts";
 import { describeTask } from "../../../src/agent/taskState.ts";
+import { describeUnsupportedClaims, unsupportedClaims } from "../../../src/agent/claimGrounding.ts";
 import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
 import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
@@ -760,6 +761,17 @@ export class AgentHost {
         return task === null || task.requirements.length + task.issues.length === 0
           ? null
           : describeTask(task);
+      },
+      // From the same projection, and asked a different question: not "what
+      // happened" but "does this sentence outrun it". See `claimGrounding.ts`.
+      claimCheck: (text) => {
+        const task = reduceTask(this.recorded, this.conversationId ?? "task");
+        if (task === null) return null;
+        // The URLs the user named are part of the question. A service nothing
+        // was read from is the one a confident sentence is most likely to be
+        // about, because nothing observed can contradict it.
+        const claims = unsupportedClaims(task.evidence, text, task.sources);
+        return claims.length === 0 ? null : describeUnsupportedClaims(claims);
       },
     });
     if (carried.length > 0) this.session.restore(carried);

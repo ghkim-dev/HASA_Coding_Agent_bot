@@ -1,4 +1,5 @@
 import type { NormalizedToolCall, ProviderChatRequest } from "../provider/types.ts";
+import type { WebSourceProvenance } from "./sourceProvenance.ts";
 
 /**
  * The Coding Agent's contract.
@@ -95,6 +96,15 @@ export interface ToolResult {
    * text the model sees says so too.
    */
   meta?: TruncationMeta;
+  /**
+   * Where the content in `content` came from, when it came from outside.
+   *
+   * Set by the web tools and by nothing else so far. It carries the two facts
+   * that were being lost — which host answered, and whether the body was read
+   * or merely listed by a search engine — through to the evidence record, where
+   * a claim can be checked against them. See `sourceProvenance.ts`.
+   */
+  sources?: WebSourceProvenance[];
   /**
    * This call reported that the request cannot be completed; end the turn.
    *
@@ -293,6 +303,8 @@ export type AgentEvent =
       output?: string;
       changedFiles?: FileChange[];
       meta?: TruncationMeta;
+      /** Where this call read from, when it read from outside the workspace. */
+      sources?: WebSourceProvenance[];
     }
   /**
    * The agent's plan and where it is in it.

@@ -1,4 +1,5 @@
 import type { ToolRisk } from "./types.ts";
+import type { WebSourceProvenance } from "./sourceProvenance.ts";
 import type {
   ConversationBranch,
   ConversationCheckpoint,
@@ -152,6 +153,16 @@ export interface ToolCompletedEvent extends Base {
   /** Verbatim output, when the tool asked for it to be shown. */
   output?: string;
   meta?: TruncationMeta;
+  /**
+   * Where this call read from, outside the workspace.
+   *
+   * Persisted rather than derived, because it cannot be derived: `detail` is a
+   * 200-character status line and the host it came from is not reliably in it.
+   * Optional, so a conversation written before this existed still reads — an
+   * absent list means nothing was recorded, not that nothing was fetched, and
+   * every reader treats it that way.
+   */
+  sources?: WebSourceProvenance[];
 }
 
 export interface FileChangedEvent extends Base {

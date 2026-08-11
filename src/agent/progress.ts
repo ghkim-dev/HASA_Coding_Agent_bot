@@ -1,5 +1,6 @@
 import { isSelfAuthoredOutput, verifierFor } from "./taskState.ts";
 import { classifyFailure } from "./commandSemantics.ts";
+import type { WebSourceProvenance } from "./sourceProvenance.ts";
 
 /**
  * Whether the agent is getting anywhere, as opposed to being busy.
@@ -52,6 +53,8 @@ export interface ActionObservation {
   changedFiles: readonly string[];
   /** Present when the runtime held the call back. */
   policyCode?: string;
+  /** Where a web call read from, for telling a re-read from a new source. */
+  sources?: readonly WebSourceProvenance[];
 }
 
 /**
@@ -160,7 +163,28 @@ function firstTarget(command: string): string {
  * The subject and the outcome are what carry meaning.
  */
 export function observationKey(observation: ActionObservation): string {
-  return `${structuralKey(observation)}|${observation.outcome}|${errorGist(observation.detail)}`;
+  return `${structuralKey(observation)}|${observation.outcome}|${webGist(observation) ?? errorGist(observation.detail)}`;
+}
+
+/**
+ * What a web call actually saw, when it saw anything.
+ *
+ * A page is identified by where it came from and what it contained, not by the
+ * first 200 characters of a result — which for a fetch are the quarantine
+ * banner, identical for every page from the same URL. Fetching the same
+ * unchanged page four times is one observation; fetching it again after it
+ * changed is a new one, and only the fingerprint can tell those apart.
+ *
+ * Search results are keyed by the hosts they returned, so the same query
+ * answered the same way is not four discoveries.
+ */
+function webGist(observation: ActionObservation): string | null {
+  const sources = observation.sources ?? [];
+  if (sources.length === 0) return null;
+  return sources
+    .map((s) => `${s.hostname}@${s.contentFingerprint ?? s.finalUrl ?? s.requestedUrl ?? ""}`)
+    .sort()
+    .join(",");
 }
 
 /**

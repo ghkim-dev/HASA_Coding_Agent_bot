@@ -15,10 +15,19 @@ import { htmlToText, tidy, type PageText } from "./html.ts";
 
 export class FetchFailed extends Error {
   readonly guidance: string;
-  constructor(guidance: string) {
+  /**
+   * The status the server answered with, when there was one.
+   *
+   * Kept because 404 and a timeout are different facts and the prose was the
+   * only place they differed. `classifyWebFailure` reads this distinction, and a
+   * blocked report is allowed to rest on one of them and not the other.
+   */
+  readonly status?: number;
+  constructor(guidance: string, status?: number) {
     super(guidance);
     this.name = "FetchFailed";
     this.guidance = guidance;
+    if (status !== undefined) this.status = status;
   }
 }
 
@@ -39,6 +48,16 @@ export interface WebClientOptions extends AddressCheckOptions {
 }
 
 export interface FetchedPage {
+  /**
+   * The URL that was asked for, before any redirect.
+   *
+   * Kept separately from `url` because a cross-domain redirect changes who
+   * answered. Asking `open.hasa.re.kr` and being sent to somewhere else means
+   * the content is that somewhere else's, and only these two fields together
+   * say so.
+   */
+  requestedUrl: string;
+  /** Where the content actually came from, after redirects. */
   url: string;
   status: number;
   contentType: string;
@@ -98,6 +117,7 @@ export async function fetchPage(rawUrl: string, opts: WebClientOptions = {}): Pr
       if (!res.ok) {
         throw new FetchFailed(
           `${url.host} answered ${res.status}. The page may be gone, or may not allow automated reading.`,
+          res.status,
         );
       }
       if (!readable(contentType)) {
@@ -118,7 +138,7 @@ export async function fetchPage(rawUrl: string, opts: WebClientOptions = {}): Pr
           ? htmlToText(body)
           : { title: null, text: tidy(body) };
 
-      return { url: url.toString(), status: res.status, contentType, page, truncated };
+      return { requestedUrl: rawUrl, url: url.toString(), status: res.status, contentType, page, truncated };
     }
     throw new FetchFailed(`${rawUrl} redirected more than ${MAX_REDIRECTS} times.`);
   } catch (err) {
@@ -212,6 +232,7 @@ export async function searchWeb(
     if (!res.ok) {
       throw new FetchFailed(
         `The search service answered ${res.status}. It may be rate-limiting; try again, or fetch a URL directly.`,
+        res.status,
       );
     }
     return parseSearchResults(await res.text(), limit);
