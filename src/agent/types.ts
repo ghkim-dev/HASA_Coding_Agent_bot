@@ -389,6 +389,16 @@ export interface AgentTurnResult {
   toolCalls: number;
   inputTokens: number;
   outputTokens: number;
+  /** How many times the final answer was sent back to be corrected. */
+  claimRepairs: number;
+  /**
+   * The runtime wrote this answer, because the model would not stop overclaiming.
+   *
+   * Reported rather than hidden: a summary assembled from the record reads
+   * differently from one a model wrote, and a caller showing it should be able
+   * to say so. See `finalClaims.safeFallback`.
+   */
+  safeFallback?: true;
 }
 
 /**
@@ -410,6 +420,18 @@ export interface AgentCompletion {
   text: string;
   reasoning: string;
   toolCalls: NormalizedToolCall[];
+  /**
+   * The model tried to call a tool and the call could not be read.
+   *
+   * A field rather than a sentence appended to `text`, because the two have
+   * different audiences and used to have one. The problem is a message for the
+   * *model* — "list_files needs <path>" — and when it rode along in the prose it
+   * became the answer a user read, next to the half-written markup that caused
+   * it. Observed in a live run: a turn ended `finished` after two steps with
+   * `<update_plan>
+current: 1` as its reply.
+   */
+  protocolProblem?: string;
   inputTokens: number;
   outputTokens: number;
 }

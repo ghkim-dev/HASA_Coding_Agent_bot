@@ -1,3 +1,4 @@
+import { argText } from "./argValues.ts";
 /**
  * What the user asked for, fixed into something the runtime owns.
  *
@@ -182,10 +183,16 @@ function clip(value: unknown, limit = MAX_TEXT): string {
  * The text tool protocol writes parameters as tag bodies, where an array has no
  * natural spelling; models also add their own numbering, which would otherwise
  * be rendered as part of the requirement.
+ *
+ * An actual array is accepted too — see `argText`. It used to become an empty
+ * list, so a model that sent `"requirements": ["a", "b"]` had its contract
+ * refused for having no requirements, and the whole turn was deferred behind a
+ * `TURN_CONTRACT_REQUIRED` it could not satisfy.
  */
 function lines(raw: unknown): string[] {
-  if (typeof raw !== "string") return [];
-  return raw
+  const text = argText(raw);
+  if (text.length === 0) return [];
+  return text
     .split("\n")
     .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
     .filter((line) => line.length > 0)

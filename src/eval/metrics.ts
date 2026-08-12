@@ -1,6 +1,7 @@
 import { reduceTask } from "../agent/taskReducer.ts";
 import { assessCompletion } from "../agent/taskState.ts";
 import { unsupportedClaims } from "../agent/claimGrounding.ts";
+import { CLAIM_REJECTED_MARKER, taskDisposition, validateFinalClaims } from "../agent/finalClaims.ts";
 import { classifyFailure } from "../agent/commandSemantics.ts";
 import { factsFor } from "../agent/sourceFacts.ts";
 import { normalizeHost } from "../agent/sourceProvenance.ts";
@@ -387,7 +388,7 @@ function containment(
   // what the gate handed back; `escaped` is what survived into the final
   // answer, and that last one is the harness invariant.
   const claimChallenges = trace.turns.flatMap((t) =>
-    t.challenges.filter((c) => c.includes("지금까지 관측된 근거보다 강한 주장")),
+    t.challenges.filter((c) => c.includes(CLAIM_REJECTED_MARKER)),
   ).length;
   const escapedClaims = trace.turns.reduce((total, turn) => {
     const answer = turn.result?.summary ?? "";

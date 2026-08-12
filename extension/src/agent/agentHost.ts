@@ -37,7 +37,12 @@ import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
 import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/conversationGraph.ts";
 import { reduceTask } from "../../../src/agent/taskReducer.ts";
 import { describeTask } from "../../../src/agent/taskState.ts";
-import { describeUnsupportedClaims, unsupportedClaims } from "../../../src/agent/claimGrounding.ts";
+import {
+  describeViolations,
+  safeFallback,
+  taskDisposition,
+  validateFinalClaims,
+} from "../../../src/agent/finalClaims.ts";
 import { TurnRecorder } from "../../../src/agent/sessionRecorder.ts";
 import { reduceSession } from "../../../src/agent/sessionView.ts";
 import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider/hasa/hasaAudio.ts";
@@ -185,6 +190,14 @@ export class AgentHost {
    * conversation used to lose.
    */
   private recorded: SessionEvent[] = [];
+  /**
+   * How the last turn ended.
+   *
+   * The final-claim gate needs it to tell `no_progress` from `finished`. A run
+   * that stopped because nothing was changing has not completed the task, and
+   * "완료했습니다" in that turn is exactly the sentence to refuse.
+   */
+  private lastTermination: string | undefined;
   /**
    * Events from a turn that could not be written to one.
    *
@@ -763,15 +776,26 @@ export class AgentHost {
           : describeTask(task);
       },
       // From the same projection, and asked a different question: not "what
-      // happened" but "does this sentence outrun it". See `claimGrounding.ts`.
-      claimCheck: (text) => {
-        const task = reduceTask(this.recorded, this.conversationId ?? "task");
-        if (task === null) return null;
-        // The URLs the user named are part of the question. A service nothing
-        // was read from is the one a confident sentence is most likely to be
-        // about, because nothing observed can contradict it.
-        const claims = unsupportedClaims(task.evidence, text, task.sources, task.facts);
-        return claims.length === 0 ? null : describeUnsupportedClaims(claims);
+      // happened" but "may this answer be sent". Every candidate, and a
+      // runtime-written summary when the repairs run out — see `finalClaims.ts`.
+      taskComplete: () =>
+        taskDisposition(reduceTask(this.recorded, this.conversationId ?? "task"), this.lastTermination) ===
+        "completed",
+      finalClaims: {
+        validate: (text) => {
+          const task = reduceTask(this.recorded, this.conversationId ?? "task");
+          const verdict = validateFinalClaims({
+            task,
+            disposition: taskDisposition(task, this.lastTermination),
+            text,
+            ...(this.lastTermination === undefined ? {} : { termination: this.lastTermination }),
+          });
+          return verdict.valid ? null : describeViolations(verdict.violations);
+        },
+        fallback: () => {
+          const task = reduceTask(this.recorded, this.conversationId ?? "task");
+          return safeFallback(task, taskDisposition(task, this.lastTermination), this.lastTermination);
+        },
       },
     });
     if (carried.length > 0) this.session.restore(carried);
@@ -971,6 +995,10 @@ export class AgentHost {
       }
       this.phase("생각하는 중");
       outcome = await session.send(prompt, controller.signal, attachments);
+      // Kept for the *next* turn's gate. Within this turn the loop already
+      // knows how it is ending; what the gate cannot see from the record alone
+      // is that a previous run stopped rather than finished.
+      this.lastTermination = outcome.reason;
       return outcome;
     } finally {
       // The turn's own events are already in `this.recorded` via `forward`.

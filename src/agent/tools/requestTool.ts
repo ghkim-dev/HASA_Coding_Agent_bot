@@ -28,6 +28,8 @@ export interface RequestToolOptions {
 }
 
 export function createRequestTool(opts: RequestToolOptions): AgentTool {
+  /** The turn whose contract has already been recorded. */
+  let recordedFor: string | null = null;
   return {
     name: "record_request",
     risk: "read",
@@ -94,7 +96,29 @@ export function createRequestTool(opts: RequestToolOptions): AgentTool {
       return goal.length === 0 ? "요청을 정리합니다" : `요청 확인: ${goal.slice(0, 60)}`;
     },
     async execute(args): Promise<ToolResult> {
-      const parsed = parseTurnContract(args, opts.turnId());
+      // One user message, one contract.
+      //
+      // A second call in the same turn is not a correction — a correction is a
+      // *new* user message with `relation: "correct"`, which is a new turn. It
+      // is a model with nothing left to do reaching for the first tool it knows,
+      // and it re-opens the task it just finished.
+      //
+      // Seen in a live run against `exaone-4.0-32b`: two files written, `pytest`
+      // exit 0, all three requirements passed, and then `record_request` with
+      // `relation: new_task` four times until the step budget ran out. The user
+      // got "한 번에 처리할 수 있는 분량을 넘어 중단했습니다" for work that was
+      // sitting finished on disk.
+      const turn = opts.turnId();
+      if (recordedFor === turn) {
+        return {
+          ok: false,
+          content:
+            "이번 요청은 이미 기록했습니다. 다시 기록하지 말고, 남은 작업을 하거나 " +
+            "무엇을 했는지 사용자에게 답하십시오.",
+        };
+      }
+
+      const parsed = parseTurnContract(args, turn);
       if (!parsed.ok) {
         // Returned as a result rather than thrown: the model gets one look at
         // what was wrong and can send it again. `loop.ts` already stops a call
@@ -102,6 +126,7 @@ export function createRequestTool(opts: RequestToolOptions): AgentTool {
         return { ok: false, content: `요청을 기록하지 못했습니다. ${parsed.problem.reason}` };
       }
 
+      recordedFor = turn;
       opts.onContract(parsed.contract);
       const { contract } = parsed;
 

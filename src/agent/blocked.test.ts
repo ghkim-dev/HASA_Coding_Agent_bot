@@ -217,3 +217,64 @@ describe("the prompt names the failure it is preventing", () => {
     }
   });
 });
+
+describe("you cannot be blocked by nothing", () => {
+  /**
+   * From a live run against `exaone-4.0-32b`, and the whole failure fits here:
+   *
+   *     create_file calculator.py        ✓
+   *     create_file test_calculator.py   ✓
+   *     run_command pytest               ✓ exit 0
+   *     …the model repeated itself, the stall detector challenged it,
+   *     report_blocked                   ✓ accepted
+   *     answer: "작업을 완료하지 못했습니다."
+   *
+   * Three requirements passed, the disposition was `completed`, and the user
+   * was told the work had failed. The gate that judges *which* failures count
+   * as external never ran, because the list was empty and an empty list took
+   * the same branch as an unwired callback.
+   */
+  test("a task the record calls finished cannot end blocked", async () => {
+    const tool = createBlockedTool({ onBlocked: () => {}, workIsDone: () => true });
+    const result = await tool.execute(
+      { goal: "테스트 실행", obstacle: "환경 문제로 실패", tried: "pytest" },
+      { signal: new AbortController().signal, workspaceRoot: "/w" },
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.blocked, undefined, "the turn does not end here");
+    assert.match(result.content, /이미 모두 확인되었습니다/);
+  });
+
+  test("but an unfinished task with no tool failure still can", async () => {
+    // The first live run: an empty workspace, no dataset, nothing to download
+    // it with. Nothing failed and the agent was genuinely stuck, which is what
+    // this ending is for.
+    const tool = createBlockedTool({ onBlocked: () => {}, observedFailures: () => [], workIsDone: () => false });
+    const result = await tool.execute(
+      { goal: "데이터셋 확보", obstacle: "이 워크스페이스에 데이터셋이 없습니다", tried: "search_files" },
+      { signal: new AbortController().signal, workspaceRoot: "/w" },
+    );
+    assert.equal(result.ok, true, result.content);
+    assert.equal(result.blocked, true);
+  });
+
+  test("with a real external failure it is accepted as before", async () => {
+    let reported = false;
+    const tool = createBlockedTool({
+      onBlocked: () => {
+        reported = true;
+      },
+      observedFailures: () => ["permission denied while writing /etc/hosts"],
+      workIsDone: () => false,
+    });
+    const result = await tool.execute(
+      { goal: "설정 쓰기", obstacle: "permission denied", tried: "write" },
+      { signal: new AbortController().signal, workspaceRoot: "/w" },
+    );
+
+    assert.equal(result.ok, true, result.content);
+    assert.equal(result.blocked, true);
+    assert.equal(reported, true);
+  });
+});

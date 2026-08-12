@@ -1,0 +1,374 @@
+import { assessCompletion, type RequirementState, type TaskState } from "./taskState.ts";
+import { unsupportedClaims } from "./claimGrounding.ts";
+import { isExternalBlocker, classifyFailure } from "./commandSemantics.ts";
+import type { SourceRequirement } from "./sourceProvenance.ts";
+import type { SourceFact } from "./sourceFacts.ts";
+
+/**
+ * The last thing between the model's answer and the user.
+ *
+ * C4.7 measured what was left, and it was two numbers:
+ *
+ *     unsupportedClaimEscaped   =  2 / 40
+ *     falseCompletionEscaped    = 26 / 40
+ *
+ * Both had the same shape of cause. The source gate ran *once per turn*, so a
+ * model that repeated the sentence got it through on the second attempt. The
+ * completion gate did not exist at all — `describeTask` hands the record to the
+ * model before it writes, which is advice, and advice is not a boundary.
+ *
+ *   The model proposes an answer. The runtime decides whether it may be sent.
+ *
+ * ## Why every candidate, and why fail closed
+ *
+ * A gate that stops checking after the first refusal is a gate with a second
+ * door. So validation is a property of a *candidate*, not of a turn: candidate
+ * two is checked exactly as hard as candidate one, and a repair that fixes the
+ * attribution while adding a completion claim is caught by the completion rule
+ * on the way out.
+ *
+ * And when the repairs run out, the last unsafe candidate is not sent. It is
+ * replaced by a summary the runtime writes from its own record. Any other
+ * ending makes `escaped = 0` a statement about how patient the model was.
+ */
+
+// ---------------------------------------------------------------------------
+// What the task actually is
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the work stands, decided by the runtime.
+ *
+ * Distinct from `TaskStatus`, which is about the task's own lifecycle, and from
+ * `AgentStopReason`, which is about the run. This is the answer to "may the
+ * user be told this is done", and it is the only thing the completion gate
+ * consults.
+ *
+ *   file exists     ≠ task complete
+ *   exit code 0     ≠ task complete
+ *   model says done ≠ task complete
+ *   run ended       ≠ task complete
+ */
+export type TaskDisposition = "completed" | "partial" | "blocked" | "aborted" | "active";
+
+/** Run endings that mean the turn stopped rather than finished. */
+const UNFINISHED_RUN = new Set(["no_progress", "max_steps", "max_model_calls", "max_tool_calls", "timeout", "aborted", "loop_detected", "denied", "error"]);
+
+export function taskDisposition(task: TaskState | null, termination?: string): TaskDisposition {
+  if (task === null) return "active";
+  const verdict = assessCompletion(task);
+  // Completion first and unconditionally. A run that hit its step budget after
+  // the work was already verified is a run that ended untidily, not a task that
+  // is unfinished.
+  if (verdict.complete) return "completed";
+  if (task.status === "blocked") return "blocked";
+  if (termination === "blocked") return "blocked";
+  if (termination !== undefined && UNFINISHED_RUN.has(termination)) return "aborted";
+  if (verdict.partial) return "partial";
+  return "active";
+}
+
+export function describeDisposition(disposition: TaskDisposition): string {
+  switch (disposition) {
+    case "completed":
+      return "요구사항이 모두 확인되었습니다";
+    case "partial":
+      return "일부만 확인되었고 남은 것이 있습니다";
+    case "blocked":
+      return "바깥 원인으로 막혀 있습니다";
+    case "aborted":
+      return "이번 실행이 끝까지 가지 못하고 중단되었습니다";
+    case "active":
+      return "아직 확인된 것이 없습니다";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// What a candidate may not say
+// ---------------------------------------------------------------------------
+
+export type ClaimViolationKind =
+  | "UNSUPPORTED_COMPLETION"
+  | "UNSUPPORTED_TEST_SUCCESS"
+  | "UNVERIFIED_INVOCATION"
+  | "UNSUPPORTED_SOURCE_ATTRIBUTION"
+  | "UNSUPPORTED_BLOCKER";
+
+export interface ClaimViolation {
+  kind: ClaimViolationKind;
+  /** The sentence, so a repair can quote it rather than guess. */
+  sentence: string;
+  /** What the record says instead. */
+  detail: string;
+}
+
+export interface ClaimValidationResult {
+  valid: boolean;
+  violations: ClaimViolation[];
+}
+
+// ---------------------------------------------------------------------------
+// Reading the candidate
+// ---------------------------------------------------------------------------
+
+/** Splits on a sentence end followed by space. A bare dot is part of a name. */
+function sentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+const COMPLETION = /완료|완성|끝냈|끝났|마쳤|마무리했|다\s*했|done\b|complete[ds]?\b|finished\b/i;
+
+/**
+ * A completion word that is being denied.
+ *
+ * The distinction the C4.7 evaluator got wrong once and had to be corrected
+ * for: "작업을 완료하지 못했습니다" contains 완료 and says the opposite. What
+ * matters is whether the negation attaches to the completion word, which in
+ * Korean means it follows within a syllable or two — so this looks *there*
+ * rather than anywhere in the sentence.
+ *
+ * That precision is also what catches the contradiction in §10:
+ * "모두 완료했지만 네트워크 문제로 실행하지 못했습니다" has a negation, and it
+ * is nowhere near 완료. The sentence is an affirmative completion claim with an
+ * admission attached, and it is exactly the shape a report takes when it wants
+ * to be read as success.
+ */
+const NEGATED_COMPLETION =
+  /(?:완료|완성|끝|마무리)[가-힣]{0,4}\s*(?:않|못|안\s)|아직[^.!?\n]{0,12}(?:완료|완성|끝)|not\s+(?:complete|finished|done|fully)|un(?:able|finished)|isn't\s+(?:done|complete)/i;
+
+/** Words that make a claim about the whole of the work rather than a piece. */
+const TOTALITY = /모든|전체|전부|모두|일체|all\b|every\b|entire|fully|whole/i;
+
+const TEST_CLAIM =
+  /(?:테스트|test)[^.!?\n]{0,24}(?:통과|성공|passed|pass\b|green)|(?:모든|all)[^.!?\n]{0,12}(?:테스트|tests?)[^.!?\n]{0,12}(?:통과|passed)/i;
+
+const TRAINING_CLAIM = /(?:학습|훈련|training)[^.!?\n]{0,16}(?:완료|끝|성공|completed|finished|succeeded)/i;
+
+const INVOCATION_CLAIM =
+  /(?:추론|호출|inference|invoke[d]?|invocation)[^.!?\n]{0,20}(?:성공|완료|했습니다|하였습니다|되었습니다|succeeded|successful|worked)/i;
+
+/** An external cause named as the reason something did not happen. */
+const BLOCKER_CLAIM =
+  /(?:네트워크|권한|인증|차단|방화벽|접근이\s*거부|network|permission|firewall|blocked)[^.!?\n]{0,30}(?:때문|문제로|로 인해|못했|실패|denied|refused)/i;
+
+// ---------------------------------------------------------------------------
+// The gate
+// ---------------------------------------------------------------------------
+
+export interface FinalClaimInput {
+  task: TaskState | null;
+  disposition: TaskDisposition;
+  text: string;
+  /** URLs the user named, for the source gate. */
+  named?: readonly SourceRequirement[];
+  facts?: readonly SourceFact[];
+  /** How the run ended, so `no_progress` can be told from `finished`. */
+  termination?: string;
+}
+
+/**
+ * Every violation in one pass.
+ *
+ * Not the first one. A candidate that misattributes a source *and* claims the
+ * work is finished gets both back at once, because handing them over one at a
+ * time means the second survives the repair aimed at the first — which is how a
+ * bounded repair budget turns into an escape hatch.
+ */
+export function validateFinalClaims(input: FinalClaimInput): ClaimValidationResult {
+  const { task, disposition, text } = input;
+  const violations: ClaimViolation[] = [];
+  if (task === null) return { valid: true, violations };
+
+  // Source attribution, from the gate C4.6.1 built. Folded in here rather than
+  // called separately so there is one boundary and one budget.
+  for (const claim of unsupportedClaims(task.evidence, text, input.named ?? task.sources, input.facts ?? task.facts)) {
+    violations.push({
+      kind: claim.kind === "invocation" ? "UNVERIFIED_INVOCATION" : "UNSUPPORTED_SOURCE_ATTRIBUTION",
+      sentence: claim.sentence,
+      detail:
+        claim.subject === undefined
+          ? `${claim.hostname}에 대해 확인된 것이 그 주장에 미치지 못합니다.`
+          : `${claim.hostname}의 내용에서 ${claim.subject}을(를) 확인한 기록이 없습니다.`,
+    });
+  }
+
+  const passed = task.requirements.filter((r) => r.status === "passed");
+  const outstanding = assessCompletion(task).outstanding;
+
+  for (const sentence of sentences(text)) {
+    if (COMPLETION.test(sentence) && !NEGATED_COMPLETION.test(sentence)) {
+      // Scope decides everything. "CNN 구현은 완료했습니다" is a claim about one
+      // requirement and is true when that requirement passed; "전체를
+      // 완료했습니다" is a claim about the task and needs the task to be done.
+      const scoped = !TOTALITY.test(sentence) && namesRequirement(sentence, passed);
+      if (!scoped && disposition !== "completed") {
+        violations.push({
+          kind: "UNSUPPORTED_COMPLETION",
+          sentence,
+          detail:
+            `기록상 ${describeDisposition(disposition)}. ` +
+            (outstanding.length === 0
+              ? "완료를 뒷받침할 요구사항 기록이 없습니다."
+              : `남은 것: ${outstanding.map((r) => r.description).join(", ")}.`) +
+            (input.termination === "no_progress"
+              ? " 이번 실행은 같은 시도가 반복되어 중단되었습니다 — 실행 종료는 작업 완료가 아닙니다."
+              : ""),
+        });
+      }
+    }
+
+    if (TEST_CLAIM.test(sentence) && !hasEvidence(task, "test_result")) {
+      violations.push({
+        kind: "UNSUPPORTED_TEST_SUCCESS",
+        sentence,
+        detail: "통과한 테스트 실행 기록이 없습니다. 테스트를 돌린 적이 없으면 통과했다고 쓸 수 없습니다.",
+      });
+    }
+
+    if (TRAINING_CLAIM.test(sentence) && !NEGATED_COMPLETION.test(sentence) && !hasAnyRun(task)) {
+      violations.push({
+        kind: "UNSUPPORTED_COMPLETION",
+        sentence,
+        detail: "학습을 실행한 기록이 없습니다. 코드를 작성한 것과 돌린 것은 다릅니다.",
+      });
+    }
+
+    if (INVOCATION_CLAIM.test(sentence) && !hasAnyRun(task)) {
+      violations.push({
+        kind: "UNVERIFIED_INVOCATION",
+        sentence,
+        detail: "실제로 호출한 기록이 없습니다.",
+      });
+    }
+
+    if (BLOCKER_CLAIM.test(sentence) && !hasExternalBlocker(task)) {
+      violations.push({
+        kind: "UNSUPPORTED_BLOCKER",
+        sentence,
+        detail:
+          "바깥 원인으로 막혔다는 근거가 기록에 없습니다. " +
+          "명령을 잘못 만든 것은 환경 문제가 아닙니다.",
+      });
+    }
+  }
+
+  // Same sentence, same kind, once. A repeated finding reads as five problems
+  // and is one.
+  const seen = new Set<string>();
+  const unique = violations.filter((v) => {
+    const key = `${v.kind}|${v.sentence}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { valid: unique.length === 0, violations: unique };
+}
+
+/** Whether a sentence is about one of these requirements in particular. */
+function namesRequirement(sentence: string, passed: readonly RequirementState[]): boolean {
+  const text = sentence.toLowerCase();
+  return passed.some((requirement) =>
+    tokens(requirement.description).some((token) => text.includes(token)),
+  );
+}
+
+/**
+ * The words of a requirement worth matching on.
+ *
+ * Two characters for CJK and three for ASCII, the same threshold the coverage
+ * check uses: `추론` and `학습` are whole words, and a three-character floor
+ * would make every Korean requirement unmatchable.
+ */
+function tokens(description: string): string[] {
+  return description
+    .toLowerCase()
+    .split(/[\s,·/()]+/)
+    .map((word) => word.replace(/[을를이가은는의에서]$/u, ""))
+    .filter((word) => (/[가-힣]/.test(word) ? word.length >= 2 : word.length >= 3));
+}
+
+function hasEvidence(task: TaskState, kind: string): boolean {
+  return task.evidence.some((e) => e.kind === kind && e.status === "passed");
+}
+
+function hasAnyRun(task: TaskState): boolean {
+  return task.evidence.some(
+    (e) => (e.kind === "command_result" || e.kind === "test_result" || e.kind === "build_result") && e.status === "passed",
+  );
+}
+
+/** Whether anything the runtime saw actually came from outside the agent. */
+function hasExternalBlocker(task: TaskState): boolean {
+  return task.issues.some((issue) => issue.status === "open" && isExternalBlocker(classifyFailure(issue.detail)));
+}
+
+// ---------------------------------------------------------------------------
+// What to say about it
+// ---------------------------------------------------------------------------
+
+/**
+ * The opening line of a rejection, as a constant.
+ *
+ * Anything that needs to recognise an intervention — the evaluator counts them
+ * — matches on this rather than on a copy of the prose. A metric that greps for
+ * a sentence someone else owns reports zero the day the sentence is reworded,
+ * and reads as "the gate never fired".
+ */
+export const CLAIM_REJECTED_MARKER = "런타임이 관측한 기록보다 강한 주장";
+
+export function describeViolations(violations: readonly ClaimViolation[]): string {
+  const lines = [
+    `아래 문장은 ${CLAIM_REJECTED_MARKER}입니다. 기록에 맞게 고쳐서 다시 답하십시오. ` +
+      "한 문장만 고치지 말고 나열된 것을 모두 반영하십시오.",
+  ];
+  for (const violation of violations) {
+    lines.push(`- [${violation.kind}] "${violation.sentence}"\n  ${violation.detail}`);
+  }
+  lines.push(
+    "완료하지 못한 것을 완료했다고 쓰지 말고, 무엇을 했고 무엇이 남았는지 그대로 적으십시오.",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * The answer the runtime sends when the model will not stop overclaiming.
+ *
+ * Built from the record and nothing else. It does not quote, paraphrase or
+ * salvage the rejected candidate: the candidate is the thing that was wrong,
+ * and copying any of it back is how the sentence gets out anyway.
+ *
+ * It is a worse answer than a good model's, and that is the trade. A user told
+ * less than they hoped can ask again; a user told the work is done when it is
+ * not has been given something they cannot act on and do not know to doubt.
+ */
+export function safeFallback(task: TaskState | null, disposition: TaskDisposition, termination?: string): string {
+  const lines = ["답변이 기록과 맞지 않아, 런타임이 확인한 사실만 정리해 드립니다."];
+
+  if (task !== null) {
+    const by = (status: string): string[] =>
+      task.requirements.filter((r) => r.status === status).map((r) => r.description);
+    const section = (label: string, items: readonly string[]): void => {
+      if (items.length > 0) lines.push(`- ${label}: ${items.join(", ")}`);
+    };
+    section("완료", by("passed"));
+    section("실패", by("failed"));
+    section("막힘", by("blocked"));
+    section("아직 실행 안 함", [...by("pending"), ...by("in_progress")]);
+
+    const open = task.issues.filter((i) => i.status === "open");
+    if (open.length > 0) {
+      lines.push(`- 미해결 오류: ${open.map((i) => `${i.summary} — ${i.detail}`).join("; ")}`);
+    }
+    if (task.changedFiles.length > 0) lines.push(`- 변경한 파일: ${task.changedFiles.join(", ")}`);
+  }
+
+  if (termination === "no_progress") {
+    lines.push("같은 시도가 반복되어 이번 실행은 중단했습니다.");
+  }
+  lines.push(`${describeDisposition(disposition)}.`);
+  if (disposition !== "completed") lines.push("따라서 전체 작업은 아직 완료되지 않았습니다.");
+  return lines.join("\n");
+}

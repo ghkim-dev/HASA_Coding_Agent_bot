@@ -49,10 +49,15 @@ export function createTextToolModel(opts: TextToolModelOptions): AgentModel {
       const parsed = parseToolCall(response.text, tools);
 
       return {
-        // A failed attempt becomes text so the model reads it next turn and
-        // corrects itself. Dropping it would leave the user watching an agent
-        // that says nothing and does nothing.
-        text: parsed.problem === null ? parsed.text : `${parsed.text}\n\n[${parsed.problem}]`.trim(),
+        // The prose only. A failed attempt is reported beside it rather than
+        // inside it: the loop hands the problem back to the model, and the user
+        // never reads a message that was written for a parser.
+        //
+        // It used to be appended here, and in a live run that produced a turn
+        // ending after two steps whose entire answer was
+        // `<update_plan>\ncurrent: 1` followed by a bracketed parser complaint.
+        text: parsed.text,
+        ...(parsed.problem === null ? {} : { protocolProblem: parsed.problem }),
         reasoning: response.reasoning,
         toolCalls: parsed.call === null ? [] : [parsed.call],
         inputTokens: response.usage?.inputTokens ?? 0,

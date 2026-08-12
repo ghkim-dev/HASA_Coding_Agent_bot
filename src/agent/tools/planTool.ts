@@ -1,3 +1,4 @@
+import { argText } from "../argValues.ts";
 import type { AgentEvent, AgentTool, ToolResult } from "../types.ts";
 
 /**
@@ -82,12 +83,12 @@ export function createPlanTool(opts: PlanToolOptions): AgentTool {
       additionalProperties: false,
     },
     summarize: (args) => {
-      const plan = parsePlan(typeof args["steps"] === "string" ? args["steps"] : "", args["current"]);
+      const plan = parsePlan(argText(args["steps"]), args["current"]);
       if (plan === null) return "계획을 정리합니다";
       return `${plan.current}/${plan.steps.length} · ${plan.steps[plan.current - 1] ?? ""}`;
     },
     async execute(args): Promise<ToolResult> {
-      const raw = typeof args["steps"] === "string" ? args["steps"] : "";
+      const raw = argText(args["steps"]);
       const plan = parsePlan(raw, args["current"]);
       if (plan === null) {
         return { ok: false, content: "The plan was empty. Send one step per line." };

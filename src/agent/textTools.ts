@@ -225,6 +225,33 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
     if (chosen === null || block.start < chosen.block.start) chosen = { tool, block };
   }
 
+  // The other spelling, and it is not a mistake by the model.
+  //
+  // Hermes, Qwen and most open-weight tool-calling fine-tunes emit
+  // `<tool_call>{"name": …, "arguments": {…}}</tool_call>` — it is what they
+  // were trained on, and a prompt asking for something else competes with the
+  // weights. Observed in use: a correct `record_request` with the right name and
+  // valid arguments, refused as an invented tool, so no contract was recorded
+  // and every action for the rest of the turn was deferred.
+  //
+  // Read before the "not a tool" branch and after the native spelling, so a
+  // model using the documented format is unaffected.
+  const envelope = chosen === null ? readJsonEnvelope(text, byName) : null;
+  if (envelope !== null) {
+    callCounter += 1;
+    return {
+      call: {
+        id: `text_${callCounter}`,
+        name: envelope.tool.name,
+        arguments: envelope.args,
+        rawArguments: JSON.stringify(envelope.args),
+        argumentsValid: true,
+      },
+      text: strip(text, envelope, tools),
+      problem: null,
+    };
+  }
+
   if (chosen === null) {
     // A model reaching for a tool that does not exist has still tried to act,
     // and telling it so is more useful than treating the attempt as an answer.
@@ -233,7 +260,7 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
     if (name !== undefined && !byName.has(name) && looksLikeToolAttempt(name)) {
       return {
         call: null,
-        text,
+        text: stripToolBlocks(text, tools),
         problem: `"${name}" is not a tool. Available tools: ${[...byName.keys()].join(", ")}.`,
       };
     }
@@ -245,7 +272,7 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
         // The markup is removed rather than shown. A user who asked for a video
         // should not be handed a fragment of the agent's own syntax, which is
         // what a bare `<tool_call>` in the reply looked like.
-        text: text.slice(0, cut.start).trim(),
+        text: stripToolBlocks(text.slice(0, cut.start), tools),
         problem: cut.known
           ? `${cut.name} was opened but never closed — the reply ended mid-call, ` +
             "most likely at the output limit. Write the whole call again and keep the values short."
@@ -253,7 +280,7 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
             `Available tools: ${[...byName.keys()].join(", ")}. Use the XML format described above.`,
       };
     }
-    return { call: null, text, problem: null };
+    return { call: null, text: stripToolBlocks(text, tools), problem: null };
   }
 
   const { tool, block } = chosen;
@@ -270,11 +297,32 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
     if (value !== undefined) args[name] = value;
   }
 
+  // The other way models write a body, and the one that left a live model
+  // unable to call anything at all:
+  //
+  //     <web_search>
+  //     query: 개와 고양이 데이터셋
+  //     limit: 5
+  //     </web_search>
+  //
+  // Parameters as `key: value` lines rather than nested tags. It is what a
+  // model reaches for when the example it half-remembers is YAML, and it is
+  // unambiguous here because a key only counts when it names a parameter this
+  // tool actually has. Read only for parameters the tags did not already
+  // supply, so a well-formed call is untouched.
+  if (Object.keys(args).length < Object.keys(schema.properties ?? {}).length) {
+    for (const [name, value] of Object.entries(readKeyValueBody(block.body, schema.properties ?? {}))) {
+      if (name in args) continue;
+      const coerced = coerce(value, schema.properties?.[name]?.type);
+      if (coerced !== undefined) args[name] = coerced;
+    }
+  }
+
   const missing = (schema.required ?? []).filter((name) => !(name in args));
   if (missing.length > 0) {
     return {
       call: null,
-      text: strip(text, block),
+      text: strip(text, block, tools),
       problem: `${tool.name} needs ${missing.map((m) => `<${m}>`).join(", ")}, which ${missing.length === 1 ? "was" : "were"} missing or empty.`,
     };
   }
@@ -289,14 +337,161 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
       rawArguments: raw,
       argumentsValid: true,
     },
-    text: strip(text, block),
+    text: strip(text, block, tools),
     problem: null,
   };
 }
 
-/** Prose only: whatever the model wrote around the call. */
-function strip(text: string, block: { start: number; end: number }): string {
-  return (text.slice(0, block.start) + text.slice(block.end)).trim();
+/**
+ * Prose only: whatever the model wrote around the call.
+ *
+ * Every tool block goes, not just the one that was read. A reply can carry two
+ * attempts — one parsed and one malformed — and removing only the parsed one
+ * left the other in the answer. Seen in a live run, where a user's reply ended:
+ *
+ *     <web_search>
+ *     query: "개와 고양이 분류를 위한 데이터셋"
+ *     </web_search>
+ *
+ * They asked for a classifier and were handed a fragment of our own syntax.
+ */
+function strip(text: string, block: { start: number; end: number }, tools: readonly ToolDescriptor[] = []): string {
+  const withoutCall = text.slice(0, block.start) + text.slice(block.end);
+  return stripToolBlocks(withoutCall, tools).trim();
+}
+
+/**
+ * Removes any remaining `<tool>…</tool>` block, closed or not.
+ *
+ * The sibling of `hasaModel.stripToolMarkup`, which does the same job on the
+ * native path for the envelope tokens a gateway leaves behind. This one knows
+ * the tool names, because on the text path the leftovers are whole calls the
+ * model wrote and the parser did not take.
+ */
+export function stripToolBlocks(text: string, tools: readonly ToolDescriptor[]): string {
+  let out = text;
+  for (const name of [...tools.map((t) => t.name), ...ENVELOPE_TAGS]) {
+    // Tool names are identifiers, so nothing here needs escaping; asserted
+    // rather than assumed, because a name with a regex character in it would
+    // otherwise build a pattern that matches something else entirely.
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    out = out.replace(new RegExp(`<${name}>[\\s\\S]*?</${name}>`, "gi"), "");
+    // An unclosed one runs to the end of the reply — that is what being cut off
+    // at the output limit looks like, and it is no more readable than a closed
+    // one.
+    out = out.replace(new RegExp(`<${name}>[\\s\\S]*$`, "i"), "");
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Parameters written as `key: value` lines inside a tool tag.
+ *
+ * A key starts a new value only when it names a parameter the tool declares —
+ * so a colon inside a value, which is most of what a shell command or a URL
+ * contains, does not split anything. Everything until the next such key belongs
+ * to the value, which is what makes a multi-line body work:
+ *
+ *     contents: def main():
+ *         print("hello")
+ *
+ * Surrounding quotes are dropped from a single-line value, because a model that
+ * writes YAML writes `query: "…"` about half the time and the quotes are not
+ * part of what it meant.
+ */
+function readKeyValueBody(
+  body: string,
+  properties: Record<string, { type?: string }>,
+): Record<string, string> {
+  const names = new Set(Object.keys(properties));
+  const out: Record<string, string> = {};
+  let current: string | null = null;
+  const buffer: string[] = [];
+
+  const flush = (): void => {
+    if (current === null) return;
+    const joined = buffer.join("\n").trim();
+    out[current] = joined.length > 1 && /^(["']).*\1$/s.test(joined) ? joined.slice(1, -1) : joined;
+    buffer.length = 0;
+  };
+
+  for (const line of body.split("\n")) {
+    const match = /^\s*[-*]?\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s*:\s?(.*)$/.exec(line);
+    if (match !== null && names.has(match[1] ?? "")) {
+      flush();
+      current = match[1] ?? null;
+      buffer.push(match[2] ?? "");
+      continue;
+    }
+    if (current !== null) buffer.push(line);
+  }
+  flush();
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The JSON envelope
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrappers open-weight models emit around a JSON tool call.
+ *
+ * Three spellings of one convention. `tool_call` is the Hermes/Qwen form and
+ * the one seen in use; the others come from models trained on OpenAI-shaped
+ * transcripts. None of them is a tool name, and treating them as invented tools
+ * is what threw a perfectly good call away.
+ */
+const ENVELOPE_TAGS = ["tool_call", "function_call", "tool_use", "function"];
+
+interface Envelope {
+  tool: ToolDescriptor;
+  args: Record<string, unknown>;
+  start: number;
+  end: number;
+}
+
+/**
+ * Reads `<tool_call>{"name": …, "arguments": {…}}</tool_call>`.
+ *
+ * Strict about two things and forgiving about the rest. The name has to be a
+ * tool that exists — an envelope naming something else is still a model
+ * inventing a tool, and it gets the message it always got. And the body has to
+ * be JSON: a half-written envelope is left to `unterminatedAttempt`, which
+ * already knows how to say "the reply stopped mid-call".
+ *
+ * Forgiving about a fenced code block inside the envelope, and about
+ * `parameters` as an alias for `arguments`, because models write both.
+ */
+function readJsonEnvelope(
+  text: string,
+  byName: ReadonlyMap<string, ToolDescriptor>,
+): Envelope | null {
+  for (const tag of ENVELOPE_TAGS) {
+    const block = extractBlock(text, tag);
+    if (block === null) continue;
+
+    const body = block.body.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+
+    const record = parsed as Record<string, unknown>;
+    const name = typeof record["name"] === "string" ? record["name"] : "";
+    const tool = byName.get(name);
+    if (tool === undefined) continue;
+
+    const raw = record["arguments"] ?? record["parameters"] ?? record["args"] ?? {};
+    const args =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : {};
+    return { tool, args, start: block.start, end: block.end };
+  }
+  return null;
 }
 
 /**

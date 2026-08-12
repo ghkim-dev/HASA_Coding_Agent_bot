@@ -57,6 +57,15 @@ export interface BlockedToolOptions {
    * 불가능한 환경입니다."
    */
   observedFailures?: () => readonly string[];
+  /**
+   * Whether the record already says the required work is finished.
+   *
+   * A different question from `observedFailures`, and the one that catches the
+   * contradiction: being blocked and being done are mutually exclusive, and a
+   * model pushed toward an ending by a stall challenge will reach for whichever
+   * ending is available.
+   */
+  workIsDone?: () => boolean;
 }
 
 /** The report as the user reads it. */
@@ -127,6 +136,24 @@ export function createBlockedTool(opts: BlockedToolOptions): AgentTool {
           content:
             "A blocked report needs both what could not be done and what stopped it, " +
             "with the actual error rather than a paraphrase.",
+        };
+      }
+
+      // The work is already done, and the report says it could not be.
+      //
+      // Not "nothing failed" — a turn can be blocked without a tool failing, and
+      // the first live run was exactly that: an empty workspace, no dataset, no
+      // way to get one. What cannot happen is a blocked report on a task the
+      // record calls finished. Seen in a live run against `exaone-4.0-32b`: two
+      // files written, `pytest` exit 0, all three requirements passed, the model
+      // repeated itself into a stall challenge, and the user was told
+      // "작업을 완료하지 못했습니다".
+      if (opts.workIsDone?.() === true) {
+        return {
+          ok: false,
+          content:
+            "기록상 요구사항이 이미 모두 확인되었습니다. 완료된 작업을 막혔다고 보고할 수 없습니다. " +
+            "무엇을 했고 무엇을 확인했는지 사용자에게 그대로 말하고 끝내십시오.",
         };
       }
 

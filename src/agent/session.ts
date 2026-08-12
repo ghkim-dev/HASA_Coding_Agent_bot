@@ -9,7 +9,7 @@ import type { RuntimeGap } from "./discoverCommands.ts";
 import { createMediaTools } from "./tools/mediaTools.ts";
 import type { MediaToolOptions } from "./tools/mediaTools.ts";
 import { CheckpointManager, type Checkpoint } from "./checkpoint.ts";
-import { AgentLoop } from "./loop.ts";
+import { AgentLoop, type AgentLoopOptions } from "./loop.ts";
 import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
@@ -111,8 +111,16 @@ export interface AgentSessionOptions {
    * with. See `AgentLoopOptions.taskRecord`.
    */
   taskRecord?: () => string | null;
-  /** Whether the answer claims more than the record supports. See `claimGrounding.ts`. */
-  claimCheck?: (text: string) => string | null;
+  /**
+   * The final response boundary. See `AgentLoopOptions.finalClaims`.
+   *
+   * Supplied by the host rather than built here, for the same reason
+   * `taskRecord` is: the projection it reads spans the whole conversation, and
+   * a session sees only the turn it is running.
+   */
+  finalClaims?: AgentLoopOptions["finalClaims"];
+  /** Whether the record already calls the required work finished. */
+  taskComplete?: () => boolean;
   /**
    * What runs commands. The real spawn unless a caller injects one.
    *
@@ -375,6 +383,9 @@ export class AgentSession {
         // What actually failed this turn, so a blocked report has to rest on
         // something the runtime saw rather than on the model's reading of it.
         observedFailures: () => this.turnFailures,
+        // Being blocked and being finished are mutually exclusive, and only the
+        // caller holding the conversation's events can say which this is.
+        ...(this.opts.taskComplete === undefined ? {} : { workIsDone: this.opts.taskComplete }),
       }),
       // First in intent if not in order: what the user asked for, fixed into
       // something the runtime keeps. Every mode — a question misread is a
@@ -481,7 +492,8 @@ export class AgentSession {
       // the host, which holds the conversation's events; a session on its own
       // sees only the turn it is running.
       ...(this.opts.taskRecord === undefined ? {} : { taskRecord: this.opts.taskRecord }),
-      ...(this.opts.claimCheck === undefined ? {} : { claimCheck: this.opts.claimCheck }),
+      ...(this.opts.finalClaims === undefined ? {} : { finalClaims: this.opts.finalClaims }),
+      ...(this.opts.taskComplete === undefined ? {} : { taskComplete: this.opts.taskComplete }),
       // The contract is read at call time, so a constraint recorded partway
       // through a turn governs the rest of it.
       // Named in a stall challenge, so "다른 방법을 시도하십시오" points

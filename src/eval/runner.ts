@@ -3,7 +3,13 @@ import { allowingApprovalPort } from "../agent/approval.ts";
 import { TurnRecorder } from "../agent/sessionRecorder.ts";
 import { reduceTask } from "../agent/taskReducer.ts";
 import { describeTask } from "../agent/taskState.ts";
-import { describeUnsupportedClaims, unsupportedClaims } from "../agent/claimGrounding.ts";
+import {
+  CLAIM_REJECTED_MARKER,
+  describeViolations,
+  safeFallback,
+  taskDisposition,
+  validateFinalClaims,
+} from "../agent/finalClaims.ts";
 import { createWorld, type ControlledWorld } from "./world.ts";
 import type { EvalScenario } from "./scenario.ts";
 import type { SessionEvent } from "../agent/sessionEvents.ts";
@@ -79,6 +85,14 @@ export async function runScenario(opts: RunnerOptions): Promise<RunTrace> {
   const model = opts.model();
   const recorded: SessionEvent[] = [];
   const turns: TurnTrace[] = [];
+  /**
+   * How the previous turn ended.
+   *
+   * The gate needs it to tell `no_progress` from `finished`: a run that stopped
+   * because nothing was changing has not completed the task, and a completion
+   * claim in that turn is exactly the sentence to refuse.
+   */
+  let lastTermination: string | undefined;
 
   try {
     const session = await AgentSession.open({
@@ -98,11 +112,24 @@ export async function runScenario(opts: RunnerOptions): Promise<RunTrace> {
           ? null
           : describeTask(task);
       },
-      claimCheck: (text) => {
-        const task = reduceTask(recorded, opts.scenario.id);
-        if (task === null) return null;
-        const claims = unsupportedClaims(task.evidence, text, task.sources, task.facts);
-        return claims.length === 0 ? null : describeUnsupportedClaims(claims);
+      // The same boundary the host wires, from the same projection. A runner
+      // that skipped it would be measuring a harness the user does not have.
+      taskComplete: () => taskDisposition(reduceTask(recorded, opts.scenario.id), lastTermination) === "completed",
+      finalClaims: {
+        validate: (text: string) => {
+          const task = reduceTask(recorded, opts.scenario.id);
+          const verdict = validateFinalClaims({
+            task,
+            disposition: taskDisposition(task, lastTermination),
+            text,
+            ...(lastTermination === undefined ? {} : { termination: lastTermination }),
+          });
+          return verdict.valid ? null : describeViolations(verdict.violations);
+        },
+        fallback: () => {
+          const task = reduceTask(recorded, opts.scenario.id);
+          return safeFallback(task, taskDisposition(task, lastTermination), lastTermination);
+        },
       },
     });
 
@@ -139,6 +166,7 @@ export async function runScenario(opts: RunnerOptions): Promise<RunTrace> {
       // claim gate that had fired as one that never had.
       const delta = session.takeMessageDelta();
 
+      lastTermination = result?.reason ?? lastTermination;
       turns.push({
         index,
         user: turn.user,
@@ -196,10 +224,7 @@ function challengesIn(events: readonly AgentEvent[]): string[] {
  * makes — the record before the answer, and the claim gate after it — are the
  * ones recovery is measured against.
  */
-const RUNTIME_INTERVENTIONS = [
-  "이것은 런타임이 관측한 기록입니다",
-  "지금까지 관측된 근거보다 강한 주장",
-];
+const RUNTIME_INTERVENTIONS = ["이것은 런타임이 관측한 기록입니다", CLAIM_REJECTED_MARKER];
 
 function interventionsIn(delta: readonly ProviderMessage[]): string[] {
   const out: string[] = [];
