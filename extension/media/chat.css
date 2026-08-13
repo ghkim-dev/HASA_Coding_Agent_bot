@@ -398,3 +398,146 @@ footer { position: relative; }
 .history-meta { font-size: 0.8em; opacity: 0.6; flex-shrink: 0; }
 
 .muted { opacity: 0.7; font-size: 0.9em; }
+
+/* ---------------------------------------------------------------------------
+ * What the user asked for, and where each part of it has got to.
+ *
+ * A panel rather than a line in the transcript, because the transcript scrolls
+ * and this does not: the point is that the requirements stay in view while the
+ * agent works past them. It sits above the transcript for the same reason.
+ *
+ * The states are drawn with a glyph *and* a colour. A colour alone is not
+ * readable to everyone, and the one state worth noticing most — a requirement
+ * no plan step covers — has to be visible at a glance.
+ * ------------------------------------------------------------------------- */
+
+#requirements {
+  margin: 0 0 8px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.reqHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reqHead:hover { background: var(--vscode-list-hoverBackground); }
+
+.caret { opacity: 0.7; font-size: 0.85em; width: 1em; }
+.reqTitle { font-weight: 600; }
+
+.reqCount {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  font-size: 0.9em;
+}
+
+.reqState {
+  margin-left: auto;
+  font-size: 0.82em;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+}
+
+.reqState.completed {
+  color: var(--vscode-testing-iconPassed, #3fb950);
+  border-color: currentColor;
+}
+.reqState.partial, .reqState.active { opacity: 0.8; border-color: var(--vscode-panel-border); }
+.reqState.blocked, .reqState.aborted {
+  color: var(--vscode-testing-iconFailed, #f85149);
+  border-color: currentColor;
+}
+
+#reqBody { padding: 0 10px 10px; }
+#reqBody.hidden { display: none; }
+
+.reqGoal {
+  opacity: 0.75;
+  font-size: 0.9em;
+  margin: 0 0 8px;
+  padding-left: 2px;
+}
+
+.reqList { list-style: none; margin: 0; padding: 0; }
+
+.reqList li {
+  display: grid;
+  grid-template-columns: 1.2em 1fr;
+  gap: 6px;
+  padding: 3px 0;
+  align-items: start;
+  line-height: 1.45;
+}
+
+.reqList .mark { text-align: center; opacity: 0.9; }
+.reqList .what { min-width: 0; overflow-wrap: anywhere; }
+
+/* The step a requirement was matched to. Shown so a wrong match is visible
+ * rather than silently colouring the row — see `requirementsView`. */
+.reqList .via {
+  display: block;
+  font-size: 0.82em;
+  opacity: 0.6;
+  margin-top: 1px;
+}
+
+.reqList .why {
+  display: block;
+  font-size: 0.82em;
+  color: var(--vscode-testing-iconFailed, #f85149);
+  margin-top: 1px;
+}
+
+.reqList li.done .mark { color: var(--vscode-testing-iconPassed, #3fb950); }
+.reqList li.done .what { opacity: 0.75; }
+.reqList li.failed .mark { color: var(--vscode-testing-iconFailed, #f85149); }
+.reqList li.in_progress .mark { color: var(--vscode-charts-blue, #58a6ff); }
+
+/* The one that matters most: the runtime is still holding it and the plan
+ * does not mention it. */
+.reqList li.unplanned .mark { color: var(--vscode-editorWarning-foreground, #d29922); }
+.reqList li.unplanned .what { color: var(--vscode-editorWarning-foreground, #d29922); }
+
+.reqList li.superseded .what { text-decoration: line-through; opacity: 0.5; }
+
+.reqExtra {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-panel-border);
+  font-size: 0.86em;
+}
+
+.reqExtra .label { opacity: 0.7; margin-right: 4px; }
+
+.reqChip {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 2px 4px 2px 0;
+  border-radius: 9px;
+  border: 1px solid var(--vscode-panel-border);
+}
+
+.reqChip.enforced {
+  color: var(--vscode-charts-purple, #bc8cff);
+  border-color: currentColor;
+}
+
+.reqChip.fetched { color: var(--vscode-testing-iconPassed, #3fb950); border-color: currentColor; }
+.reqChip.attempted, .reqChip.pending {
+  color: var(--vscode-editorWarning-foreground, #d29922);
+  border-color: currentColor;
+}
+
+.reqIssue { color: var(--vscode-testing-iconFailed, #f85149); margin-top: 3px; }

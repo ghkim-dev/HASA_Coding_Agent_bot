@@ -221,8 +221,19 @@ const CONSTRAINT_KINDS: readonly ConstraintKind[] = [
   "other",
 ];
 
+/**
+ * A constraint that says there is no constraint.
+ *
+ * Models fill the field rather than leave it out — "없음", "none", "-" — and a
+ * panel that draws those as restrictions tells the user they asked for
+ * something they did not. Dropped here rather than at the renderer, because a
+ * recorded constraint is also read by the tool gate and a no-op has no business
+ * in the record either.
+ */
+const EMPTY_CONSTRAINT = /^(?:없음|없습니다|해당\s*없음|특별히\s*없음|없다|무|none|n\/?a|nothing|-{1,3})[.·]?$/i;
+
 function constraintsFrom(raw: unknown, turnId: string): Constraint[] {
-  return lines(raw).map((line) => {
+  return lines(raw).filter((line) => !EMPTY_CONSTRAINT.test(line.trim())).map((line) => {
     // `kind: text`, with the kind optional. A model that writes only prose
     // still produces a constraint — as `other`, which is recorded and shown but
     // not enforced, because enforcing something nobody classified would be

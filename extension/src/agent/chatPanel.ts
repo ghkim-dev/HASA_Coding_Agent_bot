@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { MODE_DEFINITIONS } from "../../../src/agent/modes.ts";
 import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
+import type { RequirementsView } from "../../../src/agent/requirementsView.ts";
 
 /**
  * What the panel says about the connection.
@@ -100,6 +101,15 @@ export type HostMessage =
   | { type: "state"; state: PanelState }
   | { type: "event"; event: AgentEvent }
   | { type: "notice"; level: "info" | "error"; text: string }
+  /**
+   * What the user asked for, and how far each part has got.
+   *
+   * Pushed rather than derived in the webview, because the join it carries —
+   * a user's requirement against the plan step covering it — is a runtime
+   * judgement with tests behind it, and a second implementation in the panel
+   * would be a second answer. Null clears the section.
+   */
+  | { type: "requirements"; view: RequirementsView | null }
   /**
    * A file the agent generated, ready to show.
    *
@@ -276,6 +286,20 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <h2>HASA Coding Agent</h2>
     <p id="connectDetail">시작하려면 HASA API Key를 입력해 주세요.</p>
     <button id="connectBtn" class="primary">연결</button>
+  </section>
+
+  <section id="requirements" class="card hidden">
+    <button id="reqToggle" class="reqHead" type="button" aria-expanded="true" aria-controls="reqBody">
+      <span id="reqCaret" class="caret">▾</span>
+      <span class="reqTitle">요청하신 것</span>
+      <span id="reqCount" class="reqCount"></span>
+      <span id="reqState" class="reqState"></span>
+    </button>
+    <div id="reqBody">
+      <div id="reqGoal" class="reqGoal"></div>
+      <ul id="reqList" class="reqList"></ul>
+      <div id="reqExtras"></div>
+    </div>
   </section>
 
   <main id="transcript"></main>

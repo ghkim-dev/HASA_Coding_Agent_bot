@@ -37,6 +37,7 @@ import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
 import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/conversationGraph.ts";
 import { reduceTask } from "../../../src/agent/taskReducer.ts";
 import { describeTask } from "../../../src/agent/taskState.ts";
+import { requirementsView, type RequirementsView } from "../../../src/agent/requirementsView.ts";
 import {
   describeViolations,
   safeFallback,
@@ -928,6 +929,23 @@ export class AgentHost {
       `[hasa] auto model: ${choice.modelId} (${choice.confidence}, ${choice.toolProtocol} tools)`,
     );
     return choice;
+  }
+
+  /**
+   * What the user asked for and where each part of it stands.
+   *
+   * Built from the same events everything else reads, so the panel shows the
+   * runtime's record rather than a second account of it. Null until the model
+   * has recorded a contract — see `requirementsView`.
+   */
+  requirements(): RequirementsView | null {
+    const session = this.session;
+    if (session === null) return null;
+    return requirementsView(
+      reduceTask(this.recorded, this.conversationId ?? "task"),
+      session.taskContract,
+      this.lastTermination,
+    );
   }
 
   async send(

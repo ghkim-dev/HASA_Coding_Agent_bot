@@ -8,6 +8,7 @@ import { allowingApprovalPort } from "../agent/approval.ts";
 import { TurnRecorder } from "../agent/sessionRecorder.ts";
 import { reduceTask } from "../agent/taskReducer.ts";
 import { describeTask } from "../agent/taskState.ts";
+import { requirementsView } from "../agent/requirementsView.ts";
 import {
   describeViolations, safeFallback, taskDisposition, validateFinalClaims,
 } from "../agent/finalClaims.ts";
@@ -108,6 +109,25 @@ lastTermination = result.reason;
 process.stdout.write(`\n--- reason=${result.reason} steps=${result.steps} modelCalls=${result.modelCalls} toolCalls=${result.toolCalls} repairs=${result.claimRepairs} fallback=${result.safeFallback ?? false} ${Math.round((Date.now()-started)/1000)}s\n`);
 process.stdout.write(`--- files: ${(await readdir(root, { recursive: true }).catch(() => [])).join(", ") || "(none)"}\n`);
 process.stdout.write(`--- answer:\n${result.summary}\n`);
+
+// The panel's own projection, printed so the visual half can be checked
+// against a real turn rather than only against fixtures.
+const view = requirementsView(reduceTask(recorded, "live"), session.taskContract, result.reason);
+if (view !== null) {
+  process.stdout.write(`
+--- panel: ${view.goal} · ${view.done}/${view.total} · ${view.disposition}
+`);
+  const mark = { done: "✓", in_progress: "○", failed: "✗", unplanned: "!" };
+  for (const r of view.requirements) {
+    const via = r.step !== undefined && r.step !== r.text ? `  → ${r.step}` : r.progress === "unplanned" ? "  → 계획에 아직 없습니다" : "";
+    process.stdout.write(`      ${mark[r.progress]} ${r.text}${via}
+`);
+  }
+  for (const c of view.constraints) process.stdout.write(`      ⊘ ${c.text}${c.enforced ? " (강제)" : ""}
+`);
+  for (const s2 of view.sources) process.stdout.write(`      ⌾ ${s2.url} · ${s2.status}
+`);
+}
 
 const task = reduceTask(recorded, "live");
 if (task !== null) {

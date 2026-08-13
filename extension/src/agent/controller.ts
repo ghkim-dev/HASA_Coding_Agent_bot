@@ -468,7 +468,15 @@ export class AgentController {
     const result = await this.host.send(prompt, (event: AgentEvent) => {
       this.panel?.post({ type: "event", event });
       this.showArtifact(event);
+      // Redrawn whenever something could have moved a requirement: the contract
+      // arriving, a tool finishing, the turn ending. Cheap — a fold over the
+      // conversation's own events — and it is the only way the panel shows the
+      // work being tracked rather than only the tools being called.
+      if (event.type === "contract" || event.type === "tool_end" || event.type === "done") {
+        this.panel?.post({ type: "requirements", view: this.host.requirements() });
+      }
     }, attachments);
+    this.panel?.post({ type: "requirements", view: this.host.requirements() });
 
     const attachmentProblem = this.host.takeAttachmentProblem();
     if (attachmentProblem !== null) {

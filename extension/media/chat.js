@@ -116,6 +116,15 @@ const el = {
   attachMenu: /** @type {HTMLElement} */ (document.getElementById("attachMenu")),
   attachments: /** @type {HTMLElement} */ (document.getElementById("attachments")),
   historyBtn: /** @type {HTMLButtonElement} */ (document.getElementById("historyBtn")),
+  requirements: /** @type {HTMLElement} */ (document.getElementById("requirements")),
+  reqToggle: /** @type {HTMLButtonElement} */ (document.getElementById("reqToggle")),
+  reqCaret: /** @type {HTMLElement} */ (document.getElementById("reqCaret")),
+  reqCount: /** @type {HTMLElement} */ (document.getElementById("reqCount")),
+  reqState: /** @type {HTMLElement} */ (document.getElementById("reqState")),
+  reqBody: /** @type {HTMLElement} */ (document.getElementById("reqBody")),
+  reqGoal: /** @type {HTMLElement} */ (document.getElementById("reqGoal")),
+  reqList: /** @type {HTMLElement} */ (document.getElementById("reqList")),
+  reqExtras: /** @type {HTMLElement} */ (document.getElementById("reqExtras")),
   history: /** @type {HTMLElement} */ (document.getElementById("history")),
   historyList: /** @type {HTMLElement} */ (document.getElementById("historyList")),
   historyClose: /** @type {HTMLButtonElement} */ (document.getElementById("historyClose")),
@@ -728,6 +737,154 @@ function renderEvent(event) {
   scrollToEnd();
 }
 
+
+// ---------------------------------------------------------------------------
+// What the user asked for
+// ---------------------------------------------------------------------------
+
+/**
+ * The four states a requirement is drawn in.
+ *
+ * A glyph and a colour, never a colour alone. `unplanned` is the one worth
+ * noticing: the runtime is still holding that requirement and the model's plan
+ * does not mention it — which is the failure the whole contract layer exists
+ * to prevent, made visible while there is still time to act on it.
+ */
+const REQ_MARK = {
+  done: { glyph: "\u2713", label: "확인됨" },
+  in_progress: { glyph: "\u25CB", label: "진행 중" },
+  failed: { glyph: "\u2715", label: "실패" },
+  unplanned: { glyph: "!", label: "계획에 없음" },
+};
+
+const DISPOSITION_KO = {
+  completed: "모두 확인됨",
+  partial: "일부 남음",
+  blocked: "막힘",
+  aborted: "중단됨",
+  active: "진행 중",
+};
+
+/** Kept across renders so a user who collapsed the panel keeps it collapsed. */
+let reqCollapsed = false;
+
+el.reqToggle?.addEventListener("click", () => {
+  reqCollapsed = !reqCollapsed;
+  el.reqBody.classList.toggle("hidden", reqCollapsed);
+  el.reqCaret.textContent = reqCollapsed ? "\u25B8" : "\u25BE";
+  el.reqToggle.setAttribute("aria-expanded", reqCollapsed ? "false" : "true");
+});
+
+function chip(text, className) {
+  const node = document.createElement("span");
+  node.className = className;
+  node.textContent = text;
+  return node;
+}
+
+/**
+ * Redraws the panel from the runtime's own view.
+ *
+ * Every value here is computed in `src/agent/requirementsView.ts` and tested
+ * there. Nothing is decided in this file — a second implementation of the join
+ * between a requirement and a plan step would be a second answer to a question
+ * that already has one.
+ */
+function renderRequirements(view) {
+  if (view === null || view === undefined) {
+    el.requirements.classList.add("hidden");
+    return;
+  }
+  el.requirements.classList.remove("hidden");
+
+  el.reqGoal.textContent = view.goal;
+  el.reqGoal.classList.toggle("hidden", view.goal.length === 0);
+  el.reqCount.textContent = view.total === 0 ? "" : `${view.done}/${view.total}`;
+  el.reqState.textContent = DISPOSITION_KO[view.disposition] ?? view.disposition;
+  el.reqState.className = `reqState ${view.disposition}`;
+
+  el.reqList.replaceChildren();
+  for (const requirement of view.requirements) {
+    const mark = REQ_MARK[requirement.progress] ?? REQ_MARK.in_progress;
+    const item = document.createElement("li");
+    item.className = requirement.progress + (requirement.superseded ? " superseded" : "");
+
+    const glyph = document.createElement("span");
+    glyph.className = "mark";
+    glyph.textContent = mark.glyph;
+    // The colour carries meaning, so the meaning is also in the tree for a
+    // screen reader and in the tooltip for everyone else.
+    glyph.title = mark.label;
+    glyph.setAttribute("aria-label", mark.label);
+
+    const what = document.createElement("span");
+    what.className = "what";
+    what.textContent = requirement.text;
+
+    if (requirement.progress === "unplanned") {
+      const via = document.createElement("span");
+      via.className = "via";
+      via.textContent = "계획에 아직 없습니다";
+      what.appendChild(via);
+    } else if (typeof requirement.step === "string" && requirement.step !== requirement.text) {
+      const via = document.createElement("span");
+      via.className = "via";
+      via.textContent = `\u2192 ${requirement.step}`;
+      what.appendChild(via);
+    }
+    if (typeof requirement.detail === "string" && requirement.detail.length > 0) {
+      const why = document.createElement("span");
+      why.className = "why";
+      why.textContent = requirement.detail;
+      what.appendChild(why);
+    }
+
+    item.append(glyph, what);
+    el.reqList.appendChild(item);
+  }
+
+  el.reqExtras.replaceChildren();
+
+  if (view.constraints.length > 0) {
+    const row = document.createElement("div");
+    row.className = "reqExtra";
+    row.appendChild(chip("하지 말라고 하신 것", "label"));
+    for (const constraint of view.constraints) {
+      // `enforced` is not decoration: those kinds are refused by the tool gate
+      // before anything runs, and the rest are recorded only.
+      const node = chip(constraint.text, `reqChip${constraint.enforced ? " enforced" : ""}`);
+      node.title = constraint.enforced ? "런타임이 실행 전에 막습니다" : "기록만 됩니다";
+      row.appendChild(node);
+    }
+    el.reqExtras.appendChild(row);
+  }
+
+  if (view.sources.length > 0) {
+    const row = document.createElement("div");
+    row.className = "reqExtra";
+    row.appendChild(chip("지정하신 출처", "label"));
+    for (const source of view.sources) {
+      const label = source.status === "fetched" ? "읽음" : source.status === "attempted" ? "가져오지 못함" : "아직 안 읽음";
+      const node = chip(`${source.url} · ${label}`, `reqChip ${source.status}`);
+      row.appendChild(node);
+    }
+    el.reqExtras.appendChild(row);
+  }
+
+  if (view.openIssues.length > 0) {
+    const row = document.createElement("div");
+    row.className = "reqExtra";
+    row.appendChild(chip("미해결 오류", "label"));
+    for (const issue of view.openIssues) {
+      const node = document.createElement("div");
+      node.className = "reqIssue";
+      node.textContent = `${issue.summary} — ${issue.detail}`;
+      row.appendChild(node);
+    }
+    el.reqExtras.appendChild(row);
+  }
+}
+
 function renderState(state) {
   const { connection } = state;
 
@@ -887,7 +1044,8 @@ window.addEventListener("message", (e) => {
   // conversation correctly restored underneath it. `e.data` is `any`, so
   // nothing was going to catch that until it was named.
   const message = /** @type {HostMessage} */ (e.data);
-  if (message.type === "state") renderState(message.state);
+  if (message.type === "requirements") renderRequirements(message.view);
+  else if (message.type === "state") renderState(message.state);
   else if (message.type === "event") renderEvent(message.event);
   else if (message.type === "notice") notice(message.level, message.text);
   else if (message.type === "artifact") showArtifact(message);
