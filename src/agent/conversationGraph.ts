@@ -188,6 +188,20 @@ export interface RepairNote {
 }
 
 /**
+ * Whether an entry of a stored delta is a message at all.
+ *
+ * A v1 file's `messages` is whatever was on disk, and a truncated write or a
+ * hand-edited file puts `null` in it. Reading `.role` off that threw a
+ * `TypeError` out of `readSession`, whose contract is to return null for
+ * anything unreadable — so one damaged entry cost the whole call rather than
+ * the one conversation. Skipped here instead: an entry that is not a message
+ * cannot be holding an unanswered tool call.
+ */
+function isMessage(value: unknown): value is ProviderMessage {
+  return value !== null && typeof value === "object";
+}
+
+/**
  * Makes a chain continuable without changing what it says.
  *
  * A turn cut off between a tool call and its result leaves a history every
@@ -207,14 +221,14 @@ export function repairChain(messages: readonly ProviderMessage[]): {
 } {
   const answered = new Set<string>();
   for (const message of messages) {
-    if (message.role === "tool") answered.add(message.toolCallId);
+    if (isMessage(message) && message.role === "tool") answered.add(message.toolCallId);
   }
 
   const out: ProviderMessage[] = [];
   const repairs: RepairNote[] = [];
   for (const message of messages) {
     out.push(message);
-    if (message.role !== "assistant") continue;
+    if (!isMessage(message) || message.role !== "assistant") continue;
     for (const call of message.toolCalls ?? []) {
       if (answered.has(call.id)) continue;
       // Right after its own call, which is where the protocol expects it.
@@ -322,10 +336,10 @@ export function assessRestorable(delta: readonly ProviderMessage[]): {
 } {
   const answered = new Set<string>();
   for (const message of delta) {
-    if (message.role === "tool") answered.add(message.toolCallId);
+    if (isMessage(message) && message.role === "tool") answered.add(message.toolCallId);
   }
   for (const message of delta) {
-    if (message.role !== "assistant") continue;
+    if (!isMessage(message) || message.role !== "assistant") continue;
     for (const call of message.toolCalls ?? []) {
       if (!answered.has(call.id)) {
         return {

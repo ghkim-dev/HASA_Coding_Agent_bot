@@ -506,10 +506,16 @@ export function readSession(raw: string): LoadedSession | null {
       branches,
       checkpoints: [],
       activeBranchId: MAIN_BRANCH_ID,
-      // Not `project`: identity with what was on disk matters more here than
-      // going through the graph, and for a single turn they are the same thing.
-      events,
-      messages,
+      // Through `project`, like every other generation. This used to hand back
+      // the arrays as they were on disk, on the reasoning that for a single turn
+      // that is the same thing the graph would produce — which is true of the
+      // events and false of the messages in exactly the case that matters. A
+      // legacy conversation cut off between a tool call and its result came back
+      // with the dangling call intact, `AgentHost.adopt` restored it into the
+      // session, and the next request was rejected by the gateway. The same file
+      // read again after one save was repaired, because that pass went through
+      // the graph. One path, so there is no first open that behaves differently.
+      ...project([legacy], branches, MAIN_BRANCH_ID),
     },
   };
 }
