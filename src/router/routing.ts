@@ -283,6 +283,8 @@ export interface RoutingEventInput {
   bootstrapModelId?: string;
   /** Model calls the interpretation spent, kept off the worker's account. */
   bootstrapModelCalls?: number;
+  /** A shadow observation, if one was taken. Never read by the router. */
+  shadow?: unknown;
 }
 
 /**
@@ -308,6 +310,7 @@ export function routingEvent(input: RoutingEventInput): WorkerSelectedEvent {
     ...(input.bootstrapModelCalls === undefined
       ? {}
       : { bootstrapModelCalls: input.bootstrapModelCalls }),
+    ...(input.shadow === undefined ? {} : { shadow: input.shadow }),
     ...(decision.taskProfile === undefined
       ? {}
       : { taskProfileFingerprint: taskProfileFingerprint(decision.taskProfile) }),
@@ -323,6 +326,7 @@ export function routingEvent(input: RoutingEventInput): WorkerSelectedEvent {
             code: f.code,
           })),
           reasons: recommendation.reasons.map((r) => r.code),
+          routerPolicyId: recommendation.policyId,
           ...(recommendation.selected === null
             ? {}
             : {

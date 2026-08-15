@@ -111,9 +111,44 @@ export interface ModelEfficiency {
   toolCalls?: Measure;
 }
 
+/**
+ * What the model is deployed to be, carried from the curated profile.
+ *
+ * On `ModelProfile` rather than only on the semantic profile because
+ * `filterEligible` reads it, and eligibility runs before anything semantic is
+ * loaded. `workerEligible: "unknown"` is the state of a model nobody has
+ * curated, and it does not exclude — an unwritten-up model is a candidate, the
+ * same rule that governs an unmeasured capability.
+ */
+export interface IntendedUse {
+  role: string;
+  /** Only an explicit `false` excludes. `"unknown"` is not a verdict. */
+  workerEligible: boolean | "unknown";
+  /**
+   * What kind of claim this is, which is what decides how far it may reach.
+   *
+   * A measurement or a documented fact may remove a model from a pool; an
+   * assertion may only be reported. Kept apart from `reviewed`, which is about
+   * confidence in the write-up rather than about the nature of the evidence.
+   */
+  evidenceStatus: string;
+  /** `hard_exclude` | `advisory` | `shadow_only`, derived from the evidence. */
+  routingEffect: string;
+  /** Set when this model is out of *this* pool. Null when it is not. */
+  poolExclusionReason: string | null;
+  /** Where the claim came from, so a refusal can be argued with. */
+  source: string;
+  /** When the evidence was taken or checked. */
+  verifiedAt?: string;
+  /** False when no one with authority over this project has signed it off. */
+  reviewed: boolean;
+}
+
 export interface ModelProfile {
   modelId: string;
   availability: ModelAvailability;
+  /** Absent when nobody has curated the model. Treated as `unknown`. */
+  intendedUse?: IntendedUse;
   /** Sparse on purpose: an absent capability is unknown, not zero. */
   capabilities: Partial<Record<keyof CapabilityDemand, Measure>>;
   efficiency: ModelEfficiency;

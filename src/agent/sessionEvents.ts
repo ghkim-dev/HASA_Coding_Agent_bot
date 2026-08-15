@@ -321,6 +321,28 @@ export interface WorkerSelectedEvent extends Base {
   reasons?: string[];
   /** Identifies the profile this answered without copying it. */
   taskProfileFingerprint?: string;
+  /**
+   * Which weighting produced the ranking.
+   *
+   * Separate from `routerVersion`, which says what the code did. This says what
+   * the *policy* was, and the two move independently: tuning the weights is not
+   * a code change, and a decision that cannot name its weights cannot answer
+   * "why A then and B now" — the registry and the policy are both candidates
+   * and only one of them is usually the cause.
+   */
+  routerPolicyId?: string;
+  /**
+   * What a semantic measurement said, when one was taken.
+   *
+   * Observation only. Nothing in the selection above was computed from it —
+   * `shadow.ts` runs beside the recommendation rather than inside it — and it
+   * is stored so a later calibration can be fitted against decisions that were
+   * already made rather than against a fresh experiment.
+   *
+   * Scores and identity, never vectors. A conversation is not the place to keep
+   * a thousand floats per model per turn.
+   */
+  shadow?: unknown;
   /** Set when no model could be chosen, so the absence has a cause. */
   unavailableReason?: string;
   routerVersion: string;

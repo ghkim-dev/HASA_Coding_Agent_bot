@@ -223,20 +223,105 @@ export function parseCatalog(payload: unknown): CatalogEntry[] {
  * modality costs the media tools; it must not cost the chat path, which worked
  * before this file existed and has to keep working when the portal API is down.
  */
+/**
+ * How long a catalogue answer is treated as current.
+ *
+ * Five minutes rather than a process lifetime. The catalogue used to be fetched
+ * once and held until the extension host restarted, and the cost of that was
+ * measured rather than imagined: the key's model access went from four models
+ * to thirty-four in thirteen days, and one model was withdrawn entirely, while
+ * anything holding a `HasaCatalog` kept answering from the first fetch.
+ *
+ * Short enough that a model added or withdrawn during a session is picked up
+ * without anyone restarting; long enough that a burst of calls in one turn
+ * makes one request.
+ */
+export const CATALOG_TTL_MS = 5 * 60 * 1000;
+
 export class HasaCatalog {
   private readonly port: CatalogPort;
-  private entries: Promise<CatalogEntry[]> | null = null;
+  /** The resolved answer, when there is one within its TTL. */
+  private cached: CatalogEntry[] | null = null;
+  /**
+   * A fetch already on the wire.
+   *
+   * Held separately from `cached` because the two answer different questions,
+   * and collapsing them is what broke concurrency: with only a resolved value
+   * to check, three calls in the same tick all saw "nothing cached" and each
+   * started its own request.
+   */
+  private pending: Promise<CatalogEntry[]> | null = null;
+  private fetchedAt = 0;
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+  /**
+   * Incremented by every `invalidate`.
+   *
+   * A fetch in flight when the catalogue is invalidated must not be allowed to
+   * install its result afterwards: the invalidation happened *because*
+   * something changed — a new key, a new provider — and the answer already on
+   * the wire is about the old one. The generation is captured before the
+   * request and checked before the write, so a late response is discarded
+   * rather than becoming the new truth.
+   */
+  private generation = 0;
 
-  constructor(port: CatalogPort) {
+  constructor(port: CatalogPort, options: { ttlMs?: number; now?: () => number } = {}) {
     this.port = port;
+    this.ttlMs = options.ttlMs ?? CATALOG_TTL_MS;
+    this.now = options.now ?? Date.now;
+  }
+
+  /**
+   * Forgets what was fetched, so a new key or a restarted gateway is re-read.
+   *
+   * Now also voids any fetch already in flight — see `generation`.
+   */
+  invalidate(): void {
+    this.generation += 1;
+    this.cached = null;
+    this.pending = null;
+    this.fetchedAt = 0;
+  }
+
+  /** Whether the held answer is still within its TTL. */
+  get fresh(): boolean {
+    return this.cached !== null && this.now() - this.fetchedAt < this.ttlMs;
   }
 
   async all(): Promise<CatalogEntry[]> {
-    this.entries ??= this.port
+    if (this.fresh && this.cached !== null) return this.cached;
+    // A request already on the wire is the answer for everyone who asks while
+    // it is in flight; three lookups in one tick make one request.
+    if (this.pending !== null) return this.pending;
+
+    const generation = this.generation;
+    const pending = this.port
       .fetchJson("/api/catalog")
       .then(parseCatalog)
-      .catch(() => []);
-    return this.entries;
+      .then((parsed) => {
+        // Only if nothing invalidated us while this was in flight. An answer
+        // that arrived after a key change describes the old key.
+        if (generation === this.generation) {
+          this.cached = parsed;
+          this.fetchedAt = this.now();
+        }
+        return parsed;
+      })
+      .catch(() => {
+        // A failure is not cached. It used to be: `[]` was stored and every
+        // later call answered "the gateway offers nothing" for the rest of the
+        // process, so one bad minute became a permanently empty picker.
+        return [] as CatalogEntry[];
+      })
+      .finally(() => {
+        if (this.pending === pending) this.pending = null;
+      });
+
+    this.pending = pending;
+    const result = await pending;
+    // A response that arrived after an invalidation belongs to the old world.
+    return generation === this.generation ? result : this.all();
   }
 
   async entry(modelId: string): Promise<CatalogEntry | null> {
@@ -276,8 +361,4 @@ export class HasaCatalog {
     }
   }
 
-  /** Forgets what was fetched, so a new key or a restarted gateway is re-read. */
-  invalidate(): void {
-    this.entries = null;
-  }
 }

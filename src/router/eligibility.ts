@@ -20,6 +20,8 @@ import type { TaskProfile } from "./taskProfile.ts";
 export type ExclusionCode =
   | "MODEL_UNAVAILABLE"
   | "CANNOT_CONVERSE"
+  /** Deployed to be something other than an agent worker. */
+  | "NOT_A_WORKER"
   | "CONTEXT_TOO_SMALL"
   | "TOOL_CALLING_REQUIRED"
   | "PROTOCOL_INCOMPATIBLE"
@@ -33,9 +35,17 @@ export interface FilteredModel {
   detail: string;
 }
 
+/** A claim that was recorded but was not allowed to remove anything. */
+export interface EligibilityAdvisory {
+  modelId: string;
+  detail: string;
+}
+
 export interface EligibilityResult {
   eligible: ModelProfile[];
   filteredOut: FilteredModel[];
+  /** Kept so a ranking can say what it heard and chose not to act on. */
+  advisories: EligibilityAdvisory[];
 }
 
 /**
@@ -52,6 +62,7 @@ export function filterEligible(
 ): EligibilityResult {
   const eligible: ModelProfile[] = [];
   const filteredOut: FilteredModel[] = [];
+  const advisories: EligibilityAdvisory[] = [];
   const constraints = task.constraints;
 
   const forbidden = new Set(constraints.forbiddenModels ?? []);
@@ -80,6 +91,37 @@ export function filterEligible(
     if (profile.availability.protocol === null) {
       exclude("CANNOT_CONVERSE", "대화를 주고받을 수 없는 모델입니다.");
       continue;
+    }
+
+    // Being able to answer is not the same as being for this.
+    //
+    // The capability probe measures whether a model holds a conversation and
+    // calls a tool, and a safety classifier does both — so it arrives here
+    // looking like a candidate. Leaving it in and hoping a low similarity score
+    // pushes it down would be using a 0.15 term to correct a candidate list,
+    // against a 0.40 capability term that would happily rate it well.
+    //
+    // Two conditions, and both are needed. There has to be a claim that this
+    // model is out of this pool, *and* the claim has to rest on something that
+    // may exclude — a measurement or the provider's own documentation. An
+    // assertion is recorded and reported and removes nothing, which is what
+    // keeps "nobody reviewed this" from becoming a licence to drop models.
+    const use = profile.intendedUse;
+    if (use !== undefined && use.poolExclusionReason !== null) {
+      if (use.routingEffect === "hard_exclude") {
+        exclude(
+          "NOT_A_WORKER",
+          `${use.poolExclusionReason} (근거 ${use.evidenceStatus}${
+            use.verifiedAt === undefined ? "" : `, ${use.verifiedAt} 확인`
+          })`,
+        );
+        continue;
+      }
+      // Advisory: the model stays, and the claim is on the record.
+      advisories.push({
+        modelId: profile.modelId,
+        detail: `${use.poolExclusionReason} — 다만 근거가 ${use.evidenceStatus} 뿐이라 후보에서 빼지 않았습니다.`,
+      });
     }
 
     const required = constraints.requiredProtocol;
@@ -116,7 +158,7 @@ export function filterEligible(
     eligible.push(profile);
   }
 
-  return { eligible, filteredOut };
+  return { eligible, filteredOut, advisories };
 }
 
 /**

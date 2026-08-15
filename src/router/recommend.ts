@@ -95,6 +95,8 @@ export interface ModelRecommendation {
   taskProfileId: string;
   reasons: RecommendationReason[];
   filteredOut: FilteredModel[];
+  /** Which weighting produced this ranking. Stored with the decision. */
+  policyId: string;
   /** Set when nothing survived, so a caller can say why rather than "none". */
   unavailableReason?: string;
 }
@@ -107,6 +109,14 @@ export interface RouterWeights {
   efficiency: number;
 }
 
+/**
+ * The weights in force when no policy is named.
+ *
+ * Kept as a value rather than as literals inside the sum, and mirrored by
+ * `policy.ts`, which owns the versioned form. The version is what gets stored
+ * with a decision — see `RouterPolicy` for why an unnamed constant makes a past
+ * recommendation unexplainable.
+ */
 export const DEFAULT_WEIGHTS: RouterWeights = {
   semantic: 0.15,
   capability: 0.4,
@@ -195,6 +205,8 @@ function efficiencyScore(task: TaskProfile, model: ModelProfile): number {
 export interface RecommendOptions {
   matcher?: SemanticMatcher;
   weights?: RouterWeights;
+  /** The policy these weights came from, carried into the record. */
+  policyId?: string;
 }
 
 /**
@@ -218,6 +230,7 @@ export async function recommendModel(
 ): Promise<ModelRecommendation> {
   const matcher = options.matcher ?? neutralMatcher;
   const weights = options.weights ?? DEFAULT_WEIGHTS;
+  const policyId = options.policyId ?? "requirement-router-v1";
   const { eligible, filteredOut } = filterEligible(profiles, task);
 
   if (eligible.length === 0) {
@@ -227,6 +240,7 @@ export async function recommendModel(
       taskProfileId: task.id,
       reasons: [],
       filteredOut,
+      policyId,
       unavailableReason:
         profiles.length === 0
           ? "사용할 수 있는 모델 목록이 비어 있습니다."
@@ -273,6 +287,7 @@ export async function recommendModel(
     taskProfileId: task.id,
     reasons: reasonsFor(task, selected, byId.get(selected.modelId)!, ranked.length),
     filteredOut,
+    policyId,
   };
 }
 

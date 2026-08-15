@@ -7,6 +7,8 @@ import {
   type ModelProfile,
 } from "./modelProfile.ts";
 import type { CapabilityDemand } from "./taskProfile.ts";
+import { DEFAULT_POOL, roleIsWorker, type WorkerPool } from "./semanticProfile.ts";
+import { poolEffectFor, semanticProfileFor } from "./modelSemanticCatalog.ts";
 
 /**
  * Where a `ModelProfile` comes from.
@@ -43,7 +45,7 @@ export function isReferenceModel(modelId: string): boolean {
  */
 export function profileFromCatalogue(
   model: ProviderModel,
-  options: { available?: boolean; semanticDescription?: string } = {},
+  options: { available?: boolean; semanticDescription?: string; pool?: WorkerPool } = {},
 ): ModelProfile {
   const protocol = protocolFor(model.capabilities);
   const capabilities: Partial<Record<keyof CapabilityDemand, Measure>> = {};
@@ -67,6 +69,13 @@ export function profileFromCatalogue(
     capabilities.commandExecution = measure(0.45, "declared");
   }
 
+  // What the model is deployed to be, from the curated table. Absent when
+  // nobody has written it up, which the filter treats as "unknown" rather than
+  // as permission or refusal.
+  const semantic = semanticProfileFor(model.id).profile;
+  const pool = options.pool ?? DEFAULT_POOL;
+  const effect = poolEffectFor(model.id, pool);
+
   return {
     modelId: model.id,
     availability: {
@@ -76,6 +85,22 @@ export function profileFromCatalogue(
       maxOutputTokens: model.limits.maxOutputTokens,
       supportsNativeTools: model.capabilities.toolCalling === true,
     },
+    ...(semantic === null
+      ? {}
+      : {
+          intendedUse: {
+            role: semantic.role,
+            workerEligible: roleIsWorker(semantic.role),
+            evidenceStatus: effect.evidence,
+            routingEffect: effect.effect,
+            poolExclusionReason: effect.reason,
+            source: semantic.provenance.source,
+            ...(semantic.provenance.verifiedAt === undefined
+              ? {}
+              : { verifiedAt: semantic.provenance.verifiedAt }),
+            reviewed: semantic.provenance.reviewed,
+          },
+        }),
     capabilities,
     efficiency: {},
     semanticDescription: options.semanticDescription ?? describeFromCatalogue(model),
@@ -206,7 +231,7 @@ function clamp(value: number): number {
 export function buildRegistry(
   models: readonly ProviderModel[],
   evaluations: readonly EvaluationSummary[] = [],
-  options: { unavailable?: readonly string[] } = {},
+  options: { unavailable?: readonly string[]; pool?: WorkerPool } = {},
 ): ModelProfile[] {
   const unavailable = new Set(options.unavailable ?? []);
   const byModel = new Map<string, EvaluationSummary[]>();
@@ -218,7 +243,10 @@ export function buildRegistry(
   }
 
   return models.map((model) => {
-    let profile = profileFromCatalogue(model, { available: !unavailable.has(model.id) });
+    let profile = profileFromCatalogue(model, {
+      available: !unavailable.has(model.id),
+      ...(options.pool === undefined ? {} : { pool: options.pool }),
+    });
     for (const summary of byModel.get(model.id) ?? []) {
       profile = applyEvaluation(profile, summary);
     }

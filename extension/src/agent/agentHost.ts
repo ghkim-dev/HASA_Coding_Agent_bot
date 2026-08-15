@@ -48,7 +48,11 @@ import {
   unroutedEvent,
   type WorkerDecision,
 } from "../../../src/router/routing.ts";
-import { reduceContract } from "../../../src/agent/turnContract.ts";
+import { emptyContract, reduceContract } from "../../../src/agent/turnContract.ts";
+import { projectTaskSemanticProfile } from "../../../src/router/semanticProfile.ts";
+import { embeddingMatcher } from "../../../src/router/embedding.ts";
+import { createHasaEmbeddingProvider } from "../../../src/router/hasaEmbedding.ts";
+import { evaluateShadow, type SemanticShadowEvaluation } from "../../../src/router/shadow.ts";
 import {
   describeViolations,
   safeFallback,
@@ -239,6 +243,10 @@ export class AgentHost {
   private turnOrdinal = 0;
   /** Distinguishes several routing events within one turn's id space. */
   private routingOrdinal = 0;
+  /** Built once per key, not per turn — see . */
+  private matcher: ReturnType<typeof embeddingMatcher> | null = null;
+  /** The registry the last routed turn ranked, for the shadow to read. */
+  private lastRegistry: import("../../../src/router/modelProfile.ts").ModelProfile[] = [];
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
   /**
@@ -1191,6 +1199,7 @@ export class AgentHost {
 
     const listing = (await this.conversationModels()) ?? (await provider.listModels());
     const profiles = buildRegistry(listing.models);
+    this.lastRegistry = profiles;
     const previous = reduceContract([...this.recorded]);
     const currentWorker = selectedWorkerFor(this.recorded)?.modelId ?? null;
     // Derived from the persisted contract events rather than held in a field.
@@ -1226,6 +1235,15 @@ export class AgentHost {
       return { workerModelId: null, contractEvents: [contractEvent] };
     }
 
+    // The shadow runs *beside* the decision, never inside it. `decision` is
+    // already settled by the time this is called, and nothing below is allowed
+    // to look at it except to read which candidates production ranked — see
+    // `shadow.ts` for why a zero weight would have been the wrong shape.
+    const shadow =
+      decision.recommendation === undefined
+        ? null
+        : await this.observeShadow(decision, signal);
+
     keep([
       contractEvent,
       routingEvent({
@@ -1233,15 +1251,78 @@ export class AgentHost {
         decision,
         bootstrapModelId: interpreted.bootstrapModelId,
         bootstrapModelCalls: interpreted.attempts,
+        ...(shadow === null ? {} : { shadow }),
       }),
     ]);
 
     this.log.appendLine(
       `[hasa] routed ${turnId}: bootstrap=${interpreted.bootstrapModelId} ` +
-        `worker=${decision.modelId ?? "none"} trigger=${decision.trigger} origin=${decision.origin}`,
+        `worker=${decision.modelId ?? "none"} trigger=${decision.trigger} origin=${decision.origin}` +
+        `${shadow === null ? "" : ` shadow=${shadow.status}/${shadow.shadowSelectedModelId ?? "-"}`}`,
     );
 
     return { workerModelId: decision.modelId, contractEvents: [contractEvent] };
+  }
+
+  /**
+   * Measures the semantic term without letting it decide anything.
+   *
+   * Built once and kept. A provider, a matcher and a cache created per turn
+   * would re-embed every model profile on every message — the cache is the only
+   * thing standing between this and one network round trip per candidate per
+   * message, and a cache that does not outlive the turn is not a cache.
+   *
+   * Everything here is allowed to fail. `evaluateShadow` turns a timeout, a
+   * 500 or a malformed vector into a recorded reason and returns; the caller
+   * already has its worker by then and does not consult this for anything.
+   */
+  private async observeShadow(
+    decision: WorkerDecision,
+    signal: AbortSignal,
+  ): Promise<SemanticShadowEvaluation | null> {
+    const recommendation = decision.recommendation;
+    const taskProfile = decision.taskProfile;
+    if (recommendation === undefined || taskProfile === undefined) return null;
+
+    const matcher = await this.semanticMatcher();
+    if (matcher === null) return null;
+
+    try {
+      return await evaluateShadow({
+        task: taskProfile,
+        taskSemantic: projectTaskSemanticProfile(this.session?.taskContract ?? emptyContract()),
+        recommendation,
+        profiles: this.lastRegistry,
+        matcher,
+        signal,
+      });
+    } catch (err) {
+      // Belt and braces. `evaluateShadow` is written not to throw; if it ever
+      // does, an observation must still not be able to end a turn.
+      this.log.appendLine(`[hasa] shadow observation failed: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /** The matcher, built once per key. Null when no credential is configured. */
+  private async semanticMatcher(): Promise<ReturnType<typeof embeddingMatcher> | null> {
+    if (this.matcher !== null) return this.matcher;
+    const key = await this.apiKey();
+    if (key === null || key.length === 0) return null;
+
+    const configured = vscode.workspace
+      .getConfiguration("hasaAgent")
+      .get<string>("baseUrl", "")
+      .trim();
+    const embeddings = createHasaEmbeddingProvider({
+      apiKey: key,
+      baseUrl: configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL,
+    });
+    this.matcher = embeddingMatcher({
+      provider: embeddings,
+      taskSemantic: () => projectTaskSemanticProfile(this.session?.taskContract ?? emptyContract()),
+    });
+    return this.matcher;
   }
 
   /** Whatever could not be attached to the last message, once. */
