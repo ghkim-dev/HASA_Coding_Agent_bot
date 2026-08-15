@@ -50,9 +50,8 @@ import {
 } from "../../../src/router/routing.ts";
 import { emptyContract, reduceContract } from "../../../src/agent/turnContract.ts";
 import { projectTaskSemanticProfile } from "../../../src/router/semanticProfile.ts";
-import { embeddingMatcher } from "../../../src/router/embedding.ts";
-import { createHasaEmbeddingProvider } from "../../../src/router/hasaEmbedding.ts";
-import { evaluateShadow, type SemanticShadowEvaluation } from "../../../src/router/shadow.ts";
+import { ShadowRunner } from "../../../src/router/shadowRunner.ts";
+import type { SemanticShadowEvaluation } from "../../../src/router/shadow.ts";
 import {
   describeViolations,
   safeFallback,
@@ -243,8 +242,13 @@ export class AgentHost {
   private turnOrdinal = 0;
   /** Distinguishes several routing events within one turn's id space. */
   private routingOrdinal = 0;
-  /** Built once per key, not per turn — see . */
-  private matcher: ReturnType<typeof embeddingMatcher> | null = null;
+  /**
+   * Built once, not per turn.
+   *
+   * It holds the embedding cache, and a cache rebuilt every turn never hits —
+   * which is the same as having none while looking as though it has one.
+   */
+  private shadowRunner: ShadowRunner | null = null;
   /** The registry the last routed turn ranked, for the shadow to read. */
   private lastRegistry: import("../../../src/router/modelProfile.ts").ModelProfile[] = [];
   private mode: AgentMode = "code";
@@ -1267,62 +1271,28 @@ export class AgentHost {
   /**
    * Measures the semantic term without letting it decide anything.
    *
-   * Built once and kept. A provider, a matcher and a cache created per turn
-   * would re-embed every model profile on every message — the cache is the only
-   * thing standing between this and one network round trip per candidate per
-   * message, and a cache that does not outlive the turn is not a cache.
-   *
-   * Everything here is allowed to fail. `evaluateShadow` turns a timeout, a
-   * 500 or a malformed vector into a recorded reason and returns; the caller
-   * already has its worker by then and does not consult this for anything.
+   * Delegated to `ShadowRunner`, which is where the behaviour worth testing
+   * lives — the provider built once rather than per turn, the observation run
+   * against a decision that is already settled, and every failure returning
+   * rather than throwing. Keeping it here made a regex over this file the only
+   * available test, which is how the matcher went unwired for two slices.
    */
   private async observeShadow(
     decision: WorkerDecision,
     signal: AbortSignal,
   ): Promise<SemanticShadowEvaluation | null> {
-    const recommendation = decision.recommendation;
-    const taskProfile = decision.taskProfile;
-    if (recommendation === undefined || taskProfile === undefined) return null;
-
-    const matcher = await this.semanticMatcher();
-    if (matcher === null) return null;
-
-    try {
-      return await evaluateShadow({
-        task: taskProfile,
-        taskSemantic: projectTaskSemanticProfile(this.session?.taskContract ?? emptyContract()),
-        recommendation,
-        profiles: this.lastRegistry,
-        matcher,
-        signal,
-      });
-    } catch (err) {
-      // Belt and braces. `evaluateShadow` is written not to throw; if it ever
-      // does, an observation must still not be able to end a turn.
-      this.log.appendLine(`[hasa] shadow observation failed: ${(err as Error).message}`);
-      return null;
-    }
-  }
-
-  /** The matcher, built once per key. Null when no credential is configured. */
-  private async semanticMatcher(): Promise<ReturnType<typeof embeddingMatcher> | null> {
-    if (this.matcher !== null) return this.matcher;
-    const key = await this.apiKey();
-    if (key === null || key.length === 0) return null;
-
-    const configured = vscode.workspace
-      .getConfiguration("hasaAgent")
-      .get<string>("baseUrl", "")
-      .trim();
-    const embeddings = createHasaEmbeddingProvider({
-      apiKey: key,
-      baseUrl: configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL,
+    this.shadowRunner ??= new ShadowRunner({
+      apiKey: () => this.apiKey(),
+      baseUrl: () => {
+        const configured = vscode.workspace
+          .getConfiguration("hasaAgent")
+          .get<string>("baseUrl", "")
+          .trim();
+        return configured.length > 0 ? configured : HASA_DEFAULT_BASE_URL;
+      },
+      taskContract: () => this.session?.taskContract ?? emptyContract(),
     });
-    this.matcher = embeddingMatcher({
-      provider: embeddings,
-      taskSemantic: () => projectTaskSemanticProfile(this.session?.taskContract ?? emptyContract()),
-    });
-    return this.matcher;
+    return this.shadowRunner.observe(decision, this.lastRegistry, signal);
   }
 
   /** Whatever could not be attached to the last message, once. */

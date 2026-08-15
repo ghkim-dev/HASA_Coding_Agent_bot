@@ -636,23 +636,21 @@ describe("R4.0 · the shadow is actually wired into the product", () => {
     "utf8",
   );
 
-  test("the host builds a real embedding provider", () => {
-    assert.match(HOST, /createHasaEmbeddingProvider\(/, "no real provider is constructed");
+  test("the host delegates to the runner rather than reimplementing it", () => {
+    // The behaviour is tested in `shadowRunner.test.ts` by running it. What is
+    // left to check here is that the host reaches that code at all — the one
+    // thing a behavioural test of the runner cannot tell us.
+    assert.match(HOST, /new ShadowRunner\(/, "no runner is constructed");
+    assert.match(HOST, /\.observe\(decision/, "the observation is never called");
   });
 
-  test("the host runs the shadow observation on a routed turn", () => {
-    assert.match(HOST, /observeShadow\(/, "the observation is never called");
-    assert.match(HOST, /evaluateShadow\(/, "the observation is never performed");
+  test("the runner is held on the host, not built per turn", () => {
+    assert.match(HOST, /private shadowRunner:/, "the runner is not held");
+    assert.match(HOST, /this\.shadowRunner \?\?= new ShadowRunner\(/, "the held runner is not reused");
   });
 
-  test("the matcher is held, not rebuilt per turn", () => {
-    // A cache created per turn re-embeds every profile on every message.
-    assert.match(HOST, /private matcher:/, "the matcher is not held on the host");
-    assert.match(
-      HOST,
-      /if \(this\.matcher !== null\) return this\.matcher;/,
-      "the held matcher is not reused",
-    );
+  test("the observation is called from the routing path", () => {
+    assert.match(HOST, /observeShadow\(decision, signal\)/, "the observation is never reached");
   });
 
   test("the observation is passed to the recorded decision", () => {
