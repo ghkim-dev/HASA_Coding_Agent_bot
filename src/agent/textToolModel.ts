@@ -1,4 +1,5 @@
 import type { LlmProvider, ProviderChatRequest, ProviderMessage } from "../provider/types.ts";
+import { UNMEASURED_OUTPUT_CEILING } from "./hasaModel.ts";
 import { renderToolCall, renderToolInstructions, parseToolCall } from "./textTools.ts";
 import type { AgentCompletion, AgentModel } from "./types.ts";
 
@@ -40,7 +41,10 @@ export function createTextToolModel(opts: TextToolModelOptions): AgentModel {
         modelId: opts.modelId,
         messages: flatten(request.messages, instructions),
         temperature: opts.temperature ?? 0.1,
-        ...(opts.maxOutputTokens === undefined ? {} : { maxOutputTokens: opts.maxOutputTokens }),
+        // Same reasoning as the native path: an absent ceiling means the
+        // gateway's own, and that has been larger than the context twice. See
+        // `UNMEASURED_OUTPUT_CEILING`.
+        maxOutputTokens: opts.maxOutputTokens ?? UNMEASURED_OUTPUT_CEILING,
         // Deliberately no `tools` and no `toolChoice`. Sending either is the
         // thing this whole path exists to avoid.
       };

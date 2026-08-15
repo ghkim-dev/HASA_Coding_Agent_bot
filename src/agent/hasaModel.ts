@@ -44,6 +44,31 @@ export function stripToolMarkup(text: string): string {
     .trim();
 }
 
+/**
+ * What to ask for when nobody measured the model's ceiling.
+ *
+ * Sending nothing is not the safe option, which is the thing this constant is
+ * here to say. The gateway then applies its own default, and on this one that
+ * default is 128,000 output tokens — larger than the room left in a 131,072
+ * context once a system prompt and a few files are in it. The request is
+ * refused with a 400 before any work begins:
+ *
+ *     This model's maximum context length is 131072 tokens. However, you
+ *     requested 128000 output tokens and your prompt contains at least 3073
+ *     input tokens, for a total of at least 131073 tokens.
+ *
+ * Seen in a live run: `ax-3.1` reports no measured ceiling, so nothing was
+ * sent, and the turn died on its first model call in 216ms with `reason:
+ * error`. `granite-guardian-3.1-8b` had already produced the same failure for
+ * the same reason, and the fix then only covered models whose ceiling *was*
+ * known — which left every unmeasured model exposed.
+ *
+ * 8,192 is chosen to be smaller than any ceiling this gateway has been seen to
+ * report, and large enough for a turn's worth of edits. A model that can do
+ * more says so through `limitsOf`, and that measurement wins.
+ */
+export const UNMEASURED_OUTPUT_CEILING = 8192;
+
 export function createAgentModel(opts: HasaAgentModelOptions): AgentModel {
   return {
     modelId: opts.modelId,
@@ -54,7 +79,9 @@ export function createAgentModel(opts: HasaAgentModelOptions): AgentModel {
         // A low temperature by default: the user asked for a change to their
         // code, not for a sample from a distribution over changes.
         temperature: opts.temperature ?? 0.1,
-        ...(opts.maxOutputTokens === undefined ? {} : { maxOutputTokens: opts.maxOutputTokens }),
+        // Always sent. An absent ceiling is not "no limit", it is "the
+        // gateway's limit", and that has been too large twice.
+        maxOutputTokens: opts.maxOutputTokens ?? UNMEASURED_OUTPUT_CEILING,
       };
       const response = await opts.provider.chat(full, { signal });
       return {
