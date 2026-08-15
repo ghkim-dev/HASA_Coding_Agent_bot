@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createHasaProvider } from "../provider/hasa/createProvider.ts";
 import { HasaCatalog, canConverse } from "../provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
+import { conversabilityFor, fingerprint } from "../router/conversability.ts";
 import { createModelFor } from "../agent/hasaModel.ts";
 import { chooseModel, protocolFor } from "../agent/autoModel.ts";
 import { AgentSession } from "../agent/session.ts";
@@ -173,6 +174,14 @@ const converses = new Map<string, boolean>();
 for (const entry of await catalog.all()) {
   if (!canConverse(entry.modality)) converses.set(entry.id, false);
   else if (entry.callable === false) converses.set(entry.id, false);
+}
+// Invocation evidence outranks the catalogue: these were called and answered
+// 404 in a run where another model answered 200 on the same path.
+for (const [id, value] of conversabilityFor({
+  baseUrlFingerprint: fingerprint(process.env["HASA_BASE_URL"] ?? ""),
+  credentialFingerprint: fingerprint(process.env["HASA_API_KEY"] ?? ""),
+})) {
+  converses.set(id, value);
 }
 const registry = buildRegistry(listing.models, [], { converses });
 

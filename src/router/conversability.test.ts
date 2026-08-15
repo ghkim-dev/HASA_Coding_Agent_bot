@@ -6,6 +6,16 @@ import { canConverse, type Modality } from "../provider/hasa/hasaCatalog.ts";
 import { projectTaskProfile, type TaskProfile } from "./taskProfile.ts";
 import { buildRegistry } from "./modelRegistry.ts";
 import { filterEligible } from "./eligibility.ts";
+import {
+  classifyStatus,
+  conversabilityFor,
+  fourOhFourIsAboutTheModel,
+  isVerifiedNonConversational,
+  mayBeWorker,
+  preferEvidence,
+  probedConversability,
+  stateOf,
+} from "./conversability.ts";
 
 /**
  * Being unmeasured is not being able to talk.
@@ -156,5 +166,141 @@ describe("conversability · unknown is not promoted to text-capable", () => {
     });
     const { eligible } = filterEligible(registry, task());
     assert.deepEqual(eligible.map((p) => p.modelId), ["untouched"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The five-state model
+// ---------------------------------------------------------------------------
+
+describe("conversability · a two-value answer to a five-value question", () => {
+  const CONTEXT = {
+    baseUrlFingerprint: "fp-13m45m71wq56bd",
+    credentialFingerprint: "fp-hlsenstbj6to",
+  };
+
+  test("only a verified conversation makes a model a worker", () => {
+    assert.equal(mayBeWorker("CONVERSATIONAL_VERIFIED"), true);
+    for (const state of ["NON_CONVERSATIONAL_VERIFIED", "INCONCLUSIVE", "UNKNOWN", "STALE"] as const) {
+      assert.equal(mayBeWorker(state), false, state);
+    }
+  });
+
+  test("only a verified refusal excludes one", () => {
+    assert.equal(isVerifiedNonConversational("NON_CONVERSATIONAL_VERIFIED"), true);
+    for (const state of ["INCONCLUSIVE", "UNKNOWN", "STALE", "CONVERSATIONAL_VERIFIED"] as const) {
+      assert.equal(isVerifiedNonConversational(state), false, state);
+    }
+  });
+
+  const STATUSES: ReadonlyArray<[number, string]> = [
+    [200, "CONVERSATIONAL_VERIFIED"],
+    [404, "NON_CONVERSATIONAL_VERIFIED"],
+    [405, "NON_CONVERSATIONAL_VERIFIED"],
+    // Facts about the credential, the payload, the moment or the gateway —
+    // none of them about the model.
+    [401, "INCONCLUSIVE"],
+    [403, "INCONCLUSIVE"],
+    [400, "INCONCLUSIVE"],
+    [422, "INCONCLUSIVE"],
+    [408, "INCONCLUSIVE"],
+    [429, "INCONCLUSIVE"],
+    [500, "INCONCLUSIVE"],
+    [503, "INCONCLUSIVE"],
+  ];
+
+  for (const [status, expected] of STATUSES) {
+    test(`${status} is ${expected}`, () => {
+      assert.equal(classifyStatus(status).state, expected);
+    });
+  }
+
+  test("a 403 never takes a model off the list", () => {
+    // The failure being guarded: one permission error permanently excluding a
+    // model that works perfectly well for a different key.
+    assert.equal(isVerifiedNonConversational(classifyStatus(403).state), false);
+  });
+
+  test("a timeout never takes a model off the list", () => {
+    assert.equal(isVerifiedNonConversational(classifyStatus(408).state), false);
+    assert.equal(isVerifiedNonConversational(classifyStatus(504).state), false);
+  });
+
+  test("a 404 counts only when another model answered on the same path", () => {
+    // A doubled `/v1` produced exactly this 404 once, for a model that has an
+    // embeddings endpoint and works.
+    assert.equal(fourOhFourIsAboutTheModel(true), true);
+    assert.equal(fourOhFourIsAboutTheModel(false), false);
+  });
+
+  test("a record expires", () => {
+    const record = probedConversability()[0]!;
+    const withTtl = { ...record, expiresAt: new Date(1000).toISOString() };
+    assert.equal(stateOf(withTtl, 500, CONTEXT), "NON_CONVERSATIONAL_VERIFIED");
+    assert.equal(stateOf(withTtl, 2000, CONTEXT), "STALE");
+  });
+
+  test("a record taken with another credential is stale, not applied", () => {
+    const record = probedConversability()[0]!;
+    assert.equal(
+      stateOf(record, Date.now(), { ...CONTEXT, credentialFingerprint: "fp-someone-else" }),
+      "STALE",
+    );
+    assert.equal(
+      conversabilityFor({ ...CONTEXT, credentialFingerprint: "fp-someone-else" }).size,
+      0,
+      "a key that may have different access must not inherit these answers",
+    );
+  });
+
+  test("a record taken against another endpoint is stale too", () => {
+    assert.equal(
+      conversabilityFor({ ...CONTEXT, baseUrlFingerprint: "fp-another-gateway" }).size,
+      0,
+    );
+  });
+
+  test("the probed records exclude exactly what was measured", () => {
+    const map = conversabilityFor(CONTEXT);
+    for (const record of probedConversability()) {
+      assert.equal(map.get(record.modelId), false, record.modelId);
+      assert.equal(record.evidence, "invocation");
+      assert.equal(record.status, 404);
+    }
+  });
+
+  test("no record carries key material", () => {
+    for (const record of probedConversability()) {
+      const text = JSON.stringify(record);
+      assert.ok(!text.includes("sk-"), "no key");
+      assert.ok(!text.toLowerCase().includes("bearer"), "no header");
+      assert.match(record.credentialFingerprint, /^fp-/);
+      assert.match(record.baseUrlFingerprint, /^fp-/);
+    }
+  });
+
+  test("stronger evidence wins, and ties go to the newer measurement", () => {
+    const base = probedConversability()[0]!;
+    const weak = { ...base, evidence: "provider_documentation" as const };
+    const strong = { ...base, evidence: "invocation" as const };
+    assert.equal(preferEvidence(weak, strong), strong);
+    assert.equal(preferEvidence(strong, weak), strong);
+
+    const older = { ...base, measuredAt: "2026-01-01T00:00:00.000Z" };
+    const newer = { ...base, measuredAt: "2026-08-16T00:00:00.000Z" };
+    assert.equal(preferEvidence(older, newer), newer);
+  });
+
+  test("the six that the catalogue could not classify are now excluded", () => {
+    const converses = conversabilityFor(CONTEXT);
+    const registry = buildRegistry(
+      [...converses.keys(), "a-real-chat-model"].map(providerModel),
+      [],
+      { converses },
+    );
+    const { eligible, filteredOut } = filterEligible(registry, task());
+    assert.deepEqual(eligible.map((p) => p.modelId), ["a-real-chat-model"]);
+    assert.equal(filteredOut.length, 6);
+    assert.ok(filteredOut.every((f) => f.code === "CANNOT_CONVERSE"));
   });
 });
