@@ -2,6 +2,8 @@ import { mkdtemp, rm, readdir, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHasaProvider } from "../provider/hasa/createProvider.ts";
+import { HasaCatalog, canConverse } from "../provider/hasa/hasaCatalog.ts";
+import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
 import { createModelFor } from "../agent/hasaModel.ts";
 import { chooseModel, protocolFor } from "../agent/autoModel.ts";
 import { AgentSession } from "../agent/session.ts";
@@ -161,7 +163,18 @@ recorder.userMessage(scenario.prompt).forEach((e) => recorded.push(e));
 
 // --- catalogue -------------------------------------------------------------
 const listing = await provider.listModels();
-const registry = buildRegistry(listing.models);
+// What the portal catalogue knows about each model. Unknown stays unknown;
+// only an explicit non-chat modality becomes evidence.
+const origin = (process.env["HASA_BASE_URL"] ?? "").replace(/\/v1\/?$/, "");
+const catalog = new HasaCatalog(
+  createMediaTransport({ origin, apiKey: process.env["HASA_API_KEY"] ?? "" }),
+);
+const converses = new Map<string, boolean>();
+for (const entry of await catalog.all()) {
+  if (!canConverse(entry.modality)) converses.set(entry.id, false);
+  else if (entry.callable === false) converses.set(entry.id, false);
+}
+const registry = buildRegistry(listing.models, [], { converses });
 
 // --- bootstrap -------------------------------------------------------------
 section("BOOTSTRAP");

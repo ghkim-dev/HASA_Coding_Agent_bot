@@ -52,11 +52,43 @@ export type BootstrapFailure =
   | "MODEL_UNAVAILABLE"
   | "TIMEOUT";
 
+/**
+ * Whether every stated restriction ended up as something enforceable.
+ *
+ * A constraint classified `other` is recorded and enforces nothing —
+ * `hardConstraintsFrom` has no branch for it, deliberately, because enforcing
+ * an unclassified restriction means guessing what to forbid. So a contract can
+ * carry the user's words and still leave the runtime unable to act on them,
+ * which is what happened in a live run: "실행하거나 수정하지 말고" arrived as
+ * `other`, `TaskProfile.constraints` came out `{}`, and an omission check that
+ * only asked "is there constraint text" answered yes.
+ *
+ * Text present is not coverage complete.
+ */
+export type ConstraintCoverage = "complete" | "unclassified_remain";
+
 export interface BootstrapSuccess {
   ok: true;
   contract: TurnContract;
   bootstrapModelId: string;
   attempts: number;
+  /** `unclassified_remain` means some restriction will not be enforced. */
+  constraintCoverage: ConstraintCoverage;
+  /** The restrictions still classified `other`, for the caller to report. */
+  unclassified?: string[];
+}
+
+/** What the interpreter is told when it left a restriction unclassified. */
+function unclassifiedMessage(texts: readonly string[]): string {
+  return [
+    `제약 ${texts.length}건을 kind 없이 기록했습니다: ${texts.map((t) => `"${t}"`).join(", ")}.`,
+    "kind가 없는 제약은 런타임이 강제하지 못합니다.",
+    "각 제약을 `kind: 사용자의 말` 형식으로 다시 보내십시오.",
+    "kind는 no_execute, no_modify, no_research, must_execute, present_only 중 하나입니다.",
+    "실행을 금지하면 no_execute, 파일 수정을 금지하면 no_modify이고,",
+    "한 문장이 둘 다 금지하면 두 줄로 나누십시오.",
+    "정말로 그 중 어느 것도 아니면 other로 두어도 됩니다.",
+  ].join(" ");
 }
 
 export interface BootstrapFailed {
@@ -118,7 +150,10 @@ export function bootstrapToolSurface(): ProviderTool[] {
             description:
               "Anything they told you not to do, or must do, one per line as `kind: their " +
               "words`. Kinds: no_execute, no_modify, no_research, must_execute, present_only, " +
-              "other. Leave this out if they said no such thing — do not write 없음.",
+              "other. A kind is required: `other` is recorded and enforces nothing, so use it " +
+              "only when the restriction genuinely is none of the rest. \"실행하지 마\" is " +
+              "no_execute; \"수정하지 말고\" is no_modify; a sentence forbidding both is two " +
+              "lines. Leave the field out if they said no such thing — do not write 없음.",
           },
           ambiguities: {
             type: "string",
@@ -244,7 +279,31 @@ export async function interpretRequest(opts: BootstrapOptions): Promise<Bootstra
     // The user's turn id, not the interpreter's. See the header.
     const parsed = parseTurnContract(args, opts.turnId);
     if (parsed.ok) {
-      return { ok: true, contract: parsed.contract, bootstrapModelId: modelId, attempts: attempt };
+      const unclassified = parsed.contract.constraints.filter((c) => c.kind === "other");
+      if (unclassified.length === 0 || attempt === attempts) {
+        // Out of attempts with something still unclassified: the contract is
+        // returned, and `constraintCoverage` says it is incomplete rather than
+        // the caller discovering it from an `other` that enforces nothing.
+        return {
+          ok: true,
+          contract: parsed.contract,
+          bootstrapModelId: modelId,
+          attempts: attempt,
+          constraintCoverage: unclassified.length === 0 ? "complete" : "unclassified_remain",
+          ...(unclassified.length === 0 ? {} : { unclassified: unclassified.map((c) => c.text) }),
+        };
+      }
+
+      // A bounded correction, and the only one. `other` means the model wrote
+      // down a restriction and did not say what kind it is — and an
+      // unclassified constraint enforces nothing, so "the text is there" is not
+      // the same as "the constraint is in force". Asking is not a parser: the
+      // model already did the interpreting, and this asks it to finish.
+      //
+      // Only the final contract is returned, so the turn still records one.
+      lastProblem = unclassifiedMessage(unclassified.map((c) => c.text));
+      messages.push({ role: "user", content: lastProblem });
+      continue;
     }
 
     lastProblem = parsed.problem.reason;

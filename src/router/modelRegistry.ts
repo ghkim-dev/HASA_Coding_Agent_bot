@@ -45,7 +45,13 @@ export function isReferenceModel(modelId: string): boolean {
  */
 export function profileFromCatalogue(
   model: ProviderModel,
-  options: { available?: boolean; semanticDescription?: string; pool?: WorkerPool } = {},
+  options: {
+    available?: boolean;
+    semanticDescription?: string;
+    pool?: WorkerPool;
+    /** False when something knows this model does not serve chat. */
+    converses?: boolean;
+  } = {},
 ): ModelProfile {
   const protocol = protocolFor(model.capabilities);
   const capabilities: Partial<Record<keyof CapabilityDemand, Measure>> = {};
@@ -80,7 +86,17 @@ export function profileFromCatalogue(
     modelId: model.id,
     availability: {
       available: options.available ?? true,
-      protocol,
+      // Evidence that a model does not converse outranks a probe that never
+      // ran. `protocolFor` answers `text` for an unmeasured model, which is
+      // right for a chat model nobody has probed and wrong for a video
+      // endpoint — and it produced a live candidate list containing four
+      // quantum simulators, an OCR model and a text-to-speech model.
+      //
+      //     unknown  ≠  text-capable
+      //
+      // So a caller that knows better says so, and `null` here becomes
+      // `CANNOT_CONVERSE` in the filter.
+      protocol: options.converses === false ? null : protocol,
       contextWindow: model.limits.contextWindow,
       maxOutputTokens: model.limits.maxOutputTokens,
       supportsNativeTools: model.capabilities.toolCalling === true,
@@ -231,7 +247,19 @@ function clamp(value: number): number {
 export function buildRegistry(
   models: readonly ProviderModel[],
   evaluations: readonly EvaluationSummary[] = [],
-  options: { unavailable?: readonly string[]; pool?: WorkerPool } = {},
+  options: {
+    unavailable?: readonly string[];
+    pool?: WorkerPool;
+    /**
+     * What is known about whether each model serves the chat endpoint.
+     *
+     * Supplied by the caller because the evidence lives outside this module:
+     * the portal catalogue publishes a modality, and an invocation probe
+     * settles it outright. Absent means unknown, and unknown stays a
+     * candidate — what must not happen is unknown being read as yes.
+     */
+    converses?: ReadonlyMap<string, boolean>;
+  } = {},
 ): ModelProfile[] {
   const unavailable = new Set(options.unavailable ?? []);
   const byModel = new Map<string, EvaluationSummary[]>();
@@ -246,6 +274,9 @@ export function buildRegistry(
     let profile = profileFromCatalogue(model, {
       available: !unavailable.has(model.id),
       ...(options.pool === undefined ? {} : { pool: options.pool }),
+      ...(options.converses?.has(model.id) === true
+        ? { converses: options.converses.get(model.id)! }
+        : {}),
     });
     for (const summary of byModel.get(model.id) ?? []) {
       profile = applyEvaluation(profile, summary);
