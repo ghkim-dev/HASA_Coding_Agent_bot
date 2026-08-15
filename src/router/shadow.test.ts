@@ -721,28 +721,63 @@ describe("R4.0 · role, pool and provenance", () => {
 
   test("coverage names its denominator, and the populations do not mix", () => {
     const report = coverageReport({
-      liveCatalog: ["exaone-4.0-32b", "bge-m3", "brand-new"],
-      chatCapable: ["exaone-4.0-32b", "brand-new"],
-      embedding: ["bge-m3"],
+      catalogListed: ["exaone-4.0-32b", "bge-m3", "brand-new", "not-on-this-key"],
+      keyAllowed: ["exaone-4.0-32b", "bge-m3", "brand-new"],
+      chatCallable: ["exaone-4.0-32b", "brand-new"],
+      embeddingCallable: ["bge-m3"],
     });
-    assert.equal(report.liveCatalog.total, 3);
-    assert.equal(report.chatCapable.total, 2);
-    assert.equal(report.embedding.total, 1);
+    assert.equal(report.catalogListed.total, 4);
+    assert.equal(report.keyAllowed.total, 3);
+    assert.equal(report.chatCallable.total, 2);
+    assert.equal(report.embeddingCallable.total, 1);
     // The embedding model is not counted as an uncurated coding candidate.
-    assert.ok(!report.chatCapable.coldStart.includes("bge-m3"));
+    assert.ok(!report.chatCallable.coldStart.includes("bge-m3"));
     assert.ok(!report.codingPool.coldStart.includes("bge-m3"));
-    assert.deepEqual(report.chatCapable.coldStart, ["brand-new"]);
+    assert.deepEqual(report.chatCallable.coldStart, ["brand-new"]);
+  });
+
+  test("what the catalogue lists and what the key may call are different counts", () => {
+    // Calling the allowlist "the live catalogue" was the mistake this names
+    // away: a model nobody can reach is not uncurated work.
+    const report = coverageReport({
+      catalogListed: ["exaone-4.0-32b", "not-on-this-key", "also-not-on-this-key"],
+      keyAllowed: ["exaone-4.0-32b"],
+      chatCallable: ["exaone-4.0-32b"],
+      embeddingCallable: [],
+    });
+    assert.equal(report.catalogListed.total, 3);
+    assert.equal(report.keyAllowed.total, 1);
+    assert.deepEqual(report.listedNotAllowed, ["not-on-this-key", "also-not-on-this-key"]);
+    // Unreachable models are not reported as a curation gap.
+    assert.ok(!report.codingPool.coldStart.includes("not-on-this-key"));
+  });
+
+  test("allowed models that serve neither endpoint are their own population", () => {
+    const report = coverageReport({
+      catalogListed: ["exaone-4.0-32b", "bge-m3", "whisper-large-v3-turbo"],
+      keyAllowed: ["exaone-4.0-32b", "bge-m3", "whisper-large-v3-turbo"],
+      chatCallable: ["exaone-4.0-32b"],
+      embeddingCallable: ["bge-m3"],
+    });
+    assert.equal(report.otherAllowed.total, 1);
+    assert.ok(report.otherAllowed.coldStart.includes("whisper-large-v3-turbo"));
+    // And the three populations partition what the key allows.
+    assert.equal(
+      report.chatCallable.total + report.embeddingCallable.total + report.otherAllowed.total,
+      report.keyAllowed.total,
+    );
   });
 
   test("the coding pool's denominator excludes what is not a candidate for it", () => {
     const report = coverageReport({
-      liveCatalog: ["exaone-4.0-32b", "qwen2.5-vl-72b"],
-      chatCapable: ["exaone-4.0-32b", "qwen2.5-vl-72b"],
-      embedding: [],
+      catalogListed: ["exaone-4.0-32b", "qwen2.5-vl-72b"],
+      keyAllowed: ["exaone-4.0-32b", "qwen2.5-vl-72b"],
+      chatCallable: ["exaone-4.0-32b", "qwen2.5-vl-72b"],
+      embeddingCallable: [],
     });
-    assert.equal(report.chatCapable.total, 2);
+    assert.equal(report.chatCallable.total, 2);
     assert.equal(report.codingPool.total, 1, "a vision model is not coding-pool work to curate");
-    assert.ok(report.chatCapable.ineligible.includes("qwen2.5-vl-72b"));
+    assert.ok(report.chatCallable.ineligible.includes("qwen2.5-vl-72b"));
   });
 
   test("an obsolete profile explains a past decision and never returns as a candidate", () => {

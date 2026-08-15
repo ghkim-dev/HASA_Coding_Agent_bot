@@ -457,20 +457,45 @@ export interface CoverageTable {
  * that does.
  */
 export interface CoverageReport {
-  /** Everything the gateway lists. */
-  liveCatalog: CoverageTable;
-  /** Of those, the ones that answer the chat endpoint. */
-  chatCapable: CoverageTable;
-  /** Of those, the ones eligible for the coding pool. */
+  /** Everything `/v1/models` returns, whether or not this key may call it. */
+  catalogListed: CoverageTable;
+  /**
+   * Of those, the ones this key is permitted to call.
+   *
+   * Named for what it is. Calling this "the live catalogue" was wrong and the
+   * kind of wrong that comes back: the catalogue is what the gateway publishes,
+   * and the allowlist is what this credential may reach. Conflating them makes
+   * every denominator below ambiguous, which is the failure the four tables
+   * exist to prevent.
+   */
+  keyAllowed: CoverageTable;
+  /** Of those, the ones that answer `/v1/chat/completions`. */
+  chatCallable: CoverageTable;
+  /** Of those, the ones that answer `/v1/embeddings`. A separate population. */
+  embeddingCallable: CoverageTable;
+  /** Allowed, and serving neither endpoint — image, audio, rerank, quantum. */
+  otherAllowed: CoverageTable;
+  /** Of the chat-callable, the ones eligible for the coding pool. */
   codingPool: CoverageTable;
-  /** Models that serve the embeddings endpoint. A separate population. */
-  embedding: CoverageTable;
+  /**
+   * Listed by the gateway and not on this key.
+   *
+   * Kept as its own state rather than folded into the catalogue count. A model
+   * nobody can call is not uncurated work — it is not reachable, and reporting
+   * it as a gap would put permanent items on a list meant to be worked through.
+   */
+  listedNotAllowed: string[];
 }
 
 export interface CatalogPopulations {
-  liveCatalog: readonly string[];
-  chatCapable: readonly string[];
-  embedding: readonly string[];
+  /** Every id `/v1/models` returned. */
+  catalogListed: readonly string[];
+  /** Every id the key's allowlist contains. */
+  keyAllowed: readonly string[];
+  /** Observed to answer the chat endpoint. */
+  chatCallable: readonly string[];
+  /** Observed to answer the embeddings endpoint. */
+  embeddingCallable: readonly string[];
 }
 
 /**
@@ -481,14 +506,21 @@ export interface CatalogPopulations {
  * this module has no way to check.
  */
 export function coverageReport(populations: CatalogPopulations): CoverageReport {
-  const codingCandidates = populations.chatCapable.filter(
+  const allowed = new Set(populations.keyAllowed);
+  const serving = new Set([...populations.chatCallable, ...populations.embeddingCallable]);
+  const otherAllowed = populations.keyAllowed.filter((id) => !serving.has(id));
+  const codingCandidates = populations.chatCallable.filter(
     (id) => !poolEffectFor(id, "coding").excluded,
   );
+
   return {
-    liveCatalog: coverageOf(populations.liveCatalog, "coding"),
-    chatCapable: coverageOf(populations.chatCapable, "coding"),
+    catalogListed: coverageOf(populations.catalogListed, "coding"),
+    keyAllowed: coverageOf(populations.keyAllowed, "coding"),
+    chatCallable: coverageOf(populations.chatCallable, "coding"),
+    embeddingCallable: coverageOf(populations.embeddingCallable, "coding"),
+    otherAllowed: coverageOf(otherAllowed, "coding"),
     codingPool: coverageOf(codingCandidates, "coding"),
-    embedding: coverageOf(populations.embedding, "coding"),
+    listedNotAllowed: populations.catalogListed.filter((id) => !allowed.has(id)),
   };
 }
 

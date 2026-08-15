@@ -448,6 +448,35 @@ Model : "코드 작성이 확인된 모델, 네이티브 도구 호출 지원, �
 
 `routeTurn`이 그 분기에서 `recommendModel`을 아예 부르지 않으므로 matcher도 불리지 않는다. "이어서 해줘"는 임베딩 호출 0, 추천 호출 0이다. 테스트로 고정했다.
 
+## 18-1. 두 개의 semantic method
+
+`semantic` 가중치는 `requirement-router-v1`에서 0.15이지만, **production에서는 순위를 바꿀 수 없습니다.** 호스트가 `recommendModel`에 matcher를 주입하지 않으므로 `neutralMatcher`가 모든 후보에 같은 상수를 돌려주고, 같은 값을 모두에게 더하는 항은 순서를 움직이지 못합니다. 0으로 바꿔 정책의 의미를 조용히 변경하는 대신 **구조적으로** 비활성입니다.
+
+```
+productionSemanticMethod   neutral_constant            (모든 후보 0.5, 순위 영향 없음)
+shadowSemanticMethod       bge-m3 / affine-uncalibrated-v1
+```
+
+실제 임베딩 제공자는 `ShadowRunner`에서만 도달 가능하며, `createHasaEmbeddingProvider`의 소비자는 그 파일 하나뿐입니다.
+
+Production을 켜려면 두 가지가 선행돼야 합니다 — 큐레이션 승인, 그리고 measured pair로 적합한 calibration. 그 전까지 `calibrated: false`입니다.
+
+## 18-2. 모집단의 이름
+
+계층마다 이름을 다르게 씁니다. "라이브 카탈로그"로 뭉뚱그린 것이 실제로 한 번 틀렸고, 그 오류는 denominator를 다시 모호하게 만듭니다.
+
+| 이름 | 뜻 | 2026-08-15 |
+|---|---|---|
+| `catalogListed` | `/v1/models`가 반환한 전부 | 45 |
+| `keyAllowed` | 이 키가 호출할 수 있는 것 | 34 |
+| `chatCallable` | `/v1/chat/completions`에 응답 | 18 |
+| `embeddingCallable` | `/v1/embeddings`에 응답 | 2 |
+| `otherAllowed` | 허용되나 두 엔드포인트 모두 아님 | 14 |
+| `codingPool` | chatCallable 중 coding pool 적격 | 15 |
+| `listedNotAllowed` | 카탈로그에 있으나 키 권한 없음 | 11 |
+
+`chatCallable + embeddingCallable + otherAllowed = keyAllowed`이고, 이것을 테스트가 고정합니다. **호출할 수 없는 모델은 큐레이션 미달이 아닙니다** — 도달 불가이며, 작업 목록에 영구 항목으로 남으면 안 됩니다.
+
 ## 19. RouterPolicy
 
 가중치는 `recommend.ts`의 상수였고, 그래서 사실처럼 보였다. 사실이 아니다.
