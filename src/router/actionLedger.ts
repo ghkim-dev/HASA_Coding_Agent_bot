@@ -1,4 +1,4 @@
-import type { SessionEvent } from "../agent/sessionEvents.ts";
+import type { ActionDisposition, SessionEvent } from "../agent/sessionEvents.ts";
 import {
   ACTION_DENIED_BY_CONSTRAINT,
   ACTION_REQUIRES_JUSTIFICATION,
@@ -17,7 +17,7 @@ import { selectedWorkerFor } from "./routing.ts";
  * matters.
  *
  * So nothing new is stored. Everything below is a *reading* of `tool_started`,
- * `tool_completed` and `model_recommended`, which are already persisted, and
+ * `tool_completed` and `worker_selected`, which are already persisted, and
  * the reading is the same live and on replay because it is the same function
  * over the same events.
  *
@@ -66,12 +66,53 @@ export interface ActionRecord {
   at: number;
 }
 
-/** Prefixes the runtime puts on a held-back call. Order matters: denial first. */
-function heldBackState(detail: string): ActionState | null {
+/**
+ * The old reading, kept only for conversations written before the field.
+ *
+ * This *was* the source of truth, and that was the defect: every count of
+ * deferrals depended on the wording of a sentence written for a person, so
+ * improving the sentence would silently move the numbers. `disposition` is now
+ * set where the decision is made, and this runs only when a stored event
+ * predates it — where the alternative is not "a better reading" but "no
+ * reading at all".
+ */
+function legacyStateFromDetail(detail: string): ActionState | null {
   if (detail.startsWith(ACTION_DENIED_BY_CONSTRAINT)) return "denied";
   if (detail.startsWith(ACTION_REQUIRES_JUSTIFICATION)) return "deferred";
   if (detail.startsWith(TURN_CONTRACT_REQUIRED)) return "deferred";
   return null;
+}
+
+/** The recorded disposition, mapped to what the ledger reports. */
+function stateFromDisposition(disposition: ActionDisposition): ActionState {
+  if (disposition === "deferred") return "deferred";
+  if (disposition === "denied") return "denied";
+  if (disposition === "executed_success") return "succeeded";
+  if (disposition === "executed_failure") return "failed";
+  return "pending";
+}
+
+/** Only these two reached the tool. Read from the field, never from prose. */
+function didExecute(disposition: ActionDisposition): boolean {
+  return disposition === "executed_success" || disposition === "executed_failure";
+}
+
+/**
+ * What became of one completed call, and whether it ran.
+ *
+ * Structured first. The fallback exists for stored history and is the only
+ * place a `detail` string is consulted for meaning anywhere in this file.
+ */
+function outcomeOf(
+  event: Extract<SessionEvent, { type: "tool_completed" }>,
+): { state: ActionState; executed: boolean } {
+  if (event.disposition !== undefined) {
+    return { state: stateFromDisposition(event.disposition), executed: didExecute(event.disposition) };
+  }
+  const legacy = legacyStateFromDetail(event.detail);
+  if (legacy !== null) return { state: legacy, executed: false };
+  const state = stateFromStatus(event.status);
+  return { state, executed: state === "succeeded" || state === "failed" };
 }
 
 /**
@@ -89,7 +130,7 @@ function heldBackState(detail: string): ActionState | null {
 export function actionLedger(events: readonly SessionEvent[]): ActionRecord[] {
   const workerByTurn = new Map<string, string | null>();
   for (const event of events) {
-    if (event.type === "model_recommended") workerByTurn.set(event.turnId, event.selectedModelId);
+    if (event.type === "worker_selected") workerByTurn.set(event.turnId, event.selectedModelId);
   }
   // A turn with no routing event of its own inherits the worker in force at
   // that point — the carried case, and every conversation written before
@@ -123,7 +164,7 @@ export function actionLedger(events: readonly SessionEvent[]): ActionRecord[] {
 
     if (event.type !== "tool_completed") continue;
 
-    const held = heldBackState(event.detail);
+    const outcome = outcomeOf(event);
     const existing = byCallId.get(event.callId);
 
     if (existing === undefined) {
@@ -134,9 +175,9 @@ export function actionLedger(events: readonly SessionEvent[]): ActionRecord[] {
         turnId: event.turnId,
         toolName: event.toolName,
         modelId: workerFor(event.turnId, index),
-        state: held ?? stateFromStatus(event.status),
+        state: outcome.state,
         proposed: true,
-        executed: held === null && event.status !== "denied" && event.status !== "blocked",
+        executed: outcome.executed,
         detail: event.detail,
         at: event.at,
       };
@@ -145,10 +186,8 @@ export function actionLedger(events: readonly SessionEvent[]): ActionRecord[] {
       continue;
     }
 
-    existing.state = held ?? stateFromStatus(event.status);
-    // A call that started reached the tool. Denial and blocking are decided
-    // before that, so they are the two that did not run.
-    existing.executed = held === null && event.status !== "denied" && event.status !== "blocked";
+    existing.state = outcome.state;
+    existing.executed = outcome.executed;
     existing.detail = event.detail;
   }
 

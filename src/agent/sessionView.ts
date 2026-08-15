@@ -156,7 +156,7 @@ export function applyEvent(view: SessionView, event: SessionEvent): SessionView 
   // before a turn is created for it, because an event that draws nothing must
   // not conjure an empty turn into the transcript — which is what folding it
   // through the normal path would do.
-  if (event.type === "model_recommended") return view;
+  if (event.type === "worker_selected") return view;
 
   const role: TurnView["role"] = event.type === "user_message" ? "user" : "agent";
   let turn = view.turns.find((t) => t.turnId === event.turnId && t.role === role);

@@ -40,8 +40,8 @@ import { describeTask } from "../../../src/agent/taskState.ts";
 import { requirementsView, type RequirementsView } from "../../../src/agent/requirementsView.ts";
 import { interpretRequest, describeBootstrapFailure } from "../../../src/router/bootstrap.ts";
 import { buildRegistry } from "../../../src/router/modelRegistry.ts";
-import { projectTaskProfile } from "../../../src/router/taskProfile.ts";
 import {
+  previousProfileFrom,
   routeTurn as decideWorker,
   routingEvent,
   selectedWorkerFor,
@@ -239,14 +239,6 @@ export class AgentHost {
   private turnOrdinal = 0;
   /** Distinguishes several routing events within one turn's id space. */
   private routingOrdinal = 0;
-  /**
-   * The profile the last routed turn produced.
-   *
-   * Held so the next turn can ask whether the hard constraints changed without
-   * re-deriving the old ones from a contract that has since been merged into.
-   * Lost on reload, which only means the next turn re-recommends once.
-   */
-  private lastTaskProfile: import("../../../src/router/taskProfile.ts").TaskProfile | null = null;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
   /**
@@ -1136,9 +1128,9 @@ export class AgentHost {
     if (this.selectedModelId !== null) {
       keep([
         {
-          type: "model_recommended",
+          type: "worker_selected",
           ...stamp(),
-          selectionOrigin: "user",
+          selectionOrigin: "user_manual",
           selectedModelId: this.selectedModelId,
           routerVersion: "r3.1",
         },
@@ -1201,6 +1193,14 @@ export class AgentHost {
     const profiles = buildRegistry(listing.models);
     const previous = reduceContract([...this.recorded]);
     const currentWorker = selectedWorkerFor(this.recorded)?.modelId ?? null;
+    // Derived from the persisted contract events rather than held in a field.
+    // Held in a field it did not survive the process exiting, so the first turn
+    // after a reload saw no previous profile and re-recommended for a task that
+    // had not changed and already had a worker.
+    const previousProfile = previousProfileFrom(this.recorded);
+    // No live session yet but a worker on the record means this conversation
+    // was reopened. Only changes what the decision is called.
+    const restored = this.session === null && currentWorker !== null;
 
     let decision: WorkerDecision;
     try {
@@ -1208,8 +1208,9 @@ export class AgentHost {
         turn: interpreted.contract,
         previous,
         currentWorker,
+        currentWorkerRestored: restored,
         profiles,
-        ...(this.lastTaskProfile === null ? {} : { previousProfile: this.lastTaskProfile }),
+        ...(previousProfile === undefined ? {} : { previousProfile }),
       });
     } catch (err) {
       this.log.appendLine(`[hasa] routing failed: ${(err as Error).message}`);
@@ -1225,15 +1226,13 @@ export class AgentHost {
       return { workerModelId: null, contractEvents: [contractEvent] };
     }
 
-    this.lastTaskProfile =
-      decision.taskProfile ?? projectTaskProfile(previous);
-
     keep([
       contractEvent,
       routingEvent({
         ...stamp(),
         decision,
         bootstrapModelId: interpreted.bootstrapModelId,
+        bootstrapModelCalls: interpreted.attempts,
       }),
     ]);
 

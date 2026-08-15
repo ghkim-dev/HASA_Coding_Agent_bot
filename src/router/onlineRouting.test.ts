@@ -459,7 +459,7 @@ describe("R3 · the request reaches the model choice", () => {
   test("§15 — a heavy coding task ranks the capable model first", async () => {
     const decision = await route(COMPLEX_ARGS);
     assert.equal(decision.modelId, "builder");
-    assert.equal(decision.origin, "recommendation");
+    assert.equal(decision.origin, "auto_recommendation");
   });
 
   test("§16 — a constrained analysis turn carries its constraints into the router", async () => {
@@ -536,7 +536,7 @@ describe("R3 · the request reaches the model choice", () => {
   test("§13/§45 — a user-selected model is not overruled", async () => {
     const decision = await route(COMPLEX_ARGS, { userRequestedModel: "my-choice" });
     assert.equal(decision.modelId, "my-choice");
-    assert.equal(decision.origin, "user");
+    assert.equal(decision.origin, "user_manual");
     assert.equal(decision.trigger, "manual");
   });
 
@@ -619,7 +619,7 @@ describe("R3 · the worker does not change under the user's feet", () => {
       profiles: CATALOGUE,
     });
     assert.equal(decision.trigger, "eligibility_changed");
-    assert.equal(decision.origin, "recommendation");
+    assert.equal(decision.origin, "auto_recommendation");
   });
 
   test("§21 — a new task re-recommends", async () => {
@@ -732,9 +732,9 @@ describe("R3 · the decision survives closing the app", () => {
 
   test("§25 — a routing event carries the decision, not the catalogue", async () => {
     const events = await decisionEvents();
-    const routing = events.find((e) => e.type === "model_recommended");
+    const routing = events.find((e) => e.type === "worker_selected");
     assert.notEqual(routing, undefined);
-    if (routing?.type !== "model_recommended") return;
+    if (routing?.type !== "worker_selected") return;
     assert.equal(routing.selectedModelId, "builder");
     assert.equal(routing.bootstrapModelId, "boot");
     assert.equal(routing.routerVersion, ROUTER_VERSION);
@@ -749,7 +749,7 @@ describe("R3 · the decision survives closing the app", () => {
     const events = await decisionEvents();
     const reloaded = persist([turnOf("t1", null, events)], "t1");
     assert.equal(selectedWorkerFor(reloaded)?.modelId, "builder");
-    assert.equal(selectedWorkerFor(reloaded)?.origin, "recommendation");
+    assert.equal(selectedWorkerFor(reloaded)?.origin, "auto_recommendation");
   });
 
   test("§26 — and so is the reason it was chosen", async () => {
@@ -826,7 +826,7 @@ describe("R3 · the decision survives closing the app", () => {
   test("a routing event draws nothing in the transcript", async () => {
     const events = await decisionEvents();
     const withRouting = reduceSession(events);
-    const without = reduceSession(events.filter((e) => e.type !== "model_recommended"));
+    const without = reduceSession(events.filter((e) => e.type !== "worker_selected"));
     assert.deepEqual(withRouting, without);
   });
 
@@ -845,11 +845,11 @@ describe("R3 · a branch's decisions stay on its branch", () => {
   const mainEvents: SessionEvent[] = [
     { type: "user_message", id: "m1", turnId: "t1", at: 1, text: "해줘" },
     {
-      type: "model_recommended",
+      type: "worker_selected",
       id: "m2",
       turnId: "t1",
       at: 2,
-      selectionOrigin: "recommendation",
+      selectionOrigin: "auto_recommendation",
       selectedModelId: "model-a",
       routerVersion: ROUTER_VERSION,
     },
@@ -860,11 +860,11 @@ describe("R3 · a branch's decisions stay on its branch", () => {
   const forkEvents: SessionEvent[] = [
     { type: "user_message", id: "f1", turnId: "t2", at: 5, text: "다르게" },
     {
-      type: "model_recommended",
+      type: "worker_selected",
       id: "f2",
       turnId: "t2",
       at: 6,
-      selectionOrigin: "recommendation",
+      selectionOrigin: "auto_recommendation",
       selectedModelId: "model-b",
       routerVersion: ROUTER_VERSION,
     },
@@ -909,11 +909,11 @@ describe("R3 · a branch's decisions stay on its branch", () => {
 
 describe("R3 · what each model proposed, and what actually ran", () => {
   const worker = (id: string, turnId: string, at: number): SessionEvent => ({
-    type: "model_recommended",
+    type: "worker_selected",
     id,
     turnId,
     at,
-    selectionOrigin: "recommendation",
+    selectionOrigin: "auto_recommendation",
     selectedModelId: "worker-1",
     routerVersion: ROUTER_VERSION,
   });
@@ -1018,10 +1018,10 @@ describe("R3 · what each model proposed, and what actually ran", () => {
 
   test("§27/§36 — actions are attributed to the worker of their own turn", () => {
     const events: SessionEvent[] = [
-      { type: "model_recommended", id: "e1", turnId: "t1", at: 1, selectionOrigin: "recommendation", selectedModelId: "model-a", routerVersion: ROUTER_VERSION },
+      { type: "worker_selected", id: "e1", turnId: "t1", at: 1, selectionOrigin: "auto_recommendation", selectedModelId: "model-a", routerVersion: ROUTER_VERSION },
       { type: "tool_started", id: "e2", turnId: "t1", at: 2, callId: "a", toolName: "read_file", risk: "read", summary: "s" },
       { type: "tool_completed", id: "e3", turnId: "t1", at: 3, callId: "a", toolName: "read_file", status: "success", detail: "ok" },
-      { type: "model_recommended", id: "e4", turnId: "t2", at: 4, selectionOrigin: "recommendation", selectedModelId: "model-b", routerVersion: ROUTER_VERSION },
+      { type: "worker_selected", id: "e4", turnId: "t2", at: 4, selectionOrigin: "auto_recommendation", selectedModelId: "model-b", routerVersion: ROUTER_VERSION },
       { type: "tool_started", id: "e5", turnId: "t2", at: 5, callId: "b", toolName: "create_file", risk: "write", summary: "s" },
       { type: "tool_completed", id: "e6", turnId: "t2", at: 6, callId: "b", toolName: "create_file", status: "success", detail: "ok" },
     ];
@@ -1032,7 +1032,7 @@ describe("R3 · what each model proposed, and what actually ran", () => {
 
   test("a carried turn inherits the worker in force, not null", () => {
     const events: SessionEvent[] = [
-      { type: "model_recommended", id: "e1", turnId: "t1", at: 1, selectionOrigin: "recommendation", selectedModelId: "model-a", routerVersion: ROUTER_VERSION },
+      { type: "worker_selected", id: "e1", turnId: "t1", at: 1, selectionOrigin: "auto_recommendation", selectedModelId: "model-a", routerVersion: ROUTER_VERSION },
       { type: "tool_started", id: "e2", turnId: "t2", at: 2, callId: "b", toolName: "read_file", risk: "read", summary: "s" },
       { type: "tool_completed", id: "e3", turnId: "t2", at: 3, callId: "b", toolName: "read_file", status: "success", detail: "ok" },
     ];
@@ -1235,7 +1235,7 @@ describe("R3 · teeth — these fail if the wiring is undone", () => {
 
   test("I — the model behind an action survives a reload", () => {
     const events: SessionEvent[] = [
-      { type: "model_recommended", id: "e1", turnId: "t1", at: 1, selectionOrigin: "recommendation", selectedModelId: "worker-x", routerVersion: ROUTER_VERSION },
+      { type: "worker_selected", id: "e1", turnId: "t1", at: 1, selectionOrigin: "auto_recommendation", selectedModelId: "worker-x", routerVersion: ROUTER_VERSION },
       { type: "tool_started", id: "e2", turnId: "t1", at: 2, callId: "c1", toolName: "read_file", risk: "read", summary: "s" },
       { type: "tool_completed", id: "e3", turnId: "t1", at: 3, callId: "c1", toolName: "read_file", status: "success", detail: "ok" },
     ];

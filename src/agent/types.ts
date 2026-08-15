@@ -315,6 +315,17 @@ export type AgentEvent =
       meta?: TruncationMeta;
       /** Where this call read from, when it read from outside the workspace. */
       sources?: WebSourceProvenance[];
+      /**
+       * Whether the call ran, and if not, why it did not.
+       *
+       * Set by whoever knew: the loop when it holds a call back, the recorder
+       * from the approval outcome otherwise. `ok: false` alone cannot say —
+       * a command that exited 1, one held back for not answering the request,
+       * and one the user forbade all arrive as `ok: false`, and reading them
+       * as the same thing would count two things that never ran as failures
+       * of the model that proposed them.
+       */
+      disposition?: import("./sessionEvents.ts").ActionDisposition;
     }
   /**
    * The agent's plan and where it is in it.

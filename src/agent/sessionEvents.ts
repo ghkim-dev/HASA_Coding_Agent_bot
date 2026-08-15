@@ -60,6 +60,38 @@ export type FileChangeKind = "created" | "modified" | "deleted" | "renamed";
 export type ToolCallStatus = "success" | "failed" | "denied" | "blocked" | "cancelled";
 
 /**
+ * What became of a proposed action, as a field rather than as prose.
+ *
+ * `ToolCallStatus` cannot answer this and was never meant to. Three different
+ * things arrive as `failed`: a command that ran and exited non-zero, one the
+ * preflight held back for not answering the request, and one the user forbade.
+ * They were told apart by reading a machine code out of the human-readable
+ * `detail` string, which made every metric downstream depend on the wording of
+ * a sentence — change the sentence and the numbers move.
+ *
+ * The distinctions that must survive:
+ *
+ *     proposed  ≠  executed
+ *     deferred  ≠  executed_failure
+ *     denied    ≠  executed_failure
+ *
+ * Optional, because conversations written before this existed do not have it.
+ * A reader that meets one without falls back to the old reading and says so —
+ * see `actionLedger.ts`.
+ */
+export type ActionDisposition =
+  /** Held back before the tool was reached. Nothing ran. */
+  | "deferred"
+  /** Refused: the user forbade it, or declined the approval. */
+  | "denied"
+  /** Reached the tool, ran, and succeeded. */
+  | "executed_success"
+  /** Reached the tool, ran, and failed. A fact about the work, not the policy. */
+  | "executed_failure"
+  /** The turn ended before it resolved. */
+  | "cancelled";
+
+/**
  * Why a run stopped.
  *
  * Deliberately the same vocabulary as the runtime's `AgentStopReason` rather
@@ -163,6 +195,14 @@ export interface ToolCompletedEvent extends Base {
   callId: string;
   toolName: string;
   status: ToolCallStatus;
+  /**
+   * Whether it ran, and if not, why not.
+   *
+   * The machine-readable half of the outcome. `detail` stays the sentence a
+   * person reads and is no longer load-bearing: rewording it must not move a
+   * metric. Absent on conversations written before this field existed.
+   */
+  disposition?: ActionDisposition;
   /** A status line. Short by contract. */
   detail: string;
   /** Verbatim output, when the tool asked for it to be shown. */
@@ -213,32 +253,64 @@ export interface TurnContractEvent extends Base {
 }
 
 /**
- * Which model was chosen to do this turn, and why.
+ * How this turn's worker came to be this turn's worker.
  *
- * Genuinely new information rather than a second copy of something. Everything
- * else in this union can be derived from what the runtime observed; *why a
- * model was picked* cannot, because the inputs — the catalogue, the profiles,
- * the weights — are not part of the conversation and will have changed by the
- * time anyone asks.
+ * Four ways, and they are not variants of one. A recommendation is a
+ * computation; a manual pick is a person; a carried worker is the absence of a
+ * decision; a restored one is a decision made before the process restarted.
+ * Collapsing them would make "why is this model running" unanswerable in
+ * exactly the cases where it is asked.
+ */
+export type WorkerSelectionOrigin =
+  /** The requirement-aware router ranked and chose. */
+  | "auto_recommendation"
+  /** The user picked it. Nothing overrules that. */
+  | "user_manual"
+  /** The task did not change, so neither did the worker. */
+  | "carried"
+  /** Read back from a previous session's record. */
+  | "restored"
+  /** Bootstrap or routing failed; the turn ran on the older selection. */
+  | "fallback";
+
+/**
+ * Which model is doing this turn, and how it was chosen.
  *
- * That is also why the decision is stored rather than recomputed. Replaying a
- * past turn through today's registry would answer a different question and
- * quietly rewrite history; §31 of the brief forbids it and `selectedWorkerFor`
- * reads this event instead.
+ * Named for *selection* rather than for recommendation, because recommending
+ * is only one of the ways a worker is chosen and the other three are equally
+ * real. When this event was `model_recommended`, a manually chosen model had to
+ * be written down as a recommendation with an origin saying it was not one —
+ * and anything reading the record had to know that to interpret it.
+ *
+ * This is the canonical record of who is working. `actionLedger` attributes
+ * actions from it, whatever the origin, so a manual turn's actions are
+ * attributed exactly as an auto turn's are. There is no second place a worker
+ * id is stored.
+ *
+ * The decision is stored rather than recomputed. Replaying a past turn through
+ * today's registry would answer a different question and quietly rewrite
+ * history — a model that has since been re-evaluated would appear to have been
+ * chosen for a turn it never ran.
  *
  * What is deliberately *not* here is the model profiles themselves. A snapshot
- * of the whole catalogue in every turn of every conversation is a copy that
- * will drift from the registry that owns it. The fingerprint says which
- * profiles were used; the registry keeps them.
+ * of the catalogue in every turn of every conversation is a copy that will
+ * drift from the registry that owns it. The fingerprint says which profile was
+ * answered; the registry keeps the profiles.
  */
-export interface ModelRecommendedEvent extends Base {
-  type: "model_recommended";
-  /** Which role picked it. `user` means the router did not choose at all. */
-  selectionOrigin: "recommendation" | "user" | "bootstrap" | "carried" | "fallback";
+export interface WorkerSelectedEvent extends Base {
+  type: "worker_selected";
+  selectionOrigin: WorkerSelectionOrigin;
   /** The worker for this turn. Null when nothing was eligible. */
   selectedModelId: string | null;
   /** The model that read the request into a contract, when one did. */
   bootstrapModelId?: string;
+  /**
+   * Model calls the bootstrap pass spent.
+   *
+   * Kept apart from the worker's own calls so a later cost or latency
+   * evaluation cannot charge interpretation to the model that did the work.
+   */
+  bootstrapModelCalls?: number;
   /** Runners-up, in rank order, for a future fallback and for explaining. */
   alternatives?: Array<{ modelId: string; score: number }>;
   /** Who was ruled out before scoring, and under which code. */
@@ -274,7 +346,7 @@ export type SessionEvent =
   | FileChangedEvent
   | NoticeEvent
   | TurnContractEvent
-  | ModelRecommendedEvent
+  | WorkerSelectedEvent
   | RunCompletedEvent;
 
 export type SessionEventType = SessionEvent["type"];

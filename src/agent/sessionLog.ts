@@ -96,19 +96,53 @@ const KNOWN: ReadonlySet<string> = new Set([
   "notice",
   "turn_contract",
   "source_fact",
-  "model_recommended",
+  "worker_selected",
   "run_completed",
 ]);
+
+/**
+ * Event types that were renamed, and what they became.
+ *
+ * `model_recommended` was the first name for what is now `worker_selected`.
+ * The rename was not cosmetic — recommending is one of four ways a worker is
+ * chosen, and a manual pick had to be written as a recommendation that said it
+ * was not one. Files written under the old name are read, not refused: this is
+ * the same rule the whole module follows, and a conversation is worth more than
+ * the tidiness of having only ever used one word.
+ */
+const RENAMED: Readonly<Record<string, string>> = {
+  model_recommended: "worker_selected",
+};
+
+/** Origins that were renamed alongside the event. Same reasoning. */
+const RENAMED_ORIGIN: Readonly<Record<string, string>> = {
+  recommendation: "auto_recommendation",
+  user: "user_manual",
+  bootstrap: "auto_recommendation",
+};
 
 export function readEvents(value: unknown): SessionEvent[] {
   if (!Array.isArray(value)) return [];
   const out: SessionEvent[] = [];
   for (const raw of value) {
     if (!isRecord(raw)) continue;
-    const type = raw["type"];
-    if (typeof type !== "string" || !KNOWN.has(type)) continue;
+    const declared = raw["type"];
+    if (typeof declared !== "string") continue;
+    const type = RENAMED[declared] ?? declared;
+    if (!KNOWN.has(type)) continue;
     if (typeof raw["id"] !== "string" || typeof raw["turnId"] !== "string") continue;
-    out.push({ ...raw, at: num(raw["at"]) } as SessionEvent);
+
+    if (type === "worker_selected") {
+      const origin = str(raw["selectionOrigin"]);
+      out.push({
+        ...raw,
+        type,
+        at: num(raw["at"]),
+        selectionOrigin: RENAMED_ORIGIN[origin] ?? origin,
+      } as SessionEvent);
+      continue;
+    }
+    out.push({ ...raw, type, at: num(raw["at"]) } as SessionEvent);
   }
   return out;
 }

@@ -1,5 +1,10 @@
-import type { ModelRecommendedEvent, SessionEvent } from "../agent/sessionEvents.ts";
-import { mergeContract, type TaskContract, type TurnContract } from "../agent/turnContract.ts";
+import type { WorkerSelectedEvent, SessionEvent } from "../agent/sessionEvents.ts";
+import {
+  mergeContract,
+  reduceContract,
+  type TaskContract,
+  type TurnContract,
+} from "../agent/turnContract.ts";
 import type { ModelProfile } from "./modelProfile.ts";
 import { projectTaskProfile, type ProjectOptions, type TaskProfile } from "./taskProfile.ts";
 import { recommendModel, type ModelRecommendation, type RecommendOptions } from "./recommend.ts";
@@ -47,7 +52,7 @@ export interface WorkerDecision {
   trigger: RoutingTrigger;
   /** Null only when nothing was eligible or bootstrap failed. */
   modelId: string | null;
-  origin: ModelRecommendedEvent["selectionOrigin"];
+  origin: WorkerSelectedEvent["selectionOrigin"];
   /** Present when this turn actually ran a recommendation. */
   recommendation?: ModelRecommendation;
   taskProfile?: TaskProfile;
@@ -69,10 +74,10 @@ export interface WorkerDecision {
  */
 export function selectedWorkerFor(
   events: readonly SessionEvent[],
-): { modelId: string; origin: ModelRecommendedEvent["selectionOrigin"]; turnId: string } | null {
+): { modelId: string; origin: WorkerSelectedEvent["selectionOrigin"]; turnId: string } | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]!;
-    if (event.type !== "model_recommended") continue;
+    if (event.type !== "worker_selected") continue;
     if (event.selectedModelId === null) continue;
     return { modelId: event.selectedModelId, origin: event.selectionOrigin, turnId: event.turnId };
   }
@@ -80,8 +85,8 @@ export function selectedWorkerFor(
 }
 
 /** Every routing decision on a chain, oldest first. For audit and eval. */
-export function routingHistory(events: readonly SessionEvent[]): ModelRecommendedEvent[] {
-  return events.filter((e): e is ModelRecommendedEvent => e.type === "model_recommended");
+export function routingHistory(events: readonly SessionEvent[]): WorkerSelectedEvent[] {
+  return events.filter((e): e is WorkerSelectedEvent => e.type === "worker_selected");
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +155,27 @@ export function sameHardConstraints(a: TaskProfile, b: TaskProfile): boolean {
 // The decision
 // ---------------------------------------------------------------------------
 
+/**
+ * The profile the task had before this turn, derived rather than remembered.
+ *
+ * This used to be a field on the host, and being a field is exactly what broke
+ * it: the process exits, the field is gone, and the first turn after a reload
+ * saw no previous profile and re-recommended — for a task that had not changed
+ * and already had a worker.
+ *
+ * Nothing needed storing. The contract events are persisted, `reduceContract`
+ * folds them, and the projection is pure — so the profile a task had is a
+ * function of its own history and comes back exactly. A new field in the file
+ * would have been a second copy of something already there.
+ */
+export function previousProfileFrom(
+  events: readonly SessionEvent[],
+  options: ProjectOptions = {},
+): TaskProfile | undefined {
+  const contract = reduceContract(events as readonly { type: string; contract?: unknown }[]);
+  return contract.lastTurnId === "" ? undefined : projectTaskProfile(contract, options);
+}
+
 export interface RouteTurnInput {
   /** The contract this turn produced, from bootstrap or from the worker. */
   turn: TurnContract;
@@ -157,6 +183,14 @@ export interface RouteTurnInput {
   previous: TaskContract;
   /** The worker in use, if any, from `selectedWorkerFor`. */
   currentWorker: string | null;
+  /**
+   * True when `currentWorker` came from a stored record rather than from a
+   * session already running. Only changes what the decision is *called* —
+   * `restored` rather than `carried` — because "we never re-chose" and "we read
+   * back what was chosen before the process restarted" are different facts and
+   * a reader of the history should be able to tell them apart.
+   */
+  currentWorkerRestored?: boolean;
   previousProfile?: TaskProfile;
   profiles: readonly ModelProfile[];
   /** Set when the user picked a model. The router does not overrule it. */
@@ -175,7 +209,7 @@ export interface RouteTurnInput {
  */
 export async function routeTurn(input: RouteTurnInput): Promise<WorkerDecision> {
   if (input.userRequestedModel != null && input.userRequestedModel.length > 0) {
-    return { trigger: "manual", modelId: input.userRequestedModel, origin: "user" };
+    return { trigger: "manual", modelId: input.userRequestedModel, origin: "user_manual" };
   }
 
   const merged = mergeContract(input.previous, input.turn);
@@ -189,14 +223,19 @@ export async function routeTurn(input: RouteTurnInput): Promise<WorkerDecision> 
   });
 
   if (trigger === "carried" && input.currentWorker !== null) {
-    return { trigger, modelId: input.currentWorker, origin: "carried", taskProfile };
+    return {
+      trigger,
+      modelId: input.currentWorker,
+      origin: input.currentWorkerRestored === true ? "restored" : "carried",
+      taskProfile,
+    };
   }
 
   const recommendation = await recommendModel(taskProfile, input.profiles, input.recommend ?? {});
   return {
     trigger,
     modelId: recommendation.selected?.modelId ?? null,
-    origin: "recommendation",
+    origin: "auto_recommendation",
     recommendation,
     taskProfile,
     ...(recommendation.unavailableReason === undefined
@@ -242,6 +281,8 @@ export interface RoutingEventInput {
   at: number;
   decision: WorkerDecision;
   bootstrapModelId?: string;
+  /** Model calls the interpretation spent, kept off the worker's account. */
+  bootstrapModelCalls?: number;
 }
 
 /**
@@ -252,11 +293,11 @@ export interface RoutingEventInput {
  * second copy of something the registry owns, and the two would diverge the
  * first time a model was re-evaluated.
  */
-export function routingEvent(input: RoutingEventInput): ModelRecommendedEvent {
+export function routingEvent(input: RoutingEventInput): WorkerSelectedEvent {
   const { decision } = input;
   const recommendation = decision.recommendation;
   return {
-    type: "model_recommended",
+    type: "worker_selected",
     id: input.id,
     turnId: input.turnId,
     at: input.at,
@@ -264,6 +305,9 @@ export function routingEvent(input: RoutingEventInput): ModelRecommendedEvent {
     selectedModelId: decision.modelId,
     routerVersion: ROUTER_VERSION,
     ...(input.bootstrapModelId === undefined ? {} : { bootstrapModelId: input.bootstrapModelId }),
+    ...(input.bootstrapModelCalls === undefined
+      ? {}
+      : { bootstrapModelCalls: input.bootstrapModelCalls }),
     ...(decision.taskProfile === undefined
       ? {}
       : { taskProfileFingerprint: taskProfileFingerprint(decision.taskProfile) }),
@@ -312,9 +356,9 @@ export function unroutedEvent(input: {
   modelId: string | null;
   reason: string;
   bootstrapModelId?: string;
-}): ModelRecommendedEvent {
+}): WorkerSelectedEvent {
   return {
-    type: "model_recommended",
+    type: "worker_selected",
     id: input.id,
     turnId: input.turnId,
     at: input.at,

@@ -1,5 +1,10 @@
 import { newEventId } from "./sessionLog.ts";
-import type { FileChangeKind, SessionEvent, ToolCallStatus } from "./sessionEvents.ts";
+import type {
+  ActionDisposition,
+  FileChangeKind,
+  SessionEvent,
+  ToolCallStatus,
+} from "./sessionEvents.ts";
 import type { AgentEvent, ApprovalOutcome } from "./types.ts";
 
 /**
@@ -138,12 +143,18 @@ export class TurnRecorder {
         return [];
 
       case "tool_end": {
+        const outcome = this.outcomes.get(event.callId);
         const completed: SessionEvent = {
           type: "tool_completed",
           ...this.next(),
           callId: event.callId,
           toolName: event.name,
-          status: statusFor(event.ok, this.outcomes.get(event.callId)),
+          status: statusFor(event.ok, outcome),
+          // The loop's own word when it held the call back, and the approval
+          // outcome otherwise. Never re-derived from `detail`: that string is
+          // written for a person, and a metric that depends on its wording
+          // breaks the day someone improves the sentence.
+          disposition: event.disposition ?? dispositionFor(event.ok, outcome),
           detail: event.detail,
           ...(event.output === undefined ? {} : { output: event.output }),
           ...(event.meta === undefined ? {} : { meta: event.meta }),
@@ -197,6 +208,22 @@ export function statusFor(ok: boolean, outcome: ApprovalOutcome | undefined): To
   if (outcome === "denied") return "denied";
   if (outcome === "blocked") return "blocked";
   return ok ? "success" : "failed";
+}
+
+/**
+ * Whether a call that reached the recorder actually ran.
+ *
+ * Only for calls the loop did not already classify. A denial or a block was
+ * decided before the tool was reached, so neither is an execution that failed;
+ * everything else here did run, and `ok` is then a fact about the work rather
+ * than about the policy.
+ */
+export function dispositionFor(
+  ok: boolean,
+  outcome: ApprovalOutcome | undefined,
+): ActionDisposition {
+  if (outcome === "denied" || outcome === "blocked") return "denied";
+  return ok ? "executed_success" : "executed_failure";
 }
 
 /** Types re-exported so callers do not reach past this seam. */
