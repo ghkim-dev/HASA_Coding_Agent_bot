@@ -277,41 +277,127 @@ Router 입력은 계약이고, 계약은 모델이 만든다. 따라서 **Router
 
 온라인 기본값은 `strategy = single`이다. Arena/`best_of_n`은 별도의 명시적 전략으로 남는다.
 
-## 12. Auto 이관 지점
+## 12. Auto 배선 — R3에서 완료
 
-현재:
+R2에서 미뤘던 순서 문제를 Bootstrap Interpreter로 끊었다.
 
-```ts
-// agentHost.resolveModel()
-const choice = await chooseModel({ models, mode, ... });
+```
+send(prompt)
+  → routeTurn()                        ← 신규, 모델을 고르기 전에 실행
+      ├─ 사용자가 모델을 골랐으면 → origin:"user", 라우팅 안 함
+      ├─ Bootstrap Interpreter          도구 표면 = record_request 하나
+      │     실패 → unroutedEvent(fallback) + notice, 기존 선택으로 진행
+      ├─ projectTaskProfile(merge(previous, contract))
+      ├─ buildRegistry(listing.models)
+      └─ routeTurn(...)                 → WorkerDecision
+  → ensureSession(forward, decision.modelId)
+  → session.restoreContract(recorded)   ← worker가 계약을 상속
+  → session.send(prompt)
 ```
 
-목표:
+### Bootstrap이 일을 하지 않는 이유
 
-```ts
-const profile = projectTaskProfile(session.taskContract);
-const registry = buildRegistry(listing.models, evaluations);
-const recommendation = await recommendModel(profile, registry);
+도구 표면이 **하나**다. "안전한 부분집합"이 아니라 `record_request` 하나. 파일을 쓸 수 있는 bootstrap은 worker가 정해지기도 전에 도는 두 번째 에이전트이고, 그 위에는 승인도 preflight도 checkpoint도 없다. 그 스위치는 **존재하지 않는 것이 가장 안전한 버전**이라 만들지 않았다.
+
+### 계약을 두 번 만들지 않는 이유
+
+acquisition gate는 `contract.lastTurnId === turnId`만 본다. Bootstrap이 **사용자 턴의 id로** 계약을 만들면 그 조건이 이미 성립하므로, worker는 `record_request`를 다시 부를 이유가 없다. 두 번 부르면 router가 순위를 매긴 계약과 worker가 지키는 계약이 달라진다.
+
+`parseTurnContract(args, turnId)`에 넘기는 id는 **사용자의 턴**이다. Interpreter는 문장을 어떻게 읽었는지이지 누가 말했는지가 아니고, interpreter를 source로 적으면 모델이 사용자 요구사항의 저자가 된다.
+
+### 실패는 조용하지 않다
+
+Bootstrap이 실패하면 `selectionOrigin: "fallback"` 이벤트에 사유를 적고 notice를 띄운 뒤 기존 선택으로 진행한다. 조용히 mode-only로 돌아가면 요구사항 기반 경로를 우회하면서 동작하는 것처럼 보이고, **그 상태에서는 이 전체가 반증 불가능해진다.**
+
+## 13. Worker 안정성
+
+매 턴 다시 고르면 점수가 조금 움직일 때마다 worker가 바뀐다. Turn 1은 A, turn 2는 B, turn 3은 다시 A — 한 task 안에서 세 모델이 각자 다르게 읽은 대화를 이어받는다.
+
+그래서 기본은 **affinity**다. worker를 바꾸려면 점수가 아니라 **task에 대한** 이유가 있어야 한다.
+
+| relation | 동작 |
+|---|---|
+| `continue` / `question` / `refine` | worker 유지 (`carried`) |
+| `correct` | **유지** — 같은 task를 명확히 하는 것이다 |
+| `correct` + 하드 제약 변경 | 재추천 (`eligibility_changed`) |
+| `new_task` | 재추천 |
+| 사용자가 모델 지정 | 라우팅 안 함 (`manual`) |
+
+비교하는 것은 **하드 제약뿐**이다. demand와 priority는 refine마다 움직이므로 그것까지 보면 매 턴이 재추천이 되고, 그게 막으려던 thrashing이다.
+
+## 14. 결정의 영속화
+
+새 이벤트는 **하나**다: `model_recommended`. 나머지는 전부 기존 이벤트의 투영이다.
+
+무엇을 담는가:
+
+```
+selectionOrigin      recommendation | user | bootstrap | carried | fallback
+selectedModelId
+bootstrapModelId     계약을 읽은 모델 — worker와 구분된다
+alternatives[]       순위 후보 (향후 fallback용)
+filteredOut[]        탈락자와 코드
+scoreBreakdown       네 항
+reasons[]            reason code
+taskProfileFingerprint
+routerVersion
 ```
 
-**이번 slice에서 배선하지 않았다.** 이유는 순서 문제다: `resolveModel()`은 세션이 열리기 전에 불리고, `TaskContract`는 세션의 첫 턴에서 `record_request`가 만든다. 즉 첫 턴에는 아직 계약이 없다.
+무엇을 담지 않는가: **ModelProfile 전체**. 카탈로그를 모든 턴에 복사하면 registry가 소유한 것의 두 번째 사본이 생기고, 모델이 재평가되는 순간 어긋난다. fingerprint가 "같은 입력이었다"를 말하고 profile은 registry가 갖는다.
 
-가능한 해법은 세 가지이고, 어느 것도 이번 slice의 범위가 아니다.
+### 과거는 다시 계산하지 않는다
 
-1. 첫 턴은 Bootstrap 모델로 계약만 만들고, 그 뒤 worker를 고른다 (§5의 경계를 실제로 쓰는 것)
-2. 계약이 생긴 시점에 모델을 교체한다 — `AgentSession`이 턴 중간 모델 교체를 지원하는지 확인 필요
-3. 두 번째 턴부터 요구사항 기반으로 고른다 — 첫 턴은 현재 Auto
+`selectedWorkerFor`는 **이벤트를 읽는다.** 오늘의 registry로 과거 결정을 재계산하면 아무도 묻지 않은 질문에 답하는 것이고, 그 답은 그 턴이 실제로 쓴 것과 다르다. 테스트가 이것을 고정한다 — registry를 비워도 저장된 선택은 움직이지 않는다.
 
-배선 자체가 하나의 slice다.
+### Branch는 공짜로 맞는다
 
-## 13. 다음 slice
+`selectedWorkerFor`와 `actionLedger`는 **호출자가 준 이벤트**를 읽는다. `restoreEvents(turns, head)`가 그 branch의 chain을 주므로, 다른 branch의 이벤트는 애초에 입력에 없다. 격리가 기억해야 할 규칙이 아니라 입력의 성질이다.
+
+## 15. Action은 새 저장소를 만들지 않는다
+
+두 번째 로그(`action-history.json`)를 만들지 않았다. 같은 사실의 두 기록은 정확히 문제되는 경로에서 어긋난다.
+
+lifecycle은 **이미 있는 이벤트에서 읽는다.** 미묘한 부분이 하나 있다: 보류된 호출은 `tool_start` 없이 `tool_end(ok:false)`만 나오므로 `tool_completed(status: failed)` 하나가 된다. 그래서 세 가지가 같은 status를 쓰고 있다.
+
+```
+exit 1로 끝난 명령
+요청에 답하지 않아 보류된 명령
+사용자가 금지해서 거부된 명령
+```
+
+구분자는 런타임이 `detail`에 넣은 코드이고, 그것은 저장된다. `proposed`와 `executed`가 별도 필드인 이유가 이것이다 — 런타임이 이미 강제하는 구분이 대화를 다시 여는 순간 사라지면 안 된다.
+
+```
+PROPOSED   tool_started 또는 held-back tool_completed
+DEFERRED   detail이 ACTION_REQUIRES_JUSTIFICATION / TURN_CONTRACT_REQUIRED
+DENIED     detail이 ACTION_DENIED_BY_CONSTRAINT, 또는 status denied
+EXECUTED   도구에 도달해서 실제로 돈 것만
+```
+
+모델 귀속도 파생이다. 한 턴에는 worker가 하나이므로 `turnId → model_recommended → selectedModelId`가 정확하고, 모든 tool 이벤트에 modelId를 복사하는 것이 바로 이 파일이 피하려는 두 번째 사본이다.
+
+**Action이 기록됐다는 것과 workspace가 바뀌었다는 것은 다르다.** 거부된 `write_file`은 진짜 제안의 진짜 기록이고 변경의 증거는 아니다. `changedWorkspace`가 그 둘을 나눈다.
+
+## 16. Interpreter 실패와 Worker 실패
+
+`bootstrapModelId`와 `selectedModelId`를 따로 적는다. 그래야 나중에 이렇게 물을 수 있다.
+
+```
+제약이 누락됐다  →  Interpreter가 못 읽은 것인가?
+계약을 어겼다    →  Worker가 안 지킨 것인가?
+```
+
+둘을 한 칸에 적으면 §10의 constraint omission이 worker의 tool compliance 문제로 잘못 집계된다.
+
+## 17. 다음 slice
 
 | | 내용 |
 |---|---|
 | Stage 2 | `SemanticMatcher` 구현 — embedding provider 선택, `semanticDescription` 임베딩 |
-| 배선 | §12의 세 해법 중 선택, `resolveModel()` 교체 |
-| Persistence | `ModelRecommendation`을 이벤트로 남겨 재현 가능하게 (§22) |
-| Fallback | 순위 후보를 실제로 쓰는 것 (§21) |
+| Bootstrap 선택 | 지금은 mode-only 선택기를 재사용. 이것 자체를 평가 대상으로 |
+| Fallback | `alternatives[]`를 실제로 쓰는 것 |
+| Observed profile | action ledger를 `observed` 신호로 승격 |
+| Auto UI | 고른 모델과 이유를 화면에 |
 
 embedding을 넣어도 되는 조건은 갖춰졌다. `SemanticMatcher`는 교체 가능한 인터페이스이고, `semantic` 항은 breakdown에서 독립적이며, 그것이 최종 답이 될 수 없다는 것이 테스트로 고정돼 있다.
 

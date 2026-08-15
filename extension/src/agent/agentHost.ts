@@ -38,6 +38,17 @@ import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/c
 import { reduceTask } from "../../../src/agent/taskReducer.ts";
 import { describeTask } from "../../../src/agent/taskState.ts";
 import { requirementsView, type RequirementsView } from "../../../src/agent/requirementsView.ts";
+import { interpretRequest, describeBootstrapFailure } from "../../../src/router/bootstrap.ts";
+import { buildRegistry } from "../../../src/router/modelRegistry.ts";
+import { projectTaskProfile } from "../../../src/router/taskProfile.ts";
+import {
+  routeTurn as decideWorker,
+  routingEvent,
+  selectedWorkerFor,
+  unroutedEvent,
+  type WorkerDecision,
+} from "../../../src/router/routing.ts";
+import { reduceContract } from "../../../src/agent/turnContract.ts";
 import {
   describeViolations,
   safeFallback,
@@ -226,6 +237,16 @@ export class AgentHost {
   private pendingRestore: ProviderMessage[] | null = null;
   /** Turn counter, so event ids are unique and ordered within a conversation. */
   private turnOrdinal = 0;
+  /** Distinguishes several routing events within one turn's id space. */
+  private routingOrdinal = 0;
+  /**
+   * The profile the last routed turn produced.
+   *
+   * Held so the next turn can ask whether the hard constraints changed without
+   * re-deriving the old ones from a contract that has since been merged into.
+   * Lost on reload, which only means the next turn re-recommends once.
+   */
+  private lastTaskProfile: import("../../../src/router/taskProfile.ts").TaskProfile | null = null;
   private mode: AgentMode = "code";
   private running: AbortController | null = null;
   /**
@@ -663,7 +684,10 @@ export class AgentHost {
   // Running a turn
   // -------------------------------------------------------------------------
 
-  private async ensureSession(onEvent: (event: AgentEvent) => void): Promise<AgentSession | null> {
+  private async ensureSession(
+    onEvent: (event: AgentEvent) => void,
+    routedModelId?: string | null,
+  ): Promise<AgentSession | null> {
     const provider = await this.ensureProvider();
     if (provider === null) return null;
 
@@ -686,13 +710,23 @@ export class AgentHost {
     // different one. Asking first avoids re-resolving on every ordinary turn,
     // which spent live inference requests measuring candidates and then threw
     // the answer away.
-    if (this.session !== null && !this.modelNeedsRevisiting()) {
+    // A routed worker that differs from the one in the session is a reason to
+    // revisit that `modelNeedsRevisiting` cannot see — it reasons about modes,
+    // and this is about what the request asked for.
+    const routedElsewhere =
+      this.selectedModelId === null &&
+      routedModelId != null &&
+      routedModelId.length > 0 &&
+      this.sessionChoice !== null &&
+      this.sessionChoice.modelId !== routedModelId;
+
+    if (this.session !== null && !this.modelNeedsRevisiting() && !routedElsewhere) {
       this.session.setMode(this.mode);
       this.applyPendingRestore(this.session);
       return this.session;
     }
 
-    const choice = await this.resolveModel(provider);
+    const choice = await this.resolveModel(provider, routedModelId);
     if (choice === null) return null;
 
     const previous = this.session;
@@ -848,8 +882,28 @@ export class AgentHost {
     return modeCanWrite(this.mode) && !modeCanWrite(this.modeAtSession);
   }
 
-  /** The model to use, and how it will be asked to call tools. */
-  private async resolveModel(provider: HasaProvider): Promise<AutoModelChoice | null> {
+  /**
+   * The model to use, and how it will be asked to call tools.
+   *
+   * `routedModelId` is what the requirement-aware router decided for this turn.
+   * It is passed in rather than read from a field so that the two paths cannot
+   * drift: a turn either routed and says so, or did not and falls through to
+   * the selection that existed before — which is now the *bootstrap* selector
+   * and the explicit fallback, not the way workers are normally chosen.
+   */
+  private async resolveModel(
+    provider: HasaProvider,
+    routedModelId?: string | null,
+  ): Promise<AutoModelChoice | null> {
+    if (this.selectedModelId === null && routedModelId != null && routedModelId.length > 0) {
+      const capabilities = await provider.capabilities.capabilitiesOf(routedModelId);
+      return {
+        modelId: routedModelId,
+        confidence: "measured",
+        toolProtocol: protocolFor(capabilities) ?? "text",
+        reason: "요구사항에 맞춰 고른 모델입니다.",
+      };
+    }
     if (this.selectedModelId !== null) {
       // The picker no longer offers these, but a selection outlives the list it
       // came from, and sending one produces a bare `404 Not Found` that says
@@ -995,8 +1049,20 @@ export class AgentHost {
     let outcome: AgentTurnResult | null = null;
     try {
       this.phase("준비하는 중");
-      const session = await this.ensureSession(forward);
+      // Read the request before choosing who answers it. Everything this
+      // produces — the contract, the profile, the decision — is recorded, so a
+      // reopened conversation can say why this model was picked rather than
+      // recomputing an answer against a catalogue that has since changed.
+      const routing = await this.routeTurn(turnId, prompt, keep, controller.signal);
+      const session = await this.ensureSession(forward, routing.workerModelId);
       if (session === null) return null;
+      // The worker inherits the contract the bootstrap pass already validated.
+      // Without this it would have to call `record_request` itself, and the
+      // contract the router ranked against would not be the one the worker
+      // honours — two readings of one sentence.
+      if (routing.contractEvents.length > 0) {
+        session.restoreContract([...this.recorded]);
+      }
       // Installed every turn, not only when the session is built. A session
       // reused from a previous turn — or reopened from history, which built one
       // with a no-op sink — would otherwise send this turn's events nowhere.
@@ -1029,6 +1095,154 @@ export class AgentHost {
       // the state it actually reached rather than dropped.
       await this.persistTurn({ id: turnId, startedAt, events: turnEvents, outcome });
     }
+  }
+
+  /**
+   * Reads the request, then chooses who answers it.
+   *
+   * The order is the whole point of R3. Before this, the model was chosen from
+   * the mode alone — four values — so "README의 오타만 고쳐줘" and "30개 파일을
+   * 고치고 테스트까지 해줘" got the same worker whenever they shared a mode.
+   * Now the request is interpreted first, projected into a `TaskProfile`, and
+   * the profile is what the recommender ranks against.
+   *
+   * Three things this deliberately does not do:
+   *
+   * It does not run when the user picked a model. An explicit choice outranks
+   * a recommendation, and computing one anyway would put a "we would have
+   * chosen X" into the record beside the Y that actually ran.
+   *
+   * It does not silently fall back. A bootstrap failure returns a `fallback`
+   * event naming the failure — routing around the requirement-aware path while
+   * looking like it worked is the one outcome that would make all of this
+   * unfalsifiable.
+   *
+   * It does not re-choose every turn. A continuation of the same task keeps its
+   * worker; see `routingTriggerFor`.
+   */
+  private async routeTurn(
+    turnId: string,
+    prompt: string,
+    keep: (events: readonly SessionEvent[]) => void,
+    signal: AbortSignal,
+  ): Promise<{ workerModelId: string | null; contractEvents: SessionEvent[] }> {
+    const stamp = (): { id: string; turnId: string; at: number } => ({
+      id: `${turnId}-r${this.routingOrdinal++}`,
+      turnId,
+      at: Date.now(),
+    });
+
+    // An explicit selection is not routed around. §45.
+    if (this.selectedModelId !== null) {
+      keep([
+        {
+          type: "model_recommended",
+          ...stamp(),
+          selectionOrigin: "user",
+          selectedModelId: this.selectedModelId,
+          routerVersion: "r3.1",
+        },
+      ]);
+      return { workerModelId: null, contractEvents: [] };
+    }
+
+    const provider = await this.ensureProvider();
+    if (provider === null) return { workerModelId: null, contractEvents: [] };
+
+    // The bootstrap interpreter is chosen the old way, on purpose: this slice
+    // does not recommend the model that does the reading, and reusing the
+    // mode-only selector for it is what confines that mechanism to a role it
+    // is adequate for.
+    this.phase?.("요청을 정리하는 중");
+    const bootstrapChoice = await this.resolveModel(provider);
+    if (bootstrapChoice === null) return { workerModelId: null, contractEvents: [] };
+
+    const bootstrapModel = createModelFor({
+      provider,
+      modelId: bootstrapChoice.modelId,
+      toolProtocol: bootstrapChoice.toolProtocol,
+    });
+
+    const interpreted = await interpretRequest({
+      model: bootstrapModel,
+      prompt,
+      turnId,
+      signal,
+    });
+
+    if (!interpreted.ok) {
+      this.log.appendLine(`[hasa] bootstrap failed: ${interpreted.failure} — ${interpreted.detail}`);
+      keep([
+        unroutedEvent({
+          ...stamp(),
+          modelId: null,
+          reason: `${interpreted.failure}: ${interpreted.detail}`,
+          bootstrapModelId: interpreted.bootstrapModelId,
+        }),
+        {
+          type: "notice",
+          ...stamp(),
+          level: "warning",
+          text: describeBootstrapFailure(interpreted),
+        },
+      ]);
+      // No profile means no recommendation. The turn still runs, on the
+      // selection that existed before — and the record says so. §42.
+      return { workerModelId: null, contractEvents: [] };
+    }
+
+    const contractEvent: SessionEvent = {
+      type: "turn_contract",
+      ...stamp(),
+      contract: interpreted.contract,
+    };
+
+    const listing = (await this.conversationModels()) ?? (await provider.listModels());
+    const profiles = buildRegistry(listing.models);
+    const previous = reduceContract([...this.recorded]);
+    const currentWorker = selectedWorkerFor(this.recorded)?.modelId ?? null;
+
+    let decision: WorkerDecision;
+    try {
+      decision = await decideWorker({
+        turn: interpreted.contract,
+        previous,
+        currentWorker,
+        profiles,
+        ...(this.lastTaskProfile === null ? {} : { previousProfile: this.lastTaskProfile }),
+      });
+    } catch (err) {
+      this.log.appendLine(`[hasa] routing failed: ${(err as Error).message}`);
+      keep([
+        contractEvent,
+        unroutedEvent({
+          ...stamp(),
+          modelId: null,
+          reason: `ROUTER_ERROR: ${(err as Error).message}`,
+          bootstrapModelId: interpreted.bootstrapModelId,
+        }),
+      ]);
+      return { workerModelId: null, contractEvents: [contractEvent] };
+    }
+
+    this.lastTaskProfile =
+      decision.taskProfile ?? projectTaskProfile(previous);
+
+    keep([
+      contractEvent,
+      routingEvent({
+        ...stamp(),
+        decision,
+        bootstrapModelId: interpreted.bootstrapModelId,
+      }),
+    ]);
+
+    this.log.appendLine(
+      `[hasa] routed ${turnId}: bootstrap=${interpreted.bootstrapModelId} ` +
+        `worker=${decision.modelId ?? "none"} trigger=${decision.trigger} origin=${decision.origin}`,
+    );
+
+    return { workerModelId: decision.modelId, contractEvents: [contractEvent] };
   }
 
   /** Whatever could not be attached to the last message, once. */

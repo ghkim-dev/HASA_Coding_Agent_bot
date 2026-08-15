@@ -152,6 +152,12 @@ export function isAbnormal(reason: RunTerminationReason): boolean {
  * each time. Callers that want immutability can clone once, at the edge.
  */
 export function applyEvent(view: SessionView, event: SessionEvent): SessionView {
+  // Routing metadata, not something the user said or the agent did. Returned
+  // before a turn is created for it, because an event that draws nothing must
+  // not conjure an empty turn into the transcript — which is what folding it
+  // through the normal path would do.
+  if (event.type === "model_recommended") return view;
+
   const role: TurnView["role"] = event.type === "user_message" ? "user" : "agent";
   let turn = view.turns.find((t) => t.turnId === event.turnId && t.role === role);
   if (turn === undefined) {

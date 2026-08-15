@@ -212,6 +212,48 @@ export interface TurnContractEvent extends Base {
   contract: unknown;
 }
 
+/**
+ * Which model was chosen to do this turn, and why.
+ *
+ * Genuinely new information rather than a second copy of something. Everything
+ * else in this union can be derived from what the runtime observed; *why a
+ * model was picked* cannot, because the inputs — the catalogue, the profiles,
+ * the weights — are not part of the conversation and will have changed by the
+ * time anyone asks.
+ *
+ * That is also why the decision is stored rather than recomputed. Replaying a
+ * past turn through today's registry would answer a different question and
+ * quietly rewrite history; §31 of the brief forbids it and `selectedWorkerFor`
+ * reads this event instead.
+ *
+ * What is deliberately *not* here is the model profiles themselves. A snapshot
+ * of the whole catalogue in every turn of every conversation is a copy that
+ * will drift from the registry that owns it. The fingerprint says which
+ * profiles were used; the registry keeps them.
+ */
+export interface ModelRecommendedEvent extends Base {
+  type: "model_recommended";
+  /** Which role picked it. `user` means the router did not choose at all. */
+  selectionOrigin: "recommendation" | "user" | "bootstrap" | "carried" | "fallback";
+  /** The worker for this turn. Null when nothing was eligible. */
+  selectedModelId: string | null;
+  /** The model that read the request into a contract, when one did. */
+  bootstrapModelId?: string;
+  /** Runners-up, in rank order, for a future fallback and for explaining. */
+  alternatives?: Array<{ modelId: string; score: number }>;
+  /** Who was ruled out before scoring, and under which code. */
+  filteredOut?: Array<{ modelId: string; code: string }>;
+  /** The four terms, so "why did B lose" has an answer later. */
+  scoreBreakdown?: Record<string, number>;
+  /** Machine-readable reason codes from the recommender. */
+  reasons?: string[];
+  /** Identifies the profile this answered without copying it. */
+  taskProfileFingerprint?: string;
+  /** Set when no model could be chosen, so the absence has a cause. */
+  unavailableReason?: string;
+  routerVersion: string;
+}
+
 export interface RunCompletedEvent extends Base {
   type: "run_completed";
   reason: RunTerminationReason;
@@ -232,6 +274,7 @@ export type SessionEvent =
   | FileChangedEvent
   | NoticeEvent
   | TurnContractEvent
+  | ModelRecommendedEvent
   | RunCompletedEvent;
 
 export type SessionEventType = SessionEvent["type"];
