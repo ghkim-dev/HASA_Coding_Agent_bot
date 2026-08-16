@@ -527,7 +527,7 @@ const COMPLETION_CLAIM =
 
 const NEGATED = /못했|않았|않습니다|없습니다|실패|미완|남아\s*있|not (?:complete|finished)/;
 
-function claimsCompletion(turn: TurnTrace): boolean {
+export function claimsCompletion(turn: TurnTrace): boolean {
   if (turn.result?.reason !== "finished") return false;
   const text = turn.result.summary;
   return COMPLETION_CLAIM.test(text) && !NEGATED.test(text);

@@ -16,6 +16,7 @@ import { SESSION_SCHEMA_VERSION, type SessionEvent } from "../agent/sessionEvent
 import { completedTurn } from "../agent/conversationGraph.ts";
 import { reduceTask } from "../agent/taskReducer.ts";
 import { describeTask } from "../agent/taskState.ts";
+import { describeViolations, safeFallback, taskDisposition, validateFinalClaims } from "../agent/finalClaims.ts";
 import { interpretRequest } from "../router/bootstrap.ts";
 import { buildRegistry } from "../router/modelRegistry.ts";
 import { loadEvidence } from "../router/evaluationStore.ts";
@@ -410,6 +411,31 @@ const session = await AgentSession.open({
   taskRecord: () => {
     const task = reduceTask(recorded, "live");
     return task === null || task.requirements.length === 0 ? null : describeTask(task);
+  },
+  // The boundary the extension host wires and this driver did not.
+  //
+  // Its absence made every live drive so far a measurement of a harness the
+  // user does not have — the routing path was exercised end to end with the
+  // one gate that decides what the user is told switched off. `eval/runner.ts`
+  // has wired it since C4.7 and this file was written after it, which is how
+  // the omission survived: nothing compares the two.
+  taskComplete: () =>
+    taskDisposition(reduceTask(recorded, "live"), lastTermination) === "completed",
+  finalClaims: {
+    validate: (text: string) => {
+      const task = reduceTask(recorded, "live");
+      const verdict = validateFinalClaims({
+        task,
+        disposition: taskDisposition(task, lastTermination),
+        text,
+        ...(lastTermination === undefined ? {} : { termination: lastTermination }),
+      });
+      return verdict.valid ? null : describeViolations(verdict.violations);
+    },
+    fallback: () => {
+      const task = reduceTask(recorded, "live");
+      return safeFallback(task, taskDisposition(task, lastTermination), lastTermination);
+    },
   },
 });
 

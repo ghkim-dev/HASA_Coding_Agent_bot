@@ -820,10 +820,26 @@ function terminationDetail(reason: AgentStopReason, state: RunState): string | n
   }
 }
 
-function defaultSummary(reason: AgentStopReason, changed: number): string {
+export function defaultSummary(reason: AgentStopReason, changed: number): string {
   switch (reason) {
     case "finished":
-      return changed > 0 ? `${changed}개 파일을 수정했습니다.` : "완료했습니다.";
+      // Not "완료했습니다".
+      //
+      // This line was the source of every false completion claim the first live
+      // sweep found. It is written *after* the completion gate, from a reason
+      // code and a file count, with no access to the task record — so it was
+      // the one completion claim in the system that nothing could refuse, and
+      // seventeen of them were counted against the models that provoked them.
+      // The models had said nothing of the kind; several had said nothing at
+      // all, which is exactly the condition that reaches here.
+      //
+      //     run ended  ≠  task complete
+      //
+      // A file count is an observation and stays. "완료했습니다" is a verdict,
+      // and the runtime does not have the facts to reach it here.
+      return changed > 0
+        ? `${changed}개 파일을 수정했습니다.`
+        : "이번 차례에는 기록된 작업이 없습니다. 무엇을 해야 할지 조금 더 알려 주세요.";
     case "denied":
       return "요청하신 작업을 중단했습니다.";
     case "aborted":

@@ -119,7 +119,20 @@ function sentences(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-const COMPLETION = /완료|완성|끝냈|끝났|마쳤|마무리했|다\s*했|done\b|complete[ds]?\b|finished\b/i;
+/**
+ * Words that assert the work stands finished.
+ *
+ * The second half of this list came from the first live sweep rather than from
+ * imagination. `성공적으로 구현했습니다` and `요구사항을 모두 충족했습니다` are
+ * both completion claims and neither contains 완료 — they went out against an
+ * empty record because the gate did not recognise them as claims at all.
+ *
+ * This is a second line and is documented as one. The record is the first: a
+ * claim is refused because nothing supports it, and widening this pattern only
+ * widens what gets *asked* that question.
+ */
+const COMPLETION =
+  /완료|완성|끝냈|끝났|마쳤|마무리했|다\s*했|구현했|충족했|반영했|적용했|처리했|해결했|done\b|complete[ds]?\b|finished\b|implemented\b|satisfied\b/i;
 
 /**
  * A completion word that is being denied.
@@ -137,13 +150,23 @@ const COMPLETION = /완료|완성|끝냈|끝났|마쳤|마무리했|다\s*했|do
  * to be read as success.
  */
 const NEGATED_COMPLETION =
-  /(?:완료|완성|끝|마무리)[가-힣]{0,4}\s*(?:않|못|안\s)|아직[^.!?\n]{0,12}(?:완료|완성|끝)|not\s+(?:complete|finished|done|fully)|un(?:able|finished)|isn't\s+(?:done|complete)/i;
+  /(?:완료|완성|끝|마무리)[가-힣]{0,4}\s*(?:않|못|안\s)|아직[^.!?\n]{0,12}(?:완료|완성|끝)|not\s+(?:complete|finished|done|fully)|un(?:able|finished)|isn't\s+(?:done|complete)|(?:완료|완성|끝|마무리)[가-힣]{0,2}(?:려면|려고|하기\s*위)|(?:to|before)\s+(?:complete|finish)/i;
 
 /** Words that make a claim about the whole of the work rather than a piece. */
 const TOTALITY = /모든|전체|전부|모두|일체|all\b|every\b|entire|fully|whole/i;
 
 const TEST_CLAIM =
   /(?:테스트|test)[^.!?\n]{0,24}(?:통과|성공|passed|pass\b|green)|(?:모든|all)[^.!?\n]{0,12}(?:테스트|tests?)[^.!?\n]{0,12}(?:통과|passed)/i;
+
+/**
+ * A test claim that is being withheld rather than made.
+ *
+ * `테스트가 통과했다고 말할 수 없습니다` says the opposite of what `TEST_CLAIM`
+ * matches, and refusing it taught the model to stop being careful — the one
+ * sentence a model should be encouraged to write.
+ */
+const NEGATED_TEST =
+  /(?:통과|성공|pass(?:ed)?)[^.!?\n]{0,14}(?:못했|않았|않습니다|없습니다|아닙니다|아직)|(?:통과|성공)했다고[^.!?\n]{0,12}없|(?:통과|성공)하지\s*(?:못|않)|(?:cannot|can't|couldn't|didn't)\s+(?:say|claim|confirm|verify)/i;
 
 const TRAINING_CLAIM = /(?:학습|훈련|training)[^.!?\n]{0,16}(?:완료|끝|성공|completed|finished|succeeded)/i;
 
@@ -180,11 +203,32 @@ export interface FinalClaimInput {
 export function validateFinalClaims(input: FinalClaimInput): ClaimValidationResult {
   const { task, disposition, text } = input;
   const violations: ClaimViolation[] = [];
-  if (task === null) return { valid: true, violations };
+
+  // No task record is the hardest case, not the easiest.
+  //
+  // This used to `return { valid: true }` here, on the reading that a gate with
+  // nothing to check against should not object. That is exactly backwards, and
+  // the first live sweep measured the cost: ten of seventeen escaped completion
+  // claims came from turns that recorded no contract at all. The model said the
+  // work was done, the runtime held no requirement, no evidence and no action —
+  // and the gate waved it through *because* it knew nothing.
+  //
+  //     nothing recorded  ≠  nothing to object to
+  //     nothing recorded  =  nothing that could support a claim
+  //
+  // So an absent record is now an empty one, and every rule below asks the same
+  // question of it. A claim of completion against an empty record has no
+  // passed requirement to be scoped to and no evidence to rest on, so it fails
+  // the rules that were already written — no new rule was needed, only the
+  // refusal to skip them.
+  const evidence = task?.evidence ?? [];
+  const sources = task?.sources ?? [];
+  const facts = task?.facts ?? [];
+  const requirements = task?.requirements ?? [];
 
   // Source attribution, from the gate C4.6.1 built. Folded in here rather than
   // called separately so there is one boundary and one budget.
-  for (const claim of unsupportedClaims(task.evidence, text, input.named ?? task.sources, input.facts ?? task.facts)) {
+  for (const claim of unsupportedClaims(evidence, text, input.named ?? sources, input.facts ?? facts)) {
     violations.push({
       kind: claim.kind === "invocation" ? "UNVERIFIED_INVOCATION" : "UNSUPPORTED_SOURCE_ATTRIBUTION",
       sentence: claim.sentence,
@@ -195,8 +239,8 @@ export function validateFinalClaims(input: FinalClaimInput): ClaimValidationResu
     });
   }
 
-  const passed = task.requirements.filter((r) => r.status === "passed");
-  const outstanding = assessCompletion(task).outstanding;
+  const passed = requirements.filter((r) => r.status === "passed");
+  const outstanding = task === null ? [] : assessCompletion(task).outstanding;
 
   for (const sentence of sentences(text)) {
     if (COMPLETION.test(sentence) && !NEGATED_COMPLETION.test(sentence)) {
@@ -220,7 +264,7 @@ export function validateFinalClaims(input: FinalClaimInput): ClaimValidationResu
       }
     }
 
-    if (TEST_CLAIM.test(sentence) && !hasEvidence(task, "test_result")) {
+    if (TEST_CLAIM.test(sentence) && !NEGATED_TEST.test(sentence) && !hasEvidence(task, "test_result")) {
       violations.push({
         kind: "UNSUPPORTED_TEST_SUCCESS",
         sentence,
@@ -290,19 +334,19 @@ function tokens(description: string): string[] {
     .filter((word) => (/[가-힣]/.test(word) ? word.length >= 2 : word.length >= 3));
 }
 
-function hasEvidence(task: TaskState, kind: string): boolean {
-  return task.evidence.some((e) => e.kind === kind && e.status === "passed");
+function hasEvidence(task: TaskState | null, kind: string): boolean {
+  return (task?.evidence ?? []).some((e) => e.kind === kind && e.status === "passed");
 }
 
-function hasAnyRun(task: TaskState): boolean {
-  return task.evidence.some(
+function hasAnyRun(task: TaskState | null): boolean {
+  return (task?.evidence ?? []).some(
     (e) => (e.kind === "command_result" || e.kind === "test_result" || e.kind === "build_result") && e.status === "passed",
   );
 }
 
 /** Whether anything the runtime saw actually came from outside the agent. */
-function hasExternalBlocker(task: TaskState): boolean {
-  return task.issues.some((issue) => issue.status === "open" && isExternalBlocker(classifyFailure(issue.detail)));
+function hasExternalBlocker(task: TaskState | null): boolean {
+  return (task?.issues ?? []).some((issue) => issue.status === "open" && isExternalBlocker(classifyFailure(issue.detail)));
 }
 
 // ---------------------------------------------------------------------------

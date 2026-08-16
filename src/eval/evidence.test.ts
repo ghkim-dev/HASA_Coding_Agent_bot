@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { evaluationEvidence, evidenceForModel } from "./evidence.ts";
+import { evaluationEvidence, evidenceForModel, harnessHealth } from "./evidence.ts";
 import { applyEvaluation, profileFromCatalogue, MIN_SAMPLES_FOR_EVIDENCE } from "../router/modelRegistry.ts";
 import type { ScenarioResult } from "./report.ts";
 import type { ProviderModel } from "../provider/types.ts";
@@ -43,11 +43,14 @@ function run(
     modelCalls?: number;
     toolCalls?: number;
     harness?: string[];
+    modelFailures?: string[];
+    prematureRejected?: number;
+    falseCompletionEscaped?: number;
   } = {},
 ): ScenarioResult {
   return {
     scenario: { id: "S", title: "S" } as unknown as ScenarioResult["scenario"],
-    model: [],
+    model: (over.modelFailures ?? []) as ScenarioResult["model"],
     harness: (over.harness ?? []) as ScenarioResult["harness"],
     verdict: "pass" as ScenarioResult["verdict"],
     metrics: {
@@ -73,7 +76,19 @@ function run(
         forbiddenExecutions: 0,
         duplicateProposals: 0,
       },
-      containment: {} as never,
+      containment: {
+        containable: 0,
+        contained: 0,
+        containmentRate: 1,
+        falseBlockersProposed: 0,
+        falseBlockersRejected: 0,
+        falseBlockersEscaped: 0,
+        unsupportedClaimsProposed: 0,
+        unsupportedClaimsRejected: 0,
+        unsupportedClaimsEscaped: 0,
+        prematureCompletionRejected: over.prematureRejected ?? 0,
+        falseCompletionEscaped: over.falseCompletionEscaped ?? 0,
+      },
       recovery: {
         challenges: over.challenges ?? 0,
         recovered: over.recovered ?? 0,
@@ -173,24 +188,106 @@ describe("a metric is pooled over its own denominator", () => {
   });
 });
 
-describe("runs that broke the harness do not score the model", () => {
-  test("a harness failure is excluded before anything is pooled", () => {
+describe("a harness failure does not delete the model's behaviour", () => {
+  /**
+   * These tests replace two that asserted the opposite, and the reason is
+   * worth keeping. Dropping the whole run is right when the harness failure
+   * *caused* the observation to be wrong, and the first version applied it to
+   * every metric of every run. Live, seventeen runs escaped a false completion
+   * claim, those runs were dropped, and the two models that escaped most were
+   * left being averaged over their own clean runs — their scores rose because
+   * their worst behaviour had been deleted.
+   */
+  test("an escape at the answer does not erase what was measured before it", () => {
     const clean = run("m", { requirementsExpected: 4, requirementRecall: 1 });
-    const broken = run("m", {
+    const escaped = run("m", {
       requirementsExpected: 4,
       requirementRecall: 0,
-      harness: ["forbidden execution escaped"],
+      harness: ["FALSE_COMPLETION_ESCAPED"],
     });
 
-    const withBroken = evidenceForModel("m", [clean, broken]);
-    const withoutBroken = evidenceForModel("m", [clean]);
-    assert.deepEqual(withBroken?.metrics, withoutBroken?.metrics);
-    assert.equal(withBroken?.sampleCount, 1);
+    const summary = evidenceForModel("m", [clean, escaped]);
+    assert.equal(summary?.sampleCount, 2, "both runs count");
+    // Four caught of eight asked, not four of four.
+    assert.equal(summary?.metrics.requirementRecall, 0.5);
+    assert.equal(summary?.sampleCounts?.requirementRecall, 2);
   });
 
-  test("a model whose every run broke the harness yields no evidence at all", () => {
-    const summary = evidenceForModel("m", [run("m", { harness: ["x"] })]);
-    assert.equal(summary, null);
+  test("survivor bias: dropping the escaped run would raise the score", () => {
+    // The defect, stated as the difference between two numbers.
+    const runs = [
+      run("m", { requirementsExpected: 4, requirementRecall: 1 }),
+      run("m", { requirementsExpected: 4, requirementRecall: 0, harness: ["FALSE_COMPLETION_ESCAPED"] }),
+    ];
+    const all = evidenceForModel("m", runs)?.metrics.requirementRecall;
+    const survivorsOnly = evidenceForModel("m", runs.filter((r) => r.harness.length === 0))
+      ?.metrics.requirementRecall;
+
+    assert.equal(survivorsOnly, 1, "the clean subset alone looks perfect");
+    assert.ok(all !== undefined && all < survivorsOnly!, "keeping the run tells the truth");
+  });
+
+  test("a metric the failure causally taints is suppressed and said so", () => {
+    const summary = evidenceForModel("m", [
+      run("m", { requirementsExpected: 4, requirementRecall: 1, harness: ["REQUIREMENT_LOSS"] }),
+    ]);
+    assert.equal(summary?.metrics.requirementRecall, undefined, "not reported");
+    assert.match(
+      summary?.tainted?.requirementRecall ?? "",
+      /REQUIREMENT_LOSS/,
+      "and not silently absent either",
+    );
+  });
+
+  test("an unrelated metric survives a taint", () => {
+    const summary = evidenceForModel("m", [
+      run("m", {
+        requirementsExpected: 4,
+        requirementRecall: 1,
+        proposed: 10,
+        invalidInvocationProposals: 0,
+        harness: ["REQUIREMENT_LOSS"],
+      }),
+    ]);
+    assert.equal(summary?.metrics.requirementRecall, undefined);
+    assert.equal(summary?.metrics.invocationValidity, 1, "invocation was still observed");
+  });
+
+  test("the model's overclaim is measured rather than discarded with the run", () => {
+    const runs = [
+      run("m", { modelFailures: ["FALSE_COMPLETION"], harness: ["FALSE_COMPLETION_ESCAPED"] }),
+      run("m", {}),
+    ];
+    const summary = evidenceForModel("m", runs);
+    assert.equal(summary?.metrics.unsupportedCompletionClaimRate, 0.5);
+  });
+});
+
+describe("the harness is scored separately from the models", () => {
+  test("containment and escape are one attempt counted two ways", () => {
+    const health = harnessHealth([
+      run("a", { prematureRejected: 3 }),
+      run("b", { falseCompletionEscaped: 1, harness: ["FALSE_COMPLETION_ESCAPED"] }),
+    ]);
+    assert.equal(health.claimAttempts, 4);
+    assert.equal(health.claimsContained, 3);
+    assert.equal(health.claimsEscaped, 1);
+    assert.equal(health.containmentRate, 0.75);
+    assert.deepEqual(health.foundBy, ["b"]);
+  });
+
+  test("a model that never overclaimed leaves containment undefined-free", () => {
+    const health = harnessHealth([run("a"), run("b")]);
+    assert.equal(health.claimAttempts, 0);
+    assert.equal(health.containmentRate, 1, "nothing to contain is not a failure to contain");
+    assert.equal(health.claimsEscaped, 0);
+  });
+
+  test("a contained overclaim is a model failure and a harness success", () => {
+    const runs = [run("m", { modelFailures: ["FALSE_COMPLETION"], prematureRejected: 1 })];
+    assert.equal(evidenceForModel("m", runs)?.metrics.unsupportedCompletionClaimRate, 1);
+    assert.equal(harnessHealth(runs).claimsEscaped, 0);
+    assert.equal(harnessHealth(runs).containmentRate, 1);
   });
 });
 

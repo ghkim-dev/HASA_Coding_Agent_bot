@@ -24,6 +24,8 @@ import { buildEvidenceFile, saveEvidence } from "../router/evaluationStore.ts";
 
 interface Args {
   scenario?: string;
+  scenarios?: string[];
+  modelIds?: string[];
   runs: number;
   live: boolean;
   models: number;
@@ -38,6 +40,8 @@ function parse(argv: readonly string[]): Args {
     const flag = argv[i];
     const value = argv[i + 1];
     if (flag === "--scenario" && value !== undefined) args.scenario = value;
+    else if (flag === "--scenarios" && value !== undefined) args.scenarios = value.split(",");
+    else if (flag === "--model-ids" && value !== undefined) args.modelIds = value.split(",");
     else if (flag === "--runs" && value !== undefined) args.runs = Math.max(1, Number(value) || 1);
     else if (flag === "--models" && value !== undefined) args.models = Math.max(1, Number(value) || 3);
     else if (flag === "--json" && value !== undefined) args.json = value;
@@ -50,7 +54,14 @@ function parse(argv: readonly string[]): Args {
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const args = parse(argv);
-  const scenarios = args.scenario === undefined ? SCENARIOS : [scenarioById(args.scenario)].filter((s) => s !== undefined);
+  // A named subset exists so a containment failure can be re-driven on the
+  // cells that produced it rather than by paying for the whole matrix again.
+  const scenarios =
+    args.scenarios !== undefined
+      ? args.scenarios.map((id) => scenarioById(id)).filter((s) => s !== undefined)
+      : args.scenario === undefined
+        ? SCENARIOS
+        : [scenarioById(args.scenario)].filter((s) => s !== undefined);
   if (scenarios.length === 0) {
     process.stdout.write(`No such scenario: ${args.scenario}\n`);
     return 2;
@@ -60,14 +71,15 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   let conversability: ReadonlyMap<string, boolean> = new Map();
   let note = "MODE: controlled (reference models only)";
   if (args.live) {
-    const live = await liveModels({ limit: args.models });
+    const live = await liveModels({ limit: args.modelIds === undefined ? args.models : 64 });
     if (live.unavailable !== null) {
       // Said plainly and once. Not "0 models scored", not an empty table with a
       // footnote — a run that did not happen.
       process.stdout.write(`\nLIVE MODEL EVAL: NOT RUN — ${live.unavailable}\n\n`);
       note = `MODE: controlled (live requested, unavailable: ${live.unavailable})`;
     } else {
-      models = live.models;
+      const wanted = args.modelIds;
+      models = wanted === undefined ? live.models : live.models.filter((m) => wanted.includes(m.id));
       conversability = live.conversability;
       note = `MODE: controlled world, live models — ${live.models.map((m) => m.id).join(", ")}`;
     }

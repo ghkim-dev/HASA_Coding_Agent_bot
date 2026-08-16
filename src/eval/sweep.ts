@@ -2,6 +2,7 @@ import { runScenario } from "./runner.ts";
 import { evaluate, summarize, type ModelSummary, type ScenarioResult } from "./report.ts";
 import type { EvalScenario } from "./scenario.ts";
 import type { AgentModel } from "../agent/types.ts";
+import { escapeRecordsFor, type CompletionEscapeRecord } from "./escapeRecord.ts";
 
 /**
  * Every model against every scenario, N times each.
@@ -41,6 +42,13 @@ export interface SweepResult {
   skipped: Array<{ model: string; reason: string }>;
   /** Runs that broke a harness invariant. Reported first, whatever the scores say. */
   harnessFailures: ScenarioResult[];
+  /**
+   * What each containment failure actually looked like.
+   *
+   * Kept because a count of seventeen escapes is not a defect report. Redacted
+   * at the point of capture, never a transcript.
+   */
+  escapes: CompletionEscapeRecord[];
   startedAt: number;
   finishedAt: number;
 }
@@ -49,6 +57,7 @@ export async function sweep(opts: SweepOptions): Promise<SweepResult> {
   const runs = Math.max(1, opts.runs ?? 1);
   const results: ScenarioResult[] = [];
   const skipped: Array<{ model: string; reason: string }> = [];
+  const escapes: CompletionEscapeRecord[] = [];
   const startedAt = Date.now();
 
   for (const model of opts.models) {
@@ -69,7 +78,9 @@ export async function sweep(opts: SweepOptions): Promise<SweepResult> {
           ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }),
           ...(opts.turnTimeoutMs === undefined ? {} : { turnTimeoutMs: opts.turnTimeoutMs }),
         });
-        results.push(evaluate(scenario, trace));
+        const evaluated = evaluate(scenario, trace);
+        results.push(evaluated);
+        escapes.push(...escapeRecordsFor(evaluated, trace));
       }
     }
   }
@@ -85,6 +96,7 @@ export async function sweep(opts: SweepOptions): Promise<SweepResult> {
     results,
     summaries,
     skipped,
+    escapes,
     harnessFailures: results.filter((r) => r.harness.length > 0),
     startedAt,
     finishedAt: Date.now(),
@@ -107,6 +119,7 @@ export function serializeSweep(result: SweepResult): string {
       durationMs: result.finishedAt - result.startedAt,
       summaries: result.summaries,
       skipped: result.skipped,
+      escapes: result.escapes,
       runs: result.results.map((r) => ({
         scenario: r.scenario.id,
         model: r.metrics.model,

@@ -164,6 +164,14 @@ export interface EvaluationSummary {
    * everything and of nothing else.
    */
   sampleCounts?: Partial<Record<keyof EvaluationMetrics, number>>;
+  /**
+   * Metrics suppressed because a harness invariant failure made them unsafe to
+   * read, with the invariant and scenario that did it.
+   *
+   * Present so a suppressed metric can be told from one nobody measured. The
+   * two produce the same missing field and call for opposite responses.
+   */
+  tainted?: Partial<Record<keyof EvaluationMetrics, string>>;
   updatedAt?: string;
   metrics: EvaluationMetrics;
 }
@@ -185,6 +193,16 @@ export interface EvaluationMetrics {
   meanModelCalls?: number;
   /** Efficiency.toolCalls, a mean. Lower is better. */
   meanToolCalls?: number;
+  /**
+   * How often the model claimed completion the record did not support.
+   *
+   * A model property, not a harness one: the attempt is the model behaviour and
+   * whether it got through is the harness score. Lower is better, and it is the
+   * signal that was invisible while harness-failure runs were dropped whole.
+   */
+  unsupportedCompletionClaimRate?: number;
+  /** Runs the runtime certified as complete. Higher is better. */
+  verifiedCompletionRate?: number;
 }
 
 /** Below this, a number is an anecdote rather than a measurement. See §12. */
