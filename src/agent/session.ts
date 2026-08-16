@@ -15,7 +15,13 @@ import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
 import { createRequestTool } from "./tools/requestTool.ts";
-import { decideAction, describeContract, describeDeferral } from "./actionPolicy.ts";
+import { ACTION_DENIED_BY_CONSTRAINT, decideAction, describeContract, describeDeferral } from "./actionPolicy.ts";
+import {
+  classForbidding,
+  describeProhibition,
+  prohibitionsIn,
+  type ProhibitedClass,
+} from "./statedProhibitions.ts";
 import {
   emptyContract,
   mergeContract,
@@ -187,6 +193,14 @@ export class AgentSession {
    * hostname can be asked.
    */
   private namedSources: SourceRequirement[] = [];
+  /**
+   * What this turn's own words forbid, as the runtime read them.
+   *
+   * Per turn, not accumulated: a prohibition stated once governs the request it
+   * was stated in. Carrying it forward would refuse the next turn's work on the
+   * strength of the last one's sentence.
+   */
+  private statedProhibitions: ReadonlySet<ProhibitedClass> = new Set();
   /**
    * The pages this session has read, so a fact about one can be checked.
    *
@@ -427,6 +441,12 @@ export class AgentSession {
 
     // Before the tools are built, so this turn's own URLs are already the
     // user's when the model reaches for one.
+    // Read from the user's words, not from what the model records about them.
+    // The same precedent as `exactSourcesIn` directly below: a fact the runtime
+    // needs and cannot afford to have transcribed for it. Scoped to this turn —
+    // a prohibition stated once does not silently govern the next request.
+    this.statedProhibitions = prohibitionsIn(prompt);
+
     for (const source of exactSourcesIn(prompt)) {
       if (!this.namedSources.some((s) => s.url === source.url)) this.namedSources.push(source);
     }
@@ -507,9 +527,37 @@ export class AgentSession {
       // form the model can act on.
       toolGate: (toolName) => {
         const decision = decideAction(this.contract, toolName, this.turnId);
-        return decision.decision === "allow"
-          ? null
-          : describeDeferral(decision, toolName, this.contract);
+        if (decision.decision !== "allow") {
+          return describeDeferral(decision, toolName, this.contract);
+        }
+        // The last line, and the only one that does not depend on the model.
+        //
+        // `decideAction` is sound — six repeated runs of the correction fixture
+        // produced three forbidden executions and the gate had allowed none of
+        // them; in every case `contract.constraints` was empty, twice with the
+        // turn filed correctly. The boundary was enforced exactly right against
+        // facts the model was responsible for supplying and did not.
+        //
+        //     a boundary whose inputs come from the thing it guards against
+        //     is not a boundary
+        //
+        // So the user's own sentence is read here too. It may only ever deny:
+        // if it says nothing, the contract still governs and behaviour is
+        // unchanged. See `statedProhibitions.ts` for why the patterns require
+        // the negation to attach to the verb.
+        const stated = classForbidding(this.statedProhibitions, toolName);
+        if (stated !== null) {
+          // Worth recording as well as refusing. The runtime saw a prohibition
+          // the contract does not carry, which is a transcription failure by
+          // the model and invisible from the contract alone.
+          this.log.warn("stated prohibition refused a call the contract allowed", {
+            tool: toolName,
+            class: stated,
+            constraintsRecorded: this.contract.constraints.length,
+          });
+          return `${ACTION_DENIED_BY_CONSTRAINT}\n${describeProhibition(stated, toolName)}`;
+        }
+        return null;
       },
     });
 
