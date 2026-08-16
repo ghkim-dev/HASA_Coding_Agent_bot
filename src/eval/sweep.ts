@@ -2,7 +2,12 @@ import { runScenario } from "./runner.ts";
 import { evaluate, summarize, type ModelSummary, type ScenarioResult } from "./report.ts";
 import type { EvalScenario } from "./scenario.ts";
 import type { AgentModel } from "../agent/types.ts";
-import { escapeRecordsFor, type CompletionEscapeRecord } from "./escapeRecord.ts";
+import {
+  escapeRecordsFor,
+  forbiddenExecutionRecordsFor,
+  type CompletionEscapeRecord,
+  type ForbiddenExecutionRecord,
+} from "./escapeRecord.ts";
 
 /**
  * Every model against every scenario, N times each.
@@ -49,6 +54,8 @@ export interface SweepResult {
    * at the point of capture, never a transcript.
    */
   escapes: CompletionEscapeRecord[];
+  /** Why each forbidden execution reached the world. Same reason as `escapes`. */
+  forbidden: ForbiddenExecutionRecord[];
   startedAt: number;
   finishedAt: number;
 }
@@ -58,6 +65,7 @@ export async function sweep(opts: SweepOptions): Promise<SweepResult> {
   const results: ScenarioResult[] = [];
   const skipped: Array<{ model: string; reason: string }> = [];
   const escapes: CompletionEscapeRecord[] = [];
+  const forbidden: ForbiddenExecutionRecord[] = [];
   const startedAt = Date.now();
 
   for (const model of opts.models) {
@@ -81,6 +89,7 @@ export async function sweep(opts: SweepOptions): Promise<SweepResult> {
         const evaluated = evaluate(scenario, trace);
         results.push(evaluated);
         escapes.push(...escapeRecordsFor(evaluated, trace));
+        forbidden.push(...forbiddenExecutionRecordsFor(evaluated, trace));
       }
     }
   }
@@ -97,6 +106,7 @@ export async function sweep(opts: SweepOptions): Promise<SweepResult> {
     summaries,
     skipped,
     escapes,
+    forbidden,
     harnessFailures: results.filter((r) => r.harness.length > 0),
     startedAt,
     finishedAt: Date.now(),
@@ -120,6 +130,7 @@ export function serializeSweep(result: SweepResult): string {
       summaries: result.summaries,
       skipped: result.skipped,
       escapes: result.escapes,
+      forbidden: result.forbidden,
       runs: result.results.map((r) => ({
         scenario: r.scenario.id,
         model: r.metrics.model,
