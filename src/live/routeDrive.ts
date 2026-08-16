@@ -20,6 +20,7 @@ import { interpretRequest } from "../router/bootstrap.ts";
 import { buildRegistry } from "../router/modelRegistry.ts";
 import { loadEvidence } from "../router/evaluationStore.ts";
 import { routeTurn, routingEvent, selectedWorkerFor } from "../router/routing.ts";
+import { recommendModel } from "../router/recommend.ts";
 import { projectTaskSemanticProfile } from "../router/semanticProfile.ts";
 import { ShadowRunner } from "../router/shadowRunner.ts";
 import { actionLedger, summarizeActions } from "../router/actionLedger.ts";
@@ -198,9 +199,22 @@ const evidence = await loadEvidence({
   now: Date.now(),
 });
 const registry = buildRegistry(listing.models, evidence.summaries, { converses });
+// The observation registry exists only to report what the quarantined dataset
+// *would* have chosen. It is built separately and never handed to `routeTurn`.
+const shadowRegistry =
+  evidence.quarantined.length === 0
+    ? null
+    : buildRegistry(listing.models, evidence.quarantined, { converses });
 out(
-  `evidence   : ${evidence.unusable ?? `${evidence.summaries.length} model summaries from ${evidence.file?.measuredAt ?? "?"}`}`,
+  `evidence   : ${
+    evidence.unusable ??
+    evidence.quarantine ??
+    `${evidence.summaries.length} model summaries from ${evidence.file?.measuredAt ?? "?"}`
+  }`,
 );
+if (evidence.quarantine !== null) {
+  out(`           : ${evidence.quarantined.length} summaries held back from production ranking`);
+}
 
 // --- bootstrap -------------------------------------------------------------
 section("BOOTSTRAP");
@@ -302,6 +316,19 @@ out(
     allNeutral ? "eligibility_then_deterministic_tie_break" : "weighted_signals"
   }`,
 );
+// What the quarantined numbers would have picked, reported beside the decision
+// and never inside it. If these two ever agree by accident that is interesting;
+// if this line is what production used, the quarantine failed.
+if (shadowRegistry !== null && profile !== undefined) {
+  const observed = await recommendModel(profile, shadowRegistry);
+  out(`evaluationShadowBasis : weighted_signals_quarantined`);
+  out(`  would have selected  : ${observed.selected?.modelId ?? "(none)"}`);
+  out(
+    `  production selected  : ${decision.modelId ?? "(none)"}   ${
+      observed.selected?.modelId === decision.modelId ? "(same)" : "(differs — quarantine is load-bearing)"
+    }`,
+  );
+}
 out(`tie-break used  : ${tieBroken ? "yes (top two scores identical)" : "no"}`);
 for (const r of recommendation?.reasons ?? []) out(`   · ${r.code}: ${r.detail}`);
 

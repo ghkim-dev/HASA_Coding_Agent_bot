@@ -33,6 +33,22 @@ export const EVIDENCE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 export const EVIDENCE_FORMAT = "evaluation-evidence-v1";
 
+/**
+ * Whether a dataset may decide anything.
+ *
+ * A dataset is not only fresh or stale — it can be *measured wrongly*, and that
+ * is a third state neither a timestamp nor a fingerprint expresses. The first
+ * live sweep produced numbers that are individually correct and collectively
+ * misleading: seventeen runs escaped a false completion claim, those runs were
+ * dropped from the evidence as harness failures, and what survived was the
+ * clean subset of exactly the models that misbehaved most. The averages went
+ * up because the bad runs left.
+ *
+ * Quarantine keeps the file and takes away its authority. Deleting it would
+ * destroy the only record of the defect that motivated the next slice.
+ */
+export type DatasetStatus = "usable" | "quarantined_completion_integrity_v1";
+
 export interface EvidenceFile {
   format: string;
   /** When the sweep ran, not when it was written. */
@@ -44,12 +60,29 @@ export interface EvidenceFile {
   /** Runs per model per scenario. */
   runsPerCell: number;
   summaries: readonly EvaluationSummary[];
+  /** Absent means `usable`, so a file written before this existed still loads. */
+  datasetStatus?: DatasetStatus;
+  /** Why, in a sentence somebody reading the file can act on. */
+  quarantineReason?: string;
+  /** When it was quarantined. The measurement date stays what it was. */
+  quarantinedAt?: string;
 }
 
 export interface LoadResult {
+  /** Evidence production may rank on. Empty while a dataset is quarantined. */
   summaries: EvaluationSummary[];
+  /**
+   * Evidence that exists and may be observed but may not decide.
+   *
+   * Separate from `summaries` structurally rather than by a flag a caller has
+   * to remember to check — the same reason the semantic term is run beside the
+   * recommendation instead of at weight zero.
+   */
+  quarantined: EvaluationSummary[];
   /** Why there is nothing here, when there is nothing. Printed, not swallowed. */
   unusable: string | null;
+  /** Set when a dataset loaded but is barred from production. */
+  quarantine: string | null;
   file: EvidenceFile | null;
 }
 
@@ -129,7 +162,13 @@ export async function loadEvidence(options: {
   path?: string;
 }): Promise<LoadResult> {
   const path = options.path ?? DEFAULT_EVIDENCE_PATH;
-  const none = (reason: string): LoadResult => ({ summaries: [], unusable: reason, file: null });
+  const none = (reason: string): LoadResult => ({
+    summaries: [],
+    quarantined: [],
+    unusable: reason,
+    quarantine: null,
+    file: null,
+  });
 
   let raw: string;
   try {
@@ -161,5 +200,45 @@ export async function loadEvidence(options: {
     return none("Evidence file holds no model summaries.");
   }
 
-  return { summaries: [...file.summaries], unusable: null, file };
+  // A quarantined dataset loads, is reported, and decides nothing. It is not an
+  // error and must not read as one: the numbers are real and the file is the
+  // record of why they cannot be trusted yet.
+  if (file.datasetStatus !== undefined && file.datasetStatus !== "usable") {
+    return {
+      summaries: [],
+      quarantined: [...file.summaries],
+      unusable: null,
+      quarantine:
+        file.quarantineReason ??
+        `Dataset is ${file.datasetStatus}. Observed, not applied to production ranking.`,
+      file,
+    };
+  }
+
+  return { summaries: [...file.summaries], quarantined: [], unusable: null, quarantine: null, file };
+}
+
+/**
+ * Marks a dataset as unfit to decide, without touching what it measured.
+ *
+ * Rewrites the status fields and nothing else. The summaries, the measurement
+ * date and the scenario list stay exactly as they were, because the point of
+ * quarantine is that the measurement is preserved and its authority is not.
+ */
+export async function quarantineEvidence(
+  status: Exclude<DatasetStatus, "usable">,
+  reason: string,
+  at: string,
+  path = DEFAULT_EVIDENCE_PATH,
+): Promise<EvidenceFile> {
+  const raw = await readFile(path, "utf8");
+  const file = JSON.parse(raw) as EvidenceFile;
+  const updated: EvidenceFile = {
+    ...file,
+    datasetStatus: status,
+    quarantineReason: reason,
+    quarantinedAt: at,
+  };
+  await saveEvidence(updated, path);
+  return updated;
 }

@@ -9,6 +9,7 @@ import {
   buildEvidenceFile,
   loadEvidence,
   saveEvidence,
+  quarantineEvidence,
 } from "./evaluationStore.ts";
 import { fingerprint } from "./conversability.ts";
 import type { EvaluationSummary } from "./modelRegistry.ts";
@@ -197,5 +198,67 @@ describe("the write refuses what the sweep should not have scored", () => {
       conversability: new Map([["worker-a", true]]),
     });
     assert.equal(file.summaries.length, 1);
+  });
+});
+
+describe("a dataset can be preserved and stripped of authority", () => {
+  test("quarantined summaries load, and load somewhere production cannot reach", async () => {
+    await withTempDir(async (dir) => {
+      const path = join(dir, "e.json");
+      await saveEvidence(fileAt(new Date(NOW).toISOString()), path);
+
+      const before = await loadEvidence({ baseUrl: BASE, now: NOW, path });
+      assert.equal(before.summaries.length, 1, "usable before quarantine");
+
+      await quarantineEvidence(
+        "quarantined_completion_integrity_v1",
+        "17 false completion escapes; survivor bias in the harness-failure exclusion",
+        new Date(NOW).toISOString(),
+        path,
+      );
+
+      const after = await loadEvidence({ baseUrl: BASE, now: NOW, path });
+      assert.equal(after.summaries.length, 0, "production sees nothing");
+      assert.equal(after.quarantined.length, 1, "the measurement is still there");
+      assert.match(after.quarantine ?? "", /survivor bias/);
+      assert.equal(after.unusable, null, "quarantine is not an error");
+    });
+  });
+
+  test("quarantine changes no measurement", async () => {
+    await withTempDir(async (dir) => {
+      const path = join(dir, "e.json");
+      await saveEvidence(fileAt(new Date(NOW).toISOString()), path);
+      const before = JSON.parse(await (await import("node:fs/promises")).readFile(path, "utf8"));
+
+      await quarantineEvidence("quarantined_completion_integrity_v1", "why", new Date(NOW).toISOString(), path);
+      const after = JSON.parse(await (await import("node:fs/promises")).readFile(path, "utf8"));
+
+      assert.deepEqual(after.summaries, before.summaries);
+      assert.equal(after.measuredAt, before.measuredAt);
+      assert.deepEqual(after.scenarioIds, before.scenarioIds);
+    });
+  });
+
+  test("a file written before quarantine existed still counts as usable", async () => {
+    await withTempDir(async (dir) => {
+      const path = join(dir, "e.json");
+      const file = fileAt(new Date(NOW).toISOString());
+      assert.equal(file.datasetStatus, undefined, "the field is genuinely absent");
+      await saveEvidence(file, path);
+      const loaded = await loadEvidence({ baseUrl: BASE, now: NOW, path });
+      assert.equal(loaded.summaries.length, 1);
+      assert.equal(loaded.quarantine, null);
+    });
+  });
+
+  test("an explicitly usable dataset is not quarantined", async () => {
+    await withTempDir(async (dir) => {
+      const path = join(dir, "e.json");
+      await saveEvidence({ ...fileAt(new Date(NOW).toISOString()), datasetStatus: "usable" }, path);
+      const loaded = await loadEvidence({ baseUrl: BASE, now: NOW, path });
+      assert.equal(loaded.summaries.length, 1);
+      assert.equal(loaded.quarantined.length, 0);
+    });
   });
 });
