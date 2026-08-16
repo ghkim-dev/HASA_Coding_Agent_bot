@@ -166,6 +166,19 @@ export interface TaskState {
   evidence: Evidence[];
   /** Files this task has changed, as reported by the tools that changed them. */
   changedFiles: string[];
+  /**
+   * When the workspace last changed, so evidence can be told fresh from stale.
+   *
+   * A passing test run is evidence about the tree it ran against. Edit a source
+   * file afterwards and the run still sits in `evidence` with `status: passed`,
+   * describing a tree that no longer exists — and a completion gate reading it
+   * would accept "tests pass" for code nobody has tested.
+   *
+   *     exit 0  →  edit  →  exit 0 is now a claim about the past
+   *
+   * Zero when nothing has changed, which makes every observation fresh.
+   */
+  lastChangeAt: number;
   /** URLs the user named, and whether any of them was actually read. */
   sources: SourceRequirementState[];
   /**
@@ -189,6 +202,7 @@ export function emptyTask(taskId: string, goal: string, at: number): TaskState {
     issues: [],
     evidence: [],
     changedFiles: [],
+    lastChangeAt: 0,
     sources: [],
     facts: [],
     startedAt: at,

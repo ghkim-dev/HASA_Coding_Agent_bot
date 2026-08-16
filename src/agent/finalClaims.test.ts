@@ -54,6 +54,7 @@ function task(over: Partial<TaskState> = {}): TaskState {
     issues: [],
     evidence: [],
     changedFiles: [],
+    lastChangeAt: 0,
     sources: [],
     facts: [],
     ...over,
@@ -347,5 +348,113 @@ describe("the runtime's own words pass the runtime's own gate", () => {
 
   test("a file count is still reported, because it is an observation", () => {
     assert.match(defaultSummary("finished" as never, 2), /2개 파일/);
+  });
+});
+
+describe("evidence is about the tree it ran against", () => {
+  const passingTest = (at: number): Evidence => evidence({ id: `e${at}`, at });
+
+  test("a passing run before the last edit does not support a test claim", () => {
+    const stale = task({
+      requirements: [requirement({ status: "passed" })],
+      evidence: [passingTest(100)],
+      changedFiles: ["src/stats.py"],
+      lastChangeAt: 200,
+    });
+    const result = validateFinalClaims({
+      task: stale,
+      disposition: taskDisposition(stale),
+      text: "테스트가 통과했습니다.",
+    });
+    assert.equal(result.valid, false);
+    assert.ok(kinds(result).includes("UNSUPPORTED_TEST_SUCCESS"));
+    // The refusal says which of the two problems it is, because they call for
+    // different next actions.
+    assert.match(result.violations[0]?.detail ?? "", /다시 실행/);
+  });
+
+  test("a passing run after the last edit does support it", () => {
+    const fresh = task({
+      requirements: [requirement({ status: "passed" })],
+      evidence: [passingTest(300)],
+      changedFiles: ["src/stats.py"],
+      lastChangeAt: 200,
+    });
+    const result = validateFinalClaims({
+      task: fresh,
+      disposition: taskDisposition(fresh),
+      text: "테스트가 통과했습니다.",
+    });
+    assert.equal(result.valid, true);
+  });
+
+  test("never having run is a different refusal from having run too early", () => {
+    const never = task({ requirements: [requirement({ status: "passed" })], lastChangeAt: 200 });
+    const result = validateFinalClaims({
+      task: never,
+      disposition: taskDisposition(never),
+      text: "테스트가 통과했습니다.",
+    });
+    assert.equal(result.valid, false);
+    assert.match(result.violations[0]?.detail ?? "", /돌린 적이 없으면/);
+  });
+
+  test("a run and an edit in the same millisecond count as fresh", () => {
+    // Not ordered by this clock. Refusing on a tie would reject a legitimate
+    // run for the resolution of a timestamp.
+    const tied = task({
+      requirements: [requirement({ status: "passed" })],
+      evidence: [passingTest(200)],
+      lastChangeAt: 200,
+    });
+    const result = validateFinalClaims({
+      task: tied,
+      disposition: taskDisposition(tied),
+      text: "테스트가 통과했습니다.",
+    });
+    assert.equal(result.valid, true);
+  });
+
+  test("a workspace nothing changed leaves every observation fresh", () => {
+    const untouched = task({
+      requirements: [requirement({ status: "passed" })],
+      evidence: [passingTest(1)],
+    });
+    assert.equal(untouched.lastChangeAt, 0);
+    const result = validateFinalClaims({
+      task: untouched,
+      disposition: taskDisposition(untouched),
+      text: "테스트가 통과했습니다.",
+    });
+    assert.equal(result.valid, true);
+  });
+});
+
+describe("a state built outside the reducer still reads correctly", () => {
+  test("a task with no change clock treats its evidence as fresh", () => {
+    // The failure direction that matters. Reading an absent clock as the change
+    // time makes every observation older than it, so every legitimate claim is
+    // refused — the safe-looking mistake that silently breaks the gate for a
+    // caller that constructed the state by hand rather than by reducing events.
+    const noClock = {
+      taskId: "t1",
+      goal: "g",
+      status: "active",
+      requirements: [requirement({ status: "passed" })],
+      issues: [],
+      evidence: [evidence({ at: 5 })],
+      changedFiles: [],
+      sources: [],
+      facts: [],
+    } as unknown as TaskState;
+
+    assert.equal((noClock as { lastChangeAt?: number }).lastChangeAt, undefined);
+
+    const result = validateFinalClaims({
+      task: noClock,
+      disposition: taskDisposition(noClock),
+      text: "테스트가 통과했습니다.",
+    });
+    assert.equal(result.valid, true, "an absent clock must not stale every observation");
   });
 });

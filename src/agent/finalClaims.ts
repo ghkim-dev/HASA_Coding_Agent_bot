@@ -265,10 +265,15 @@ export function validateFinalClaims(input: FinalClaimInput): ClaimValidationResu
     }
 
     if (TEST_CLAIM.test(sentence) && !NEGATED_TEST.test(sentence) && !hasEvidence(task, "test_result")) {
+      // Two different problems and two different things to do about them. A
+      // model told "you never ran the tests" runs them; one told "you ran them
+      // and then changed the code" runs them *again*, which is the whole point.
       violations.push({
         kind: "UNSUPPORTED_TEST_SUCCESS",
         sentence,
-        detail: "통과한 테스트 실행 기록이 없습니다. 테스트를 돌린 적이 없으면 통과했다고 쓸 수 없습니다.",
+        detail: hasStaleEvidence(task, "test_result")
+          ? "테스트를 통과시킨 뒤에 파일을 다시 고쳤습니다. 그 실행 결과는 지금 코드에 대한 것이 아닙니다 — 다시 실행하십시오."
+          : "통과한 테스트 실행 기록이 없습니다. 테스트를 돌린 적이 없으면 통과했다고 쓸 수 없습니다.",
       });
     }
 
@@ -334,8 +339,35 @@ function tokens(description: string): string[] {
     .filter((word) => (/[가-힣]/.test(word) ? word.length >= 2 : word.length >= 3));
 }
 
+/**
+ * A passing observation of this kind that still describes the current tree.
+ *
+ * Freshness, not just existence. A test run that exited 0 and was then followed
+ * by a source edit is evidence about a tree that no longer exists, and it sits
+ * in `evidence` looking exactly like evidence about this one.
+ *
+ *     exit 0  →  edit source  →  "tests pass" is a claim about the past
+ *
+ * The brief calls this out as its own invariant and it is the failure mode a
+ * careful-looking agent produces most easily: fix, run, fix again, report the
+ * first run's result. Ties count as fresh — an edit and a run recorded in the
+ * same millisecond are not ordered by this clock, and refusing on a tie would
+ * reject a legitimate run for the resolution of a timestamp.
+ */
 function hasEvidence(task: TaskState | null, kind: string): boolean {
-  return (task?.evidence ?? []).some((e) => e.kind === kind && e.status === "passed");
+  if (task === null) return false;
+  // `?? 0` because a state reduced by older code has no clock, and reading
+  // `undefined` as the change time would make every observation stale — the
+  // safe-looking direction that silently refuses every legitimate claim.
+  const changedAt = task.lastChangeAt ?? 0;
+  return task.evidence.some((e) => e.kind === kind && e.status === "passed" && e.at >= changedAt);
+}
+
+/** Whether a passing observation of this kind exists but has been overtaken. */
+function hasStaleEvidence(task: TaskState | null, kind: string): boolean {
+  if (task === null) return false;
+  const changedAt = task.lastChangeAt ?? 0;
+  return task.evidence.some((e) => e.kind === kind && e.status === "passed" && e.at < changedAt);
 }
 
 function hasAnyRun(task: TaskState | null): boolean {

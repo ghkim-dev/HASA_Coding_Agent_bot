@@ -135,6 +135,8 @@ export function reduceTask(events: readonly SessionEvent[], taskId = "task"): Ta
 
       case "file_changed": {
         if (!task.changedFiles.includes(event.path)) task.changedFiles.push(event.path);
+        // The clock every later observation is measured against.
+        if (event.at > task.lastChangeAt) task.lastChangeAt = event.at;
         break;
       }
 
