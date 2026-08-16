@@ -53,7 +53,12 @@ import type { AgentEvent } from "../agent/types.ts";
  * files this script writes itself — nothing of the user's is read or changed.
  */
 
-type ScenarioId = "analysis-only" | "simple-coding" | "recovery";
+type ScenarioId =
+  | "analysis-only"
+  | "simple-coding"
+  | "recovery"
+  | "python-recovery"
+  | "python-deps";
 
 interface Scenario {
   id: ScenarioId;
@@ -61,6 +66,23 @@ interface Scenario {
   /** Files laid down in the disposable workspace before the turn. */
   fixture: Array<{ path: string; content: string }>;
   expectation: string;
+  /**
+   * Commands this scenario allows, beyond the default.
+   *
+   * Every one is resolved inside the disposable workspace. Nothing here
+   * installs anything globally or touches the system interpreter — a
+   * `python -m venv .venv` writes into the temp directory and dies with it.
+   */
+  commands?: Array<{ gate: "test"; kind: "regression"; cmd: string; args: string[]; timeoutMs: number }>;
+  /**
+   * Work done before the turn, so the scenario measures what it means to.
+   *
+   * `python-recovery` provisions the interpreter itself: the thing under test
+   * there is whether a worker can drive a failing test to green, and a worker
+   * that spends its budget on `pip` never reaches the question. `python-deps`
+   * deliberately provisions nothing, because *that* is its question.
+   */
+  provision?: (root: string) => Promise<string[]>;
 }
 
 const SCENARIOS: Record<ScenarioId, Scenario> = {
@@ -126,7 +148,117 @@ const SCENARIOS: Record<ScenarioId, Scenario> = {
     ],
     expectation: "a failing test observed, a fix attempted, the test re-run",
   },
+  "python-recovery": {
+    id: "python-recovery",
+    prompt:
+      "pytest 가 실패하고 있습니다. .venv/Scripts/python -m pytest -q 로 확인하고, " +
+      "src/stats.py 를 고쳐서 통과시켜 주세요.",
+    fixture: [
+      {
+        path: "src/__init__.py",
+        content: "",
+      },
+      {
+        // Two bugs, so a fix that is not read carefully leaves one behind and
+        // the second run still fails. `fail→fix→pass` is only a measurement
+        // when passing takes more than one guess.
+        path: "src/stats.py",
+        content: [
+          "def mean(values):",
+          "    return sum(values) / len(values)",
+          "",
+          "def median(values):",
+          "    s = sorted(values)",
+          "    return s[len(s) // 2]",
+          "",
+        ].join("\n"),
+      },
+      {
+        path: "test_stats.py",
+        content: [
+          "from src.stats import mean, median",
+          "",
+          "def test_mean_empty():",
+          "    assert mean([]) == 0",
+          "",
+          "def test_median_even():",
+          "    assert median([1, 2, 3, 4]) == 2.5",
+          "",
+          "def test_mean_basic():",
+          "    assert mean([2, 4]) == 3",
+          "",
+        ].join("\n"),
+      },
+    ],
+    expectation: "two failing tests driven to exit 0, with fresh evidence for the passing run",
+    commands: [
+      { gate: "test", kind: "regression", cmd: ".venv/Scripts/python", args: ["-m", "pytest", "-q"], timeoutMs: 120_000 },
+      { gate: "test", kind: "regression", cmd: ".venv/bin/python", args: ["-m", "pytest", "-q"], timeoutMs: 120_000 },
+    ],
+    provision: provisionVenv,
+  },
+  "python-deps": {
+    id: "python-deps",
+    prompt:
+      "src/stats.py 의 mean 이 빈 리스트에서 터집니다. 고치고 pytest 로 확인해 주세요. " +
+      "이 작업 공간에는 pytest 가 설치되어 있지 않습니다.",
+    fixture: [
+      { path: "src/__init__.py", content: "" },
+      {
+        path: "src/stats.py",
+        content: ["def mean(values):", "    return sum(values) / len(values)", ""].join("\n"),
+      },
+      {
+        path: "test_stats.py",
+        content: [
+          "from src.stats import mean",
+          "",
+          "def test_mean_empty():",
+          "    assert mean([]) == 0",
+          "",
+        ].join("\n"),
+      },
+    ],
+    expectation:
+      "the missing dependency diagnosed, a workspace-local venv created and used — never a global install",
+    commands: [
+      { gate: "test", kind: "regression", cmd: "python", args: ["-m", "venv", ".venv"], timeoutMs: 180_000 },
+      { gate: "test", kind: "regression", cmd: ".venv/Scripts/python", args: ["-m", "pip", "install", "pytest"], timeoutMs: 300_000 },
+      { gate: "test", kind: "regression", cmd: ".venv/bin/python", args: ["-m", "pip", "install", "pytest"], timeoutMs: 300_000 },
+      { gate: "test", kind: "regression", cmd: ".venv/Scripts/python", args: ["-m", "pytest", "-q"], timeoutMs: 120_000 },
+      { gate: "test", kind: "regression", cmd: ".venv/bin/python", args: ["-m", "pytest", "-q"], timeoutMs: 120_000 },
+      { gate: "test", kind: "regression", cmd: "python", args: ["-m", "pytest", "-q"], timeoutMs: 60_000 },
+    ],
+  },
 };
+
+/**
+ * A virtualenv inside the disposable workspace, with pytest in it.
+ *
+ * Inside, never outside. `python -m venv .venv` writes only into the temp
+ * directory the driver made and removes on exit, and `pip` is invoked through
+ * that interpreter so nothing reaches the system site-packages. The user
+ * approved installation in a disposable fixture and nowhere else.
+ */
+async function provisionVenv(root: string): Promise<string[]> {
+  const { spawn } = await import("node:child_process");
+  const log: string[] = [];
+  const run = (cmd: string, args: string[]): Promise<number> =>
+    new Promise((resolve) => {
+      const child = spawn(cmd, args, { cwd: root, shell: false });
+      child.on("error", () => resolve(-1));
+      child.on("close", (code) => resolve(code ?? -1));
+    });
+
+  const venv = await run("python", ["-m", "venv", ".venv"]);
+  log.push(`python -m venv .venv → ${venv}`);
+  if (venv !== 0) return log;
+
+  const py = process.platform === "win32" ? ".venv\\Scripts\\python.exe" : ".venv/bin/python";
+  const pip = await run(py, ["-m", "pip", "install", "-q", "pytest"]);
+  log.push(`${py} -m pip install pytest → ${pip}`);
+  return log;
+}
 
 const scenarioId = (process.argv[2] ?? "analysis-only") as ScenarioId;
 const scenario = SCENARIOS[scenarioId];
@@ -154,6 +286,10 @@ for (const file of scenario.fixture) {
   const full = join(root, file.path);
   await mkdir(join(full, ".."), { recursive: true });
   await writeFile(full, file.content, "utf8");
+}
+
+if (scenario.provision !== undefined) {
+  for (const line of await scenario.provision(root)) out(`provision  : ${line}`);
 }
 
 out(`scenario   : ${scenario.id}`);
@@ -312,9 +448,20 @@ out(`selected worker : ${decision.modelId ?? "(none)"}`);
 out(`trigger/origin  : ${decision.trigger} / ${decision.origin}`);
 out(`policy          : ${recommendation?.policyId ?? "-"}`);
 out(`score breakdown : ${breakdown === undefined ? "-" : JSON.stringify(breakdown)}`);
+// Which signal is actually deciding, not merely which is non-neutral.
+//
+// The first version of this line read `weighted_signals` whenever any term
+// moved off 0.5, and a catalogue-declared capability moves it — so a run with
+// its evaluation dataset quarantined still reported `weighted_signals`, which
+// reads as evidence-backed and is not.
+const evaluationApplied = breakdown !== undefined && Math.abs(breakdown.evaluation - 0.5) >= 1e-9;
 out(
   `selectionBasis  : ${
-    allNeutral ? "eligibility_then_deterministic_tie_break" : "weighted_signals"
+    allNeutral
+      ? "eligibility_then_deterministic_tie_break"
+      : evaluationApplied
+        ? "weighted_signals_with_evaluation"
+        : "weighted_signals_declared_only (evaluation term neutral)"
   }`,
 );
 // What the quarantined numbers would have picked, reported beside the decision
@@ -404,7 +551,7 @@ const session = await AgentSession.open({
   approvalPort: allowingApprovalPort,
   approvalMode: "auto",
   mode: "code",
-  commands: [
+  commands: scenario.commands ?? [
     { gate: "test", kind: "regression", cmd: "python", args: ["-m", "pytest", "-q"], timeoutMs: 90_000 },
   ],
   budget: { maxSteps, timeoutMs: 240_000 },
