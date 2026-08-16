@@ -1,8 +1,11 @@
 import { createHasaProvider } from "../provider/hasa/createProvider.ts";
 import { createModelFor } from "../agent/hasaModel.ts";
-import { canConverse, type Modality } from "../provider/hasa/hasaCatalog.ts";
+import { HasaCatalog, canConverse } from "../provider/hasa/hasaCatalog.ts";
+import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
 import { protocolFor } from "../agent/autoModel.ts";
-import type { ProviderModel } from "../provider/types.ts";
+import { conversabilityFor, fingerprint } from "../router/conversability.ts";
+import { semanticProfileFor } from "../router/modelSemanticCatalog.ts";
+import { roleIsWorker } from "../router/semanticProfile.ts";
 import { fakeModel, GOOD, OVERCLAIMER, SLOPPY, STUBBORN } from "./fakeModels.ts";
 import type { ModelUnderTest } from "./sweep.ts";
 
@@ -32,6 +35,13 @@ export interface LiveModelsResult {
   models: ModelUnderTest[];
   /** Why nothing is here, when nothing is. Printed verbatim in the report. */
   unavailable: string | null;
+  /**
+   * What was known about chat-capability when the list was chosen.
+   *
+   * Handed back so the evidence writer can refuse a model this filter should
+   * have excluded, rather than trusting that it did.
+   */
+  conversability: ReadonlyMap<string, boolean>;
 }
 
 /**
@@ -47,6 +57,7 @@ export async function liveModels(opts: { limit?: number } = {}): Promise<LiveMod
   if (apiKey.trim().length === 0) {
     return {
       models: [],
+      conversability: new Map(),
       unavailable: "HASA_API_KEY is not set. Live model evaluation NOT RUN — no credential.",
     };
   }
@@ -58,20 +69,31 @@ export async function liveModels(opts: { limit?: number } = {}): Promise<LiveMod
     });
     const validation = await provider.validate();
     if (!validation.endpointReachable) {
-      return { models: [], unavailable: "The gateway did not answer." };
+      return { models: [], conversability: new Map(), unavailable: "The gateway did not answer." };
     }
     if (validation.credentialValid === false) {
-      return { models: [], unavailable: "The gateway rejected the credential." };
+      return { models: [], conversability: new Map(), unavailable: "The gateway rejected the credential." };
     }
     const listing = await provider.listModels();
-    // Whatever the catalogue offers, in its order. Chat-capable only: an
-    // embedding endpoint cannot hold a conversation and scoring it as though it
-    // failed one would be a measurement of the wrong thing.
+    // Chat-capable workers only, on the same evidence the router uses — see
+    // `conversability` below for what that evidence is and what it replaced.
+    //
+    // A role that is not a worker is excluded for a separate reason. Scoring a
+    // safety classifier on requirement recall measures the wrong thing about a
+    // model that is working exactly as deployed, and this module now feeds
+    // `evidence.ts`, so a wrong measurement becomes a wrong ranking rather than
+    // merely a wrong row in a table.
+    const converses = await conversability(apiKey, baseUrl);
     const usable = listing.models
-      .filter((m) => canConverse(modalityOf(m)) && protocolFor(m.capabilities) !== null)
+      .filter((m) => {
+        if (converses.get(m.id) === false) return false;
+        if (protocolFor(m.capabilities) === null) return false;
+        const semantic = semanticProfileFor(m.id).profile;
+        return semantic === null || roleIsWorker(semantic.role);
+      })
       .slice(0, opts.limit ?? 3);
     if (usable.length === 0) {
-      return { models: [], unavailable: "The gateway offers no model that can hold a conversation." };
+      return { models: [], conversability: new Map(), unavailable: "The gateway offers no model that can hold a conversation." };
     }
     return {
       models: usable.map((model) => ({
@@ -87,15 +109,52 @@ export async function liveModels(opts: { limit?: number } = {}): Promise<LiveMod
             toolProtocol: protocolFor(model.capabilities) ?? "text",
           }),
       })),
+      conversability: converses,
       unavailable: null,
     };
   } catch (err) {
-    return { models: [], unavailable: `Could not reach the gateway: ${(err as Error).message}` };
+    return { models: [], conversability: new Map(), unavailable: `Could not reach the gateway: ${(err as Error).message}` };
   }
 }
 
-/** A model's modality, defaulting to text when the catalogue does not say. */
-function modalityOf(model: ProviderModel): Modality {
-  const value = (model as { modality?: string }).modality;
-  return (value ?? "text") as Modality;
+/**
+ * What is known about whether each model serves the chat endpoint.
+ *
+ * From the two sources that actually have the answer. This used to read a
+ * `modality` field off `ProviderModel` through an optional cast —
+ *
+ *     (model as { modality?: string }).modality ?? "text"
+ *
+ * — and `ProviderModel` has no such field and never had one, so the expression
+ * was `"text"` for every model on every call since it was written. The filter
+ * around it looked like a filter and passed everything, which is how a sweep
+ * came to score four image-and-video generation models as coding models that
+ * failed all twenty scenarios. Those zeroes were about to be written down as
+ * evidence.
+ *
+ * Modality lives in the portal catalogue, not in the gateway's model listing.
+ * A failure to reach it yields an empty map — unknown, which keeps a model in
+ * rather than letting an outage silently empty the sweep.
+ */
+async function conversability(apiKey: string, baseUrl: string): Promise<Map<string, boolean>> {
+  const known = new Map<string, boolean>();
+  try {
+    const catalog = new HasaCatalog(
+      createMediaTransport({ origin: baseUrl.replace(/\/v1\/?$/, ""), apiKey }),
+    );
+    for (const entry of await catalog.all()) {
+      if (!canConverse(entry.modality) || entry.callable === false) known.set(entry.id, false);
+    }
+  } catch {
+    // Unknown stays unknown. Not "yes".
+  }
+  // Invocation evidence outranks the catalogue and covers what it declines to
+  // classify.
+  for (const [id, value] of conversabilityFor({
+    baseUrlFingerprint: fingerprint(baseUrl),
+    credentialFingerprint: fingerprint(apiKey),
+  })) {
+    known.set(id, value);
+  }
+  return known;
 }

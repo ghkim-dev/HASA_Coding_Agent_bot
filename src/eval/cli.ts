@@ -4,6 +4,8 @@ import { SCENARIOS, scenarioById } from "./scenarios.ts";
 import { liveModels, referenceModels } from "./models.ts";
 import { serializeSweep, sweep, type ModelUnderTest } from "./sweep.ts";
 import { renderBreakdown, renderScoreboard } from "./report.ts";
+import { evaluationEvidence } from "./evidence.ts";
+import { buildEvidenceFile, saveEvidence } from "../router/evaluationStore.ts";
 
 /**
  * `pnpm eval:agent`
@@ -26,6 +28,7 @@ interface Args {
   live: boolean;
   models: number;
   json?: string;
+  evidence?: string;
   breakdown: boolean;
 }
 
@@ -38,6 +41,7 @@ function parse(argv: readonly string[]): Args {
     else if (flag === "--runs" && value !== undefined) args.runs = Math.max(1, Number(value) || 1);
     else if (flag === "--models" && value !== undefined) args.models = Math.max(1, Number(value) || 3);
     else if (flag === "--json" && value !== undefined) args.json = value;
+    else if (flag === "--evidence" && value !== undefined) args.evidence = value;
     else if (flag === "--live") args.live = true;
     else if (flag === "--quiet") args.breakdown = false;
   }
@@ -53,6 +57,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 
   let models: ModelUnderTest[] = referenceModels();
+  let conversability: ReadonlyMap<string, boolean> = new Map();
   let note = "MODE: controlled (reference models only)";
   if (args.live) {
     const live = await liveModels({ limit: args.models });
@@ -63,6 +68,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       note = `MODE: controlled (live requested, unavailable: ${live.unavailable})`;
     } else {
       models = live.models;
+      conversability = live.conversability;
       note = `MODE: controlled world, live models — ${live.models.map((m) => m.id).join(", ")}`;
     }
   }
@@ -106,6 +112,41 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   if (args.json !== undefined) {
     await writeFile(args.json, serializeSweep(result), "utf8");
     process.stdout.write(`\nWrote ${args.json}\n`);
+  }
+
+  // The numbers a recommendation ranks on, written where the router looks.
+  //
+  // Only from a live sweep. The reference models are calibration fixtures with
+  // hand-written behaviour, and `buildRegistry` refuses them by name anyway —
+  // but writing an evidence file full of them would produce a file that looks
+  // like a measurement of the gateway and is not one.
+  if (args.evidence !== undefined) {
+    if (!args.live) {
+      process.stdout.write("\nNo evidence written: --evidence needs --live. Reference models are not model data.\n");
+    } else {
+      const measured = evaluationEvidence(result.results, new Date(result.startedAt).toISOString());
+      const { file, refused } = buildEvidenceFile({
+        measuredAt: new Date(result.startedAt).toISOString(),
+        baseUrl: process.env["HASA_BASE_URL"] ?? "",
+        scenarioIds: scenarios.map((s) => s.id),
+        runsPerCell: args.runs,
+        summaries: measured,
+        conversability,
+      });
+      await saveEvidence(file, args.evidence);
+      for (const drop of refused) {
+        process.stdout.write(`\nREFUSED ${drop.modelId}: ${drop.reason}\n`);
+      }
+      process.stdout.write(
+        `\nWrote evidence for ${file.summaries.length} model(s) to ${args.evidence}\n`,
+      );
+      for (const summary of file.summaries) {
+        const numbers = Object.entries(summary.sampleCounts ?? {})
+          .map(([k, n]) => `${k}=${String(summary.metrics[k as keyof typeof summary.metrics])}(n${n})`)
+          .join(" ");
+        process.stdout.write(`  ${summary.modelId.padEnd(28)} ${numbers}\n`);
+      }
+    }
   }
 
   // A harness invariant failure fails the command. A model scoring badly does

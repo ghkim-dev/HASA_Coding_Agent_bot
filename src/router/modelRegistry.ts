@@ -154,25 +154,37 @@ export interface EvaluationSummary {
   modelId: string;
   /** Runs behind these numbers. One run is not a measurement — §12. */
   sampleCount: number;
+  /**
+   * Runs behind each individual number, when they differ.
+   *
+   * They usually do. A sweep asks every scenario for requirement recall and only
+   * two of them for recovery, so one `sampleCount` would have to overstate the
+   * recovery figure or understate the recall one. Absent means "same as
+   * `sampleCount`", which is true of a sweep where every scenario tests
+   * everything and of nothing else.
+   */
+  sampleCounts?: Partial<Record<keyof EvaluationMetrics, number>>;
   updatedAt?: string;
-  metrics: {
-    /** Understanding.requirementRecall — did it capture what was asked. */
-    requirementRecall?: number;
-    /** ActionQuality.firstActionCorrect / firstActionChecked. */
-    firstActionAccuracy?: number;
-    /** 1 − invalid invocation rate. Higher is better. */
-    invocationValidity?: number;
-    /** Recovery.recoveryRate. */
-    recoveryRate?: number;
-    /** Containment.containmentRate — did it hold when the model misbehaved. */
-    containmentRate?: number;
-    /** Outcome.sourceFactRecall. */
-    sourceFactRecall?: number;
-    /** Efficiency.modelCalls, a mean. Lower is better. */
-    meanModelCalls?: number;
-    /** Efficiency.toolCalls, a mean. Lower is better. */
-    meanToolCalls?: number;
-  };
+  metrics: EvaluationMetrics;
+}
+
+export interface EvaluationMetrics {
+  /** Understanding.requirementRecall — did it capture what was asked. */
+  requirementRecall?: number;
+  /** ActionQuality.firstActionCorrect / firstActionChecked. */
+  firstActionAccuracy?: number;
+  /** 1 − invalid invocation rate. Higher is better. */
+  invocationValidity?: number;
+  /** Recovery.recoveryRate. */
+  recoveryRate?: number;
+  /** Containment.containmentRate — did it hold when the model misbehaved. */
+  containmentRate?: number;
+  /** Outcome.sourceFactRecall. */
+  sourceFactRecall?: number;
+  /** Efficiency.modelCalls, a mean. Lower is better. */
+  meanModelCalls?: number;
+  /** Efficiency.toolCalls, a mean. Lower is better. */
+  meanToolCalls?: number;
 }
 
 /** Below this, a number is an anecdote rather than a measurement. See §12. */
@@ -190,13 +202,20 @@ export function applyEvaluation(profile: ModelProfile, summary: EvaluationSummar
   if (isReferenceModel(summary.modelId)) return profile;
 
   const trusted = summary.sampleCount >= MIN_SAMPLES_FOR_EVIDENCE;
-  const origin = trusted ? "harness_eval" : "declared";
-  const n = summary.sampleCount;
   const at = summary.updatedAt;
   const m = summary.metrics;
 
-  const from = (value: number | undefined): Measure | undefined =>
-    value === undefined ? undefined : measure(clamp(value), origin, n, at);
+  // Per metric, because they are not equally observed. A sweep that challenged
+  // recovery twice and requirement recall eight times has measured one and
+  // sampled the other, and one `sampleCount` cannot say both.
+  const countOf = (key: keyof EvaluationMetrics): number =>
+    summary.sampleCounts?.[key] ?? summary.sampleCount;
+
+  const from = (value: number | undefined, key: keyof EvaluationMetrics): Measure | undefined => {
+    if (value === undefined) return undefined;
+    const n = countOf(key);
+    return measure(clamp(value), n >= MIN_SAMPLES_FOR_EVIDENCE ? "harness_eval" : "declared", n, at);
+  };
 
   const capabilities = { ...profile.capabilities };
   const set = (key: keyof CapabilityDemand, value: Measure | undefined): void => {
@@ -204,15 +223,15 @@ export function applyEvaluation(profile: ModelProfile, summary: EvaluationSummar
     if (merged !== undefined) capabilities[key] = merged;
   };
 
-  set("instructionFollowing", from(m.requirementRecall));
-  set("recovery", from(m.recoveryRate));
-  set("sourceGrounding", from(m.sourceFactRecall));
+  set("instructionFollowing", from(m.requirementRecall, "requirementRecall"));
+  set("recovery", from(m.recoveryRate, "recoveryRate"));
+  set("sourceGrounding", from(m.sourceFactRecall, "sourceFactRecall"));
   // First-action accuracy is about choosing the right tool for the request,
   // which is what tool use means here — not whether the call parsed.
-  set("toolUse", from(m.firstActionAccuracy));
+  set("toolUse", from(m.firstActionAccuracy, "firstActionAccuracy"));
   // Invocation validity is about writing a command that means something, which
   // is the failure `commandSemantics.ts` exists for.
-  set("commandExecution", from(m.invocationValidity));
+  set("commandExecution", from(m.invocationValidity, "invocationValidity"));
   // Containment is the harness holding, not the model behaving — it belongs to
   // debugging only in the sense that a model which recovers is one that can be
   // debugged with. Kept out of `capabilities` for that reason and left to the
@@ -223,11 +242,19 @@ export function applyEvaluation(profile: ModelProfile, summary: EvaluationSummar
     capabilities,
     efficiency: {
       ...profile.efficiency,
-      ...(m.meanModelCalls === undefined ? {} : { modelCalls: measure(m.meanModelCalls, origin, n, at) }),
-      ...(m.meanToolCalls === undefined ? {} : { toolCalls: measure(m.meanToolCalls, origin, n, at) }),
+      // Not clamped: these are call counts, not rates, and squeezing a mean of
+      // 14 tool calls into [0,1] would turn a measurement into a 1.
+      ...(m.meanModelCalls === undefined
+        ? {}
+        : { modelCalls: rawMeasure(m.meanModelCalls, countOf("meanModelCalls"), at) }),
+      ...(m.meanToolCalls === undefined
+        ? {}
+        : { toolCalls: rawMeasure(m.meanToolCalls, countOf("meanToolCalls"), at) }),
     },
     evidence: {
-      evalSampleCount: trusted ? profile.evidence.evalSampleCount + n : profile.evidence.evalSampleCount,
+      evalSampleCount: trusted
+        ? profile.evidence.evalSampleCount + summary.sampleCount
+        : profile.evidence.evalSampleCount,
       ...(at === undefined ? {} : { updatedAt: at }),
     },
   };
@@ -235,6 +262,11 @@ export function applyEvaluation(profile: ModelProfile, summary: EvaluationSummar
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+/** A measure that keeps its own scale, with authority from its own sample count. */
+function rawMeasure(value: number, n: number, at: string | undefined): Measure {
+  return measure(value, n >= MIN_SAMPLES_FOR_EVIDENCE ? "harness_eval" : "declared", n, at);
 }
 
 /**

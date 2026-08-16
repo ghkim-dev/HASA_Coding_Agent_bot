@@ -18,6 +18,7 @@ import { reduceTask } from "../agent/taskReducer.ts";
 import { describeTask } from "../agent/taskState.ts";
 import { interpretRequest } from "../router/bootstrap.ts";
 import { buildRegistry } from "../router/modelRegistry.ts";
+import { loadEvidence } from "../router/evaluationStore.ts";
 import { routeTurn, routingEvent, selectedWorkerFor } from "../router/routing.ts";
 import { projectTaskSemanticProfile } from "../router/semanticProfile.ts";
 import { ShadowRunner } from "../router/shadowRunner.ts";
@@ -183,7 +184,23 @@ for (const [id, value] of conversabilityFor({
 })) {
   converses.set(id, value);
 }
-const registry = buildRegistry(listing.models, [], { converses });
+// Whatever a sweep has measured against this gateway, if anything.
+//
+// The second argument was `[]` at every call site for three slices, which is
+// why `selectionBasis` has always come back `eligibility_then_deterministic_
+// tie_break`: with no evaluation the capability, evaluation and efficiency
+// terms are all neutral for every candidate and the ranking has nothing to
+// rank on. An empty result here is reported, not hidden — a recommendation
+// that lost its evidence and one that never had any produce the same list and
+// very different explanations.
+const evidence = await loadEvidence({
+  baseUrl: process.env["HASA_BASE_URL"] ?? "",
+  now: Date.now(),
+});
+const registry = buildRegistry(listing.models, evidence.summaries, { converses });
+out(
+  `evidence   : ${evidence.unusable ?? `${evidence.summaries.length} model summaries from ${evidence.file?.measuredAt ?? "?"}`}`,
+);
 
 // --- bootstrap -------------------------------------------------------------
 section("BOOTSTRAP");
