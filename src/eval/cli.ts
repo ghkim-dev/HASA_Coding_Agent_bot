@@ -81,7 +81,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       const wanted = args.modelIds;
       models = wanted === undefined ? live.models : live.models.filter((m) => wanted.includes(m.id));
       conversability = live.conversability;
-      note = `MODE: controlled world, live models — ${live.models.map((m) => m.id).join(", ")}`;
+      // The models actually swept, not the ones the gateway offered. Printing
+      // the pre-filter list made a run look like it covered models it never
+      // called — including two the pool filter had just removed.
+      note = `MODE: controlled world, live models — ${models.map((m) => m.id).join(", ")}`;
     }
   }
 

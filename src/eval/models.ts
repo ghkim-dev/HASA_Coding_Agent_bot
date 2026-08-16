@@ -4,8 +4,8 @@ import { HasaCatalog, canConverse } from "../provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
 import { protocolFor } from "../agent/autoModel.ts";
 import { conversabilityFor, fingerprint } from "../router/conversability.ts";
-import { semanticProfileFor } from "../router/modelSemanticCatalog.ts";
-import { roleIsWorker } from "../router/semanticProfile.ts";
+import { poolEffectFor } from "../router/modelSemanticCatalog.ts";
+import { DEFAULT_POOL } from "../router/semanticProfile.ts";
 import { fakeModel, GOOD, OVERCLAIMER, SLOPPY, STUBBORN } from "./fakeModels.ts";
 import type { ModelUnderTest } from "./sweep.ts";
 
@@ -75,21 +75,29 @@ export async function liveModels(opts: { limit?: number } = {}): Promise<LiveMod
       return { models: [], conversability: new Map(), unavailable: "The gateway rejected the credential." };
     }
     const listing = await provider.listModels();
-    // Chat-capable workers only, on the same evidence the router uses — see
-    // `conversability` below for what that evidence is and what it replaced.
+    // Chat-capable workers for *this* pool, on the same evidence the router
+    // uses — see `conversability` below for what that evidence is and what it
+    // replaced, and the pool comment inside the filter for the other half.
     //
-    // A role that is not a worker is excluded for a separate reason. Scoring a
-    // safety classifier on requirement recall measures the wrong thing about a
-    // model that is working exactly as deployed, and this module now feeds
-    // `evidence.ts`, so a wrong measurement becomes a wrong ranking rather than
-    // merely a wrong row in a table.
+    // It matters more here than in a picker because this module feeds
+    // `evidence.ts`: a model scored on the wrong scenarios becomes a wrong
+    // ranking rather than merely a wrong row in a table.
     const converses = await conversability(apiKey, baseUrl);
     const usable = listing.models
       .filter((m) => {
         if (converses.get(m.id) === false) return false;
         if (protocolFor(m.capabilities) === null) return false;
-        const semantic = semanticProfileFor(m.id).profile;
-        return semantic === null || roleIsWorker(semantic.role);
+        // Pool, not role.
+        //
+        // The first version of this asked `roleIsWorker`, and `roleIsWorker`
+        // answers true for `ocr_worker` and `vision_worker` — correctly, because
+        // they are workers, in their own pools. The question a coding benchmark
+        // has to ask is whether they are workers *here*, and that is
+        // `poolEffectFor`, which is why the role and the pool were separated in
+        // the first place. Asking the wrong one put `paddleocr-vl` and
+        // `qwen2.5-vl-72b` back on the list of models to score on twenty coding
+        // scenarios.
+        return !poolEffectFor(m.id, DEFAULT_POOL).excluded;
       })
       .slice(0, opts.limit ?? 3);
     if (usable.length === 0) {
