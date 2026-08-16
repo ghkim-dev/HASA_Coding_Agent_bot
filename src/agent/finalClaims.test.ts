@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { taskDisposition, validateFinalClaims } from "./finalClaims.ts";
+import { safeFallback, taskDisposition, validateFinalClaims } from "./finalClaims.ts";
 import type { Evidence, RequirementState, TaskState } from "./taskState.ts";
 import { defaultSummary } from "./loop.ts";
 
@@ -456,5 +456,68 @@ describe("a state built outside the reducer still reads correctly", () => {
       text: "테스트가 통과했습니다.",
     });
     assert.equal(result.valid, true, "an absent clock must not stale every observation");
+  });
+});
+
+describe("the fallback the runtime writes also passes the runtime's gate", () => {
+  /**
+   * `defaultSummary` had this invariant and `safeFallback` did not, so the same
+   * class of defect survived in the other half of the same boundary: a section
+   * label reading `- 완료: 코드 실행` is, read as a sentence, a completion claim.
+   * It was found by making the evaluator and the runtime share one definition —
+   * the two-definition setup had been hiding it.
+   */
+  const shapes: Array<{ name: string; state: TaskState; termination?: string }> = [
+    {
+      name: "some passed, some pending, an open issue",
+      state: task({
+        requirements: [
+          requirement({ id: "r1", description: "코드 실행", status: "passed" }),
+          requirement({ id: "r2", description: "요청 확인", status: "pending" }),
+        ],
+        issues: [
+          { id: "i1", summary: "run_command", detail: "exit 1", at: 1, status: "open" },
+        ] as TaskState["issues"],
+        changedFiles: ["main.py"],
+      }),
+    },
+    {
+      name: "everything failed",
+      state: task({ requirements: [requirement({ status: "failed" })] }),
+    },
+    {
+      name: "everything blocked",
+      state: task({ status: "blocked", requirements: [requirement({ status: "blocked" })] }),
+    },
+    { name: "nothing recorded at all", state: task() },
+    {
+      name: "stopped for repeating itself",
+      state: task({ requirements: [requirement({ status: "passed" })] }),
+      termination: "no_progress",
+    },
+  ];
+
+  for (const { name, state, termination } of shapes) {
+    test(`${name}`, () => {
+      const disposition = taskDisposition(state, termination);
+      const text = safeFallback(state, disposition, termination);
+      const result = validateFinalClaims({
+        task: state,
+        disposition,
+        text,
+        ...(termination === undefined ? {} : { termination }),
+      });
+      assert.equal(
+        result.valid,
+        true,
+        `the runtime's own summary was refused: ${result.violations.map((v) => `${v.kind} @ ${v.sentence}`).join(" | ")}`,
+      );
+    });
+  }
+
+  test("a null task still produces a summary the gate accepts", () => {
+    const text = safeFallback(null, "active");
+    const result = validateFinalClaims({ task: null, disposition: "active", text });
+    assert.equal(result.valid, true);
   });
 });

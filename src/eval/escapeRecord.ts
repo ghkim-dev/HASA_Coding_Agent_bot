@@ -1,6 +1,7 @@
 import type { RunTrace } from "./runner.ts";
 import type { ScenarioResult } from "./report.ts";
-import { claimsCompletion } from "./metrics.ts";
+import { unsupportedCompletionIn } from "./metrics.ts";
+import { reduceTask } from "../agent/taskReducer.ts";
 
 /**
  * What a harness invariant failure looked like, in enough detail to fix it.
@@ -152,7 +153,7 @@ export function escapeRecordsFor(
     // seventeen records and would have made the fix look less effective than it
     // was. The same predicate the invariant is measured with, so the count here
     // and the count in the scoreboard cannot drift.
-    if (summary.length === 0 || !claimsCompletion(turn)) continue;
+    if (summary.length === 0 || !unsupportedCompletionIn(turn, reduceTask(trace.recorded, result.scenario.id))) continue;
     const reason = turn.result?.reason ?? "unknown";
 
     const { path, reason: why } = classifyEscape({

@@ -429,7 +429,18 @@ export function safeFallback(task: TaskState | null, disposition: TaskDispositio
     const section = (label: string, items: readonly string[]): void => {
       if (items.length > 0) lines.push(`- ${label}: ${items.join(", ")}`);
     };
-    section("완료", by("passed"));
+    // "확인됨", not "완료".
+    //
+    // This line is a section label listing which requirements passed, and the
+    // gate reads `- 완료: 코드 실행` as a sentence claiming completion — which,
+    // read alone, is exactly what it looks like. The runtime's own fallback
+    // therefore failed the runtime's own gate, in the same way `defaultSummary`
+    // did and for the same reason: text written about the record, in the
+    // vocabulary of a verdict.
+    //
+    // `describeDisposition` already says "요구사항이 모두 확인되었습니다", so
+    // this is the vocabulary the rest of the file uses for the same idea.
+    section("확인됨", by("passed"));
     section("실패", by("failed"));
     section("막힘", by("blocked"));
     section("아직 실행 안 함", [...by("pending"), ...by("in_progress")]);
