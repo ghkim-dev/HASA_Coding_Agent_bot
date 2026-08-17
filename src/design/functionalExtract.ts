@@ -87,6 +87,13 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   { pattern: verb("개선", "(?:하|해)"), action: "modify" },
   { pattern: verb("리팩터링", "(?:하|해)"), action: "modify" },
   { pattern: /바꿔(?:줘|주세요|주)/, action: "modify" },
+  // The plain stem, which only `바꿔주-` covered. "이름을 바꾸되", "이름을 바꾸고",
+  // "이름을 바꾸면서" are ordinary requests and produced no requirement at all —
+  // and every one of them is half of a rename-versus-keep pair, so the sentences
+  // that most need a conflict check were the ones that reached it with nothing to
+  // compare. Negation is still decided once, below, so "바꾸지 마" stays a
+  // prohibition rather than becoming a request to change something.
+  { pattern: /바꾸(?:되|고|면|니|는|어|었|자|라|시)/, action: "modify" },
   { pattern: verb("추가", "(?:하|해)"), action: "create" },
   { pattern: verb("구현", "(?:하|해)"), action: "create" },
   { pattern: /만들어(?:줘|주세요|주)/, action: "create" },
@@ -274,9 +281,15 @@ function objectParticle(object: string): string {
  * the general rule already ends the prohibition there and everything after it is
  * the positive request the user actually made. It had a dedicated branch until
  * mutation testing showed that deleting it changed no behaviour at all.
+ *
+ * `-되` is here for "이름을 바꾸되 기존 동작은 유지해줘" — "do X but Y", which is
+ * two requests and was read as one. Since only the first matching verb in a clause
+ * becomes a requirement and `유지` is tried before `바꾸`, the whole sentence came
+ * out as a lone preserve and the rename it was contrasted with vanished. A space
+ * after a Hangul syllable is required, so "안 되" and "적용되었다" are untouched.
  */
 const BOUNDARIES =
-  /(?<=[.!?。])(?=\s|$)|(?<=[가-힣]고\s)|(?<=한\s*뒤\s)|(?<=한\s*다음\s)|(?<=면서\s)|(?<=,\s)/;
+  /(?<=[.!?。])(?=\s|$)|(?<=[가-힣]고\s)|(?<=[가-힣]되\s)|(?<=한\s*뒤\s)|(?<=한\s*다음\s)|(?<=면서\s)|(?<=,\s)/;
 
 /**
  * Functional candidates in one turn.

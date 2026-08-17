@@ -552,6 +552,9 @@ export function markConflicts(specs: readonly RequirementSpec[]): RequirementSpe
   const KEEP = /유지|보존|그대로|keep|preserve/;
   const CHANGE = /바꾸|변경|이름을|rename|change|replace/;
   const conflicts = new Map<string, string[]>();
+  const add = (id: string, other: string): void => {
+    conflicts.set(id, [...(conflicts.get(id) ?? []), other]);
+  };
 
   for (const a of specs) {
     for (const b of specs) {
@@ -560,13 +563,81 @@ export function markConflicts(specs: readonly RequirementSpec[]): RequirementSpe
       const opposed =
         (KEEP.test(a.text) && CHANGE.test(b.text) && sharedSubject(a.text, b.text)) ||
         (a.polarity !== b.polarity && subjectOf(a) !== null && subjectOf(a) === subjectOf(b));
-      if (opposed) conflicts.set(a.id, [...(conflicts.get(a.id) ?? []), b.id]);
+      if (opposed) add(a.id, b.id);
+      // The acts and the thing they are about, rather than two texts sharing a
+      // word. Marked on both sides, because both requirements are blocked until
+      // the user says which one wins.
+      if (actsCollide(a, b)) {
+        add(a.id, b.id);
+        add(b.id, a.id);
+      }
     }
   }
 
   return specs.map((spec) =>
     conflicts.has(spec.id) ? { ...spec, conflicts: [...new Set(conflicts.get(spec.id))] } : spec,
   );
+}
+
+/** Acts that alter what is already there. `create` adds and contradicts nothing. */
+const CHANGING_ACTS: ReadonlySet<string> = new Set(["modify", "remove"]);
+
+/**
+ * Whether one requirement asks to change the very thing another asks to keep.
+ *
+ * The text-based rule above could not see this. `sharedSubject` filters `이름` out
+ * of its noun list — sensibly, since it is a common word — and `이름` is exactly
+ * the noun that "함수 이름을 바꿔주고 기존 이름도 그대로 유지해줘" shares. Relaxing
+ * that filter was the obvious fix and the wrong one: it makes any two sentences
+ * mentioning a name look contradictory.
+ *
+ * So this reads the two things the runtime already recorded — the act, and the
+ * noun phrase the act applies to — and asks whether they are opposed *about the
+ * same subject*. A subject is the head noun plus its qualifier, and the qualifier
+ * is what separates the pairs:
+ *
+ *     함수 이름  ↔  기존 이름     같은 대상 (기존 은 앞의 것을 가리킨다) → 충돌
+ *     파일 이름  ↔  함수 이름     다른 대상                            → 충돌 아님
+ *     함수 이름  ↔  API 동작      다른 것                              → 충돌 아님
+ *     내부 이름  ↔  외부 호환성   다른 것                              → 충돌 아님
+ *
+ * Both requirements must come from the user's own words. A model's proposal is
+ * `ambiguous` and already blocks execution on its own; letting one raise a
+ * conflict would let a paraphrase invalidate something the user actually said.
+ */
+function actsCollide(a: RequirementSpec, b: RequirementSpec): boolean {
+  if (a.derivedBy !== "runtime_action" || b.derivedBy !== "runtime_action") return false;
+  if (a.act !== "preserve") return false;
+  if (b.act === undefined || !CHANGING_ACTS.has(b.act)) return false;
+  if (a.target === undefined || b.target === undefined) return false;
+  return sameTargetPhrase(a.target, b.target);
+}
+
+/**
+ * Qualifiers that point back at something already mentioned rather than naming a
+ * different thing.
+ *
+ * "기존 이름" in a sentence that has just said "함수 이름" *is* that name. Treating
+ * `기존` as a distinguishing modifier is what let the pair through: two different
+ * qualifiers normally mean two different subjects, and this is the class where
+ * they do not.
+ */
+const ANAPHORIC = /^(?:기존|현재|원래|본래|지금|이전|종전|그|해당|이|그대로)$/;
+
+/** Whether two target phrases name the same thing. Head noun plus qualifier. */
+function sameTargetPhrase(left: string, right: string): boolean {
+  const parts = (phrase: string): { head: string; qualifier: string | null } => {
+    const words = phrase.trim().split(/\s+/).filter((w) => w.length > 0);
+    const head = words[words.length - 1] ?? "";
+    return { head, qualifier: words.length > 1 ? (words[words.length - 2] ?? null) : null };
+  };
+  const a = parts(left);
+  const b = parts(right);
+  if (a.head.length === 0 || a.head !== b.head) return false;
+  if (a.qualifier === null || b.qualifier === null) return true;
+  if (a.qualifier === b.qualifier) return true;
+  // One side points back at what the other named.
+  return ANAPHORIC.test(a.qualifier) || ANAPHORIC.test(b.qualifier);
 }
 
 /** Whether two requirement texts talk about the same noun. Coarse on purpose. */
