@@ -44,6 +44,17 @@ export interface PreviewTurn {
 export type ProposalOutcome =
   /** Every parse outcome, kept distinct. See `proposalParse.ts`. */
   | ParseOutcome
+  /**
+   * The answer claimed authority it does not have, and was refused for that.
+   *
+   * Its own outcome rather than a coordinate problem. A model that sends
+   * `derivedBy`, `status`, `sourceText` or an `id` is not miscounting characters
+   * — it is asserting that the runtime already confirmed something, and the two
+   * failures have nothing in common but the word "rejected". Aggregating them
+   * meant a prompt that leaks authority fields read as a span bug, so every fix
+   * anyone reached for was the wrong one.
+   */
+  | "provenance_rejected"
   /** Parsed, and the coordinates did not survive the span check. */
   | "span_rejected"
   /** Coordinates were fine and the requirement said the opposite of them. */
@@ -231,12 +242,19 @@ export async function previewDesign(input: {
 }
 
 /**
- * Which of the four ways a turn's proposals failed, or that they did not.
+ * Which of the ways a turn's proposals failed, or that they did not.
  *
- * Ordered by where the failure happened, earliest first, because that is where
- * the fix goes. A turn whose items were refused for their coordinates is a
- * prompt problem; one refused for meaning is the model reading the request
- * backwards; and nothing coming back at all is neither.
+ * Ordered by what the failure *is*, not by where in the pipeline it was caught,
+ * because that is what decides the fix. A turn refused for claiming authority is
+ * a prompt that leaked fields the model may not send; one refused for its
+ * coordinates is a prompt problem about offsets; one refused for meaning is the
+ * model reading the request backwards; and nothing coming back at all is none of
+ * those. Four fixes, four outcomes.
+ *
+ * Authority first when a turn produced both. It is the only one of these that is
+ * an attempt to be believed rather than a mistake, and `acceptProposals` refuses
+ * it before it looks at anything else — so an outcome that named the span
+ * problem instead would be describing a check that never ran.
  */
 function outcomeOf(
   parse: ParseResult,
@@ -247,6 +265,7 @@ function outcomeOf(
   // Nothing survived the requirement checks, so the parse outcome is the
   // answer — unless the checks are what rejected it, which is later and more
   // specific.
+  if (refused.some((r) => r.reasons.includes("forged_provenance"))) return "provenance_rejected";
   if (refused.some((r) => r.reasons.includes("semantics_reversed"))) return "semantics_rejected";
   if (refused.length > 0) return "span_rejected";
   return parse.outcome;

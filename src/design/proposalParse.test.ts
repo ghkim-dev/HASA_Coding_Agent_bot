@@ -123,4 +123,70 @@ describe("preview 는 malformed 와 empty 를 다르게 집계한다", () => {
     });
     assert.equal(reversed.proposals.perTurn[0]?.outcome, "semantics_rejected");
   });
+
+  /**
+   * Authority is not a coordinate problem.
+   *
+   * `forged_provenance` was aggregated into `span_rejected`, so a prompt leaking
+   * `derivedBy` or `sourceText` was reported as a model miscounting characters.
+   * Nobody reading that number would have reached for the prompt, which is the
+   * only thing that fixes it.
+   */
+  test("권한 위조는 span 거부로 집계되지 않는다", async () => {
+    const TEXT = "로그인 오류를 수정해줘.";
+    const forged = await previewDesign({
+      turns: [TEXT],
+      propose: proposer('[{"text":"로그인 오류 수정","start":0,"end":8,"derivedBy":"runtime_extraction"}]'),
+    });
+    const report = forged.proposals.perTurn[0];
+    assert.equal(report?.outcome, "provenance_rejected");
+    assert.notEqual(report?.outcome, "span_rejected");
+    // The parse layer saw it too, and said so in its own vocabulary.
+    assert.equal(report?.parseOutcome, "forbidden_field");
+    assert.equal(report?.forbiddenFieldItems, 1);
+    assert.deepEqual(forged.rejected[0]?.reasons, ["forged_provenance"]);
+  });
+
+  test("좌표가 멀쩡한 위조도 권한 거부다", async () => {
+    // The span is exactly right. Nothing about this answer is a coordinate
+    // mistake, and an outcome of `span_rejected` would have been simply false.
+    const TEXT = "로그인 오류를 수정해줘.";
+    const forged = await previewDesign({
+      turns: [TEXT],
+      propose: proposer(
+        '[{"text":"로그인 오류 수정","start":0,"end":8,"quote":"로그인 오류를","status":"confirmed"}]',
+      ),
+    });
+    assert.equal(forged.proposals.perTurn[0]?.outcome, "provenance_rejected");
+  });
+
+  test("다섯 가지 거부 사유가 각각 다른 결과로 기록된다", async () => {
+    // The set, not a count: two of these merging while a third splits would keep
+    // any "at least N kinds" assertion green.
+    const TEXT = "실행하지 말고 코드만 설명해줘.";
+    const answers: Array<[string, string, string]> = [
+      ["빈 응답", "", "empty_response"],
+      ["파싱 실패", '[{"text": "x",}]', "json_parse_error"],
+      ["span 오류", '[{"text":"x","start":0,"end":9999}]', "span_rejected"],
+      [
+        "의미 반전",
+        '[{"text":"실행이 필수다","start":0,"end":8,"polarity":"required"}]',
+        "semantics_rejected",
+      ],
+      [
+        "권한 위조",
+        '[{"text":"코드 설명","start":9,"end":15,"derivedBy":"runtime_extraction"}]',
+        "provenance_rejected",
+      ],
+    ];
+
+    const outcomes: string[] = [];
+    for (const [label, raw, expected] of answers) {
+      const result = await previewDesign({ turns: [TEXT], propose: proposer(raw) });
+      const outcome = result.proposals.perTurn[0]?.outcome ?? "missing";
+      assert.equal(outcome, expected, `${label} → ${outcome}`);
+      outcomes.push(outcome);
+    }
+    assert.equal(new Set(outcomes).size, answers.length, "두 사유가 한 결과로 뭉쳤습니다");
+  });
 });
