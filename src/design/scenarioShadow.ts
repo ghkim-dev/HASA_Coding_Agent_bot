@@ -65,10 +65,59 @@ export interface RequirementSource {
   act?: string;
 }
 
+/**
+ * One name per cause, whichever layer noticed it.
+ *
+ * The blueprint and the audit describe the same problems in two vocabularies —
+ * `requirement_target_unresolved` and `TARGET_UNRESOLVED`, and a
+ * `NO_DESIGN_RULE` that always arrives with `UNSUPPORTED_REQUIREMENT_KIND` beside
+ * it. Deduplicating the strings left all of those standing, so one open target
+ * counted as two problems and "미해결 7건" described five.
+ *
+ * So the two vocabularies are mapped onto one, and the raw names are kept on the
+ * item. Nothing is merged that the map does not name: an unrecognised code
+ * becomes its own cause rather than quietly joining another.
+ */
+export type UnresolvedCause =
+  | "target_unresolved"
+  | "condition_unsettled"
+  | "requirement_conflict"
+  | "semantic_alignment_unknown"
+  | "requirement_ambiguous"
+  | "no_design_rule"
+  | "no_user_requirement"
+  /** A code this map does not know. Carried as-is; never merged. */
+  | `other:${string}`;
+
+const CAUSE_OF_ASPECT: Readonly<Record<string, UnresolvedCause>> = {
+  requirement_target_unresolved: "target_unresolved",
+  condition_unsettled: "condition_unsettled",
+  conflicts_with_another_requirement: "requirement_conflict",
+  semantic_alignment_unknown: "semantic_alignment_unknown",
+  requirement_is_ambiguous: "requirement_ambiguous",
+  no_design_rule_for_this_requirement: "no_design_rule",
+};
+
+const CAUSE_OF_FINDING: Readonly<Record<string, UnresolvedCause>> = {
+  TARGET_UNRESOLVED: "target_unresolved",
+  UNRESOLVED_CONDITION: "condition_unsettled",
+  REQUIREMENT_CONFLICT: "requirement_conflict",
+  SEMANTIC_ALIGNMENT_UNKNOWN: "semantic_alignment_unknown",
+  AMBIGUOUS_DECIDED: "requirement_ambiguous",
+  NO_DESIGN_RULE: "no_design_rule",
+  // The audit emits this one beside `NO_DESIGN_RULE`, always and only. Two names
+  // for "the designer has no rule for this kind", not two problems.
+  UNSUPPORTED_REQUIREMENT_KIND: "no_design_rule",
+  NO_USER_REQUIREMENT: "no_user_requirement",
+};
+
 export interface UnresolvedItem {
   requirementId: string;
-  /** A finding code, or an aspect a blueprint said it could not settle. */
-  aspect: string;
+  cause: UnresolvedCause;
+  /** Which layer noticed it. Both, when both did. */
+  origins: Array<"blueprint" | "audit">;
+  /** The raw names, so a reader can trace the cause back to its source. */
+  aspects: string[];
 }
 
 export interface ShadowScenarioResult {
@@ -151,10 +200,32 @@ export function shadowScenarioFrom(input: {
     }
 
     const notMapped: ShadowScenarioResult["notMapped"] = [];
-    const unresolved: UnresolvedItem[] = [];
     const requirementSources: RequirementSource[] = [];
     const rules: string[] = [];
     const coverage: string[] = [];
+
+    // One entry per requirement and cause, folded as it is collected rather than
+    // filtered at the end. The previous version deduplicated the array on the way
+    // out and left `about` counting the raw list, so the sentence a user reads
+    // disagreed with the data beside it: "미해결 4건" over two items.
+    const causes = new Map<string, UnresolvedItem>();
+    const noteUnresolved = (
+      requirementId: string,
+      raw: string,
+      origin: "blueprint" | "audit",
+    ): void => {
+      const cause =
+        (origin === "blueprint" ? CAUSE_OF_ASPECT[raw] : CAUSE_OF_FINDING[raw]) ??
+        (`other:${raw}` as UnresolvedCause);
+      const key = `${requirementId}|${cause}`;
+      const existing = causes.get(key);
+      if (existing === undefined) {
+        causes.set(key, { requirementId, cause, origins: [origin], aspects: [raw] });
+        return;
+      }
+      if (!existing.origins.includes(origin)) existing.origins.push(origin);
+      if (!existing.aspects.includes(raw)) existing.aspects.push(raw);
+    };
 
     for (const spec of specs) {
       requirementSources.push({
@@ -175,7 +246,7 @@ export function shadowScenarioFrom(input: {
         rules.push(blueprint.designRuleId);
         coverage.push(...blueprint.oracleCoverage);
         for (const aspect of blueprint.unresolvedAspects) {
-          unresolved.push({ requirementId: spec.id, aspect });
+          noteUnresolved(spec.id, aspect, "blueprint");
         }
       }
     }
@@ -183,8 +254,12 @@ export function shadowScenarioFrom(input: {
     // Findings the closure could not repair are unresolved whether or not a
     // blueprint mentioned them.
     for (const finding of preview.closure.unresolved) {
-      unresolved.push({ requirementId: finding.subject, aspect: finding.code });
+      noteUnresolved(finding.subject, finding.code, "audit");
     }
+
+    // Computed once, here, and used by every reader below — the count in `about`,
+    // the array in the result, and therefore the JSON and the advanced output.
+    const unresolved = [...causes.values()];
 
     const turns: EvalTurn[] = preview.turns.map((turn) => {
       const here = specs.filter((spec) => (spec.span?.turnId ?? spec.sourceTurnId) === turn.turnId);
@@ -304,11 +379,7 @@ export function shadowScenarioFrom(input: {
       requirementSources,
       designRulesUsed: sorted(rules),
       oracleCoverage: sorted(coverage),
-      // One entry per requirement and aspect. Every blueprint for a requirement
-      // repeats that requirement's unresolved aspects, so the raw list said
-      // `requirement_target_unresolved` three times for one open target and made
-      // a count of unresolved items a count of blueprints.
-      unresolved: dedupe(unresolved),
+      unresolved,
       notMapped,
     };
   } catch (err) {
@@ -319,19 +390,6 @@ export function shadowScenarioFrom(input: {
       detail: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
     });
   }
-}
-
-/** One entry per requirement and aspect, in first-seen order. */
-function dedupe(items: readonly UnresolvedItem[]): UnresolvedItem[] {
-  const seen = new Set<string>();
-  const out: UnresolvedItem[] = [];
-  for (const item of items) {
-    const key = `${item.requirementId}|${item.aspect}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
-  }
-  return out;
 }
 
 /** Hostnames a source requirement named, read from the requirement's own text. */

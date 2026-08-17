@@ -245,15 +245,19 @@ describe("결과는 자신의 근거를 기록한다", () => {
     assert.deepEqual(result.oracleCoverage, [...result.oracleCoverage].sort());
   });
 
-  test("미해결 항목과 옮기지 못한 것이 이름을 갖는다", () => {
-    const result = shadowScenarioFrom({ id: "shadow-10", preview });
-    // The plan for these two turns has an act with no target, so something must
-    // be unresolved — a shadow reporting an empty list here would be the failure
-    // `unresolvedAspects` exists to prevent.
+  test("미해결 항목과 옮기지 못한 것이 이름을 갖는다", async () => {
+    // A plan with something genuinely open. The two-turn preview above no longer
+    // has one: every act in it now has a design rule, so its only remaining
+    // unresolved entries were `NO_DESIGN_RULE` — which is the improvement, and
+    // makes it the wrong preview for asserting that open items get named.
+    const open = await previewDesign({ turns: ["테스트해줘."] });
+    const result = shadowScenarioFrom({ id: "shadow-10", preview: open });
     assert.ok(result.unresolved.length > 0, "미해결이 하나도 없다고 보고했습니다");
     for (const item of result.unresolved) {
       assert.ok(item.requirementId.length > 0);
-      assert.ok(item.aspect.length > 0);
+      assert.ok(item.cause.length > 0);
+      assert.ok(item.aspects.length > 0, `${item.cause} 의 원래 이름이 없습니다`);
+      assert.ok(item.origins.length > 0);
     }
     assert.ok(
       result.notMapped.some((n) => n.subject === "world"),
@@ -284,16 +288,48 @@ describe("EvalScenario 로서 쓸 만한가", () => {
     assert.ok(!first.includes("run_command"), `실행이 금지된 턴에 ${first.join(", ")} 을 제안했습니다`);
   });
 
-  test("미해결 항목은 요구사항·항목 쌍마다 하나다", async () => {
+  test("미해결 항목은 요구사항·원인 쌍마다 하나다", async () => {
     // The single turn, deliberately: it has a requirement with an open target and
     // three blueprints that each repeat that aspect, so the raw list counts one
     // open target three times. The two-turn preview has no such repetition and
-    // would pass whether or not anything deduplicated.
+    // would pass whether or not anything was folded.
     const single = await previewDesign({ turns: [TURNS[0] as string] });
     const result = shadowScenarioFrom({ id: "shadow-18", preview: single });
-    const keys = result.unresolved.map((u) => `${u.requirementId}|${u.aspect}`);
+    const keys = result.unresolved.map((u) => `${u.requirementId}|${u.cause}`);
     assert.ok(keys.length > 0);
-    assert.equal(new Set(keys).size, keys.length, `같은 항목이 여러 번 세어졌습니다: ${keys.join(", ")}`);
+    assert.equal(new Set(keys).size, keys.length, `같은 원인이 여러 번 세어졌습니다: ${keys.join(", ")}`);
+  });
+
+  test("Blueprint 와 Audit 이 같은 문제를 두 번 세지 않는다", async () => {
+    // `requirement_target_unresolved` and `TARGET_UNRESOLVED` are one open target
+    // in two vocabularies. Counting both said "미해결 2건" about one problem.
+    const single = await previewDesign({ turns: ["테스트해줘."] });
+    const result = shadowScenarioFrom({ id: "shadow-19", preview: single });
+    const target = result.unresolved.filter((u) => u.cause === "target_unresolved");
+    assert.equal(target.length, 1, JSON.stringify(result.unresolved));
+    assert.deepEqual(target[0]?.origins.sort(), ["audit", "blueprint"]);
+    assert.deepEqual(
+      target[0]?.aspects.sort(),
+      ["TARGET_UNRESOLVED", "requirement_target_unresolved"],
+      "원래 이름을 잃어버리면 추적할 수 없습니다",
+    );
+  });
+
+  test("about 의 개수와 unresolved 배열의 길이가 같다", async () => {
+    // The defect this closes: `about` counted the list before it was folded, so a
+    // user read "미해결 7건" beside five items — and the JSON, the advanced output
+    // and any future stored record all read the same number now because there is
+    // only one.
+    for (const text of ["설명해줘.", "테스트해줘.", "로그인 오류를 수정하고 테스트해줘."]) {
+      const one = await previewDesign({ turns: [text] });
+      const result = shadowScenarioFrom({ id: "shadow-20", preview: one });
+      const stated = /미해결 (\d+)건/.exec(result.scenario?.about ?? "")?.[1];
+      assert.equal(
+        Number(stated),
+        result.unresolved.length,
+        `${text}: about 은 ${stated}건, 배열은 ${result.unresolved.length}건`,
+      );
+    }
   });
 
   test("사용자가 금지하지 않은 것을 금지로 옮기지 않는다", async () => {
