@@ -44,18 +44,34 @@ const EXECUTE = /실행|돌리|구동|run\b|execute/;
 const ANALYSE_ONLY = /분석만|설명만|보여주기만|읽기만|analy[sz]e only|only explain/;
 const PAST_FAILURE = /못했|실패했|안\s*됐|failed|couldn't/;
 /**
- * `하면서` is "while doing", not "if". See the note in `sourceSpan.ts`.
+ * A condition the sentence puts on the work, spelled by ending rather than by
+ * the syllable `면`.
  *
- * And `하면 안 돼` is not a condition either — it is how Korean forbids
- * something, so "실행하면 안 돼" states a prohibition with nothing unsettled about
- * it. Read as a condition it produced the question "이 조건을 어떻게 확인해야 할지
- * 정해지지 않았습니다" about a sentence that had no condition in it, and blocked a
- * prohibition the runtime had understood perfectly. The lookahead is narrow on
- * purpose: "실패하면 안전하게 롤백해줘" is still a condition, because `안전` is not
- * the negation.
+ * Four wrong answers shaped this pattern, and three of them were false positives.
+ *
+ * `하면서` is "while doing", not "if" — see the note in `sourceSpan.ts`. Excluded
+ * by requiring whitespace or punctuation after the ending, which is where a
+ * conditional clause actually stops.
+ *
+ * `하면 안 돼` is how Korean forbids something. "실행하면 안 돼" states a
+ * prohibition with nothing unsettled in it, and read as a condition it produced
+ * "이 조건을 어떻게 확인해야 할지 정해지지 않았습니다" about a sentence with no
+ * condition — blocking a prohibition the runtime had understood perfectly. The
+ * lookahead stays narrow: "실패하면 안전하게 롤백해줘" is still a condition, because
+ * `안전` is not the negation.
+ *
+ * `가능하면` is a *priority*, not a condition. "가능하면 로그 포맷도 정리해줘" is an
+ * optional request, which `priorityFrom` below already reads as `may` from the
+ * very same word; counting it twice asked the user to settle a condition they had
+ * not set.
+ *
+ * And the false negative: `깨지면` and `없으면` are ordinary conditions that
+ * neither `하면` nor `이면` ever matched, so "빌드가 깨지면 의존성을 되돌려줘" was
+ * planned as unconditional work. The stems are enumerated rather than reduced to a
+ * bare `면`, which would match `화면` and `측면`.
  */
 const CONDITION =
-  /라면|이면(?!서)|하면(?!서)(?!\s*안\s*(?:돼|되|된|됩))|경우|한해|일\s*때|if\b|when\b|unless\b/;
+  /(?<!가능)(?:[하되지으우이라]면|경우|한해|일\s*때)(?=[\s,.)\]]|$)(?!\s*안\s*(?:돼|되|된|됩))|if\b|when\b|unless\b/;
 const SOFT = /가능하면|가급적|되도록|원하면|if possible|preferably|nice to have/;
 const HARD = /반드시|꼭|필수|무조건|must\b|required/;
 const WHOLE = /전체|모든|전부|모두|저장소\s*전체|all files|entire|whole repo/;

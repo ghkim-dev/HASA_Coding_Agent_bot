@@ -29,7 +29,12 @@ const NOTHING_ASKED = [
   "",
   "안녕하세요!",
   "안녕하세요, 반갑습니다.",
-  "이 코드가 왜 실패하는지 알려줄래?",
+  // A question that asks for no work. "이 코드가 왜 실패하는지 알려줄래?" was on
+  // this list and does not belong: it asks the agent to look and report, which is
+  // a requirement — the extractor was silent about it, and silence read as
+  // "nothing was asked".
+  "그건 얼마나 걸려?",
+  "지금 몇 시야?",
   "적당히 잘 좀 해줘.",
   "   ",
 ];

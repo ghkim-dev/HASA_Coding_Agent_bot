@@ -104,21 +104,21 @@ describe("Gold 집합 자체", () => {
 });
 
 describe("요구사항 정확성 — 분모를 함께", () => {
-  test("recall 59/59", () => {
-    assert.deepEqual(score.requirementRecall, { hit: 59, of: 59, value: 1 });
+  test("recall 61/61", () => {
+    assert.deepEqual(score.requirementRecall, { hit: 61, of: 61, value: 1 });
     assert.deepEqual(score.missed, [], "놓친 요구사항이 있습니다");
   });
 
   test("precision 59/59 — 발명이 0이다", () => {
     // The one that must never slip. A missing requirement is visible to the user
     // as work not done; an invented one is work they never asked for.
-    assert.deepEqual(score.requirementPrecision, { hit: 59, of: 59, value: 1 });
+    assert.deepEqual(score.requirementPrecision, { hit: 61, of: 61, value: 1 });
     assert.deepEqual(score.spurious, [], "요청에 없는 요구사항을 만들었습니다");
   });
 
-  test("target 정확도 59/59, span 근거 59/59", () => {
-    assert.deepEqual(score.targetAccuracy, { hit: 59, of: 59, value: 1 });
-    assert.deepEqual(score.spanGrounding, { hit: 59, of: 59, value: 1 });
+  test("target 정확도 61/61, span 근거 61/61", () => {
+    assert.deepEqual(score.targetAccuracy, { hit: 61, of: 61, value: 1 });
+    assert.deepEqual(score.spanGrounding, { hit: 61, of: 61, value: 1 });
   });
 
   test("relation 48/48", () => {
@@ -147,13 +147,13 @@ describe("요구사항 정확성 — 분모를 함께", () => {
 });
 
 describe("질문 정확성 — 분모를 함께", () => {
-  test("recall 12/12, precision 13/13", () => {
+  test("recall 13/13, precision 14/14", () => {
     // Precision was 11/33. The 22 false positives were all `NO_DESIGN_RULE` —
     // the plan asking a user to design its verification rules — and they are gone
     // because the five missing act rules were written, not because the question
     // was suppressed: recall went *up* at the same time, from 11/12 to 12/12.
-    assert.deepEqual(score.questionRecall, { hit: 12, of: 12, value: 1 });
-    assert.deepEqual(score.questionPrecision, { hit: 13, of: 13, value: 1 });
+    assert.deepEqual(score.questionRecall, { hit: 13, of: 13, value: 1 });
+    assert.deepEqual(score.questionPrecision, { hit: 14, of: 14, value: 1 });
   });
 
   test("초과 질문이 하나도 없다", () => {
@@ -169,7 +169,7 @@ describe("질문 정확성 — 분모를 함께", () => {
       (sum, gold) => sum + questionsFrom(previews.get(gold.id) as PreviewResult).length,
       0,
     );
-    assert.equal(askedTotal, 13);
+    assert.equal(askedTotal, 14);
     assert.deepEqual(score.missingQuestions, []);
     for (const gold of GOLD_CASES) {
       if (gold.questions.expected.length === 0) continue;

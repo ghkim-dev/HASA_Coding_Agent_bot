@@ -14,13 +14,11 @@
       "AMBIGUOUS_DECIDED",
       "TARGET_UNRESOLVED"
     ],
-    "exactQuestionSubjects": [
-      "t1-act-modify-2"
-    ],
+    "exactQuestionSubjects": [],
     "mustContainText": [
       "API 호환성을 그대로 유지한다",
       "응답 속도를 수정한다"
     ]
   },
-  "note": "inspect·preserve 설계 규칙이 생긴 뒤로 이 요구사항들은 NO_DESIGN_RULE 을 내지 않으므로 질문 대상에서 빠졌다. 남은 대상은 여전히 규칙이 없는 유형이다."
+  "note": "inspect·preserve 설계 규칙이 생긴 뒤로 이 요구사항들은 NO_DESIGN_RULE 을 내지 않으므로 질문 대상에서 빠졌다. 남은 대상은 여전히 규칙이 없는 유형이다. '가능하면' 은 우선순위(may)이지 조건이 아니다. 조건으로 읽어 UNRESOLVED_CONDITION 을 묻던 질문이 사라졌고, priority 는 그대로 may 로 남는다."
 }

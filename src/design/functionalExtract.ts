@@ -74,7 +74,10 @@ const verb = (stem: string, tail: string): RegExp => new RegExp(`${stem}${GAP}${
 const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   { pattern: verb("재실행", "(?:하|해|시켜)"), action: "execute" },
   { pattern: verb("실행", "(?:하|해|시켜)"), action: "execute" },
-  { pattern: /돌려(?:줘|주세요|주|봐)/, action: "execute" },
+  // `되돌려` is not `돌려`: "의존성을 되돌려줘" is a revert, and this pattern was
+  // matching the tail of it and producing "의존성 되를 실행한다" — a made-up target
+  // for an act the user did not ask for.
+  { pattern: /(?<!되)돌려(?:줘|주세요|주|봐)/, action: "execute" },
   { pattern: verb("테스트", "(?:하|해)"), action: "verify" },
   { pattern: verb("검증", "(?:하|해)"), action: "verify" },
   { pattern: verb("확인", "(?:하|해)"), action: "verify" },
@@ -94,6 +97,13 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // compare. Negation is still decided once, below, so "바꾸지 마" stays a
   // prohibition rather than becoming a request to change something.
   { pattern: /바꾸(?:되|고|면|니|는|어|었|자|라|시)/, action: "modify" },
+  { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: "modify" },
+  { pattern: verb("정리", "(?:하|해)"), action: "modify" },
+  { pattern: verb("갱신", "(?:하|해)"), action: "modify" },
+  // English stems, because Korean sentences use them with a Korean ending:
+  // "refactor 해줘", "fix 해줘". The particle gap already allows the space.
+  { pattern: verb("refactor", "(?:하|해)"), action: "modify" },
+  { pattern: verb("fix", "(?:하|해)"), action: "modify" },
   { pattern: verb("추가", "(?:하|해)"), action: "create" },
   { pattern: verb("구현", "(?:하|해)"), action: "create" },
   { pattern: /만들어(?:줘|주세요|주)/, action: "create" },
@@ -103,6 +113,9 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   { pattern: verb("설명", "(?:하|해)"), action: "inspect" },
   { pattern: /보여(?:줘|주세요|주)/, action: "inspect" },
   { pattern: /찾아(?:줘|주세요|주|봐)/, action: "inspect" },
+  // "원인을 알려줘" is a request to look and report, and one of the most common
+  // shapes there is. It produced nothing at all.
+  { pattern: /알려(?:줘|주세요|주|줄래|주라|다오)/, action: "inspect" },
 ];
 
 /**
@@ -146,7 +159,7 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|오늘|어제|내일)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -160,6 +173,21 @@ const NOT_AN_OBJECT =
  * nothing to modify tells the runtime nothing it could verify.
  */
 const ACT_IS_ENOUGH: ReadonlySet<ActionKind> = new Set<ActionKind>(["verify", "execute", "inspect"]);
+
+/**
+ * Endings that close a clause, spelled out rather than by their last syllable.
+ *
+ * This was `/(?:면|고|서|며)$/` — a single syllable — and it dropped every noun
+ * that happens to end in one of them. "문서를 갱신해줘" produced no requirement at
+ * all, because `문서` ends in `서` and was read as a connective; so did `명세서`,
+ * `순서`, `화면` and `측면`. The development set contained no such noun, which is
+ * why a holdout set exists.
+ *
+ * These endings attach to verb stems, so the stem is part of the pattern. `-고`
+ * and `-면서` are absent on purpose: the clause splitter already breaks on both,
+ * so a token ending in them cannot sit in front of a verb in the same clause.
+ */
+const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되이]며|는지|은지|을지|인지)$/u;
 
 /**
  * The object of a verb: the noun phrase immediately before it.
@@ -194,6 +222,19 @@ function objectBefore(clause: string, verbStart: number): string {
     // appear. The rest wait until the phrase is chosen — see below.
     out = out.replace(/[을를]$/u, "").trim();
 
+    // The same token with a case particle taken off, for the grammar tests only.
+    //
+    // `오늘은` is a time plus `은`, and `낡은` is an adjective whose ending happens
+    // to be the same syllable. Testing the bare form separates them without a
+    // rule about which syllable means what: `오늘` is in the list below and `낡`
+    // is not. Breaking on a trailing `은`/`는` instead — which is what this
+    // replaced — dropped every adnominal modifier, so "낡은 설정을 삭제하고" targeted
+    // `설정` and "낡은 핸들러" targeted `핸들러`.
+    //
+    // `이`/`가`/`만` come off for the same reason: "무엇이 문제인지만 알려줘" named no
+    // target, and reading `무엇이` as a noun made one up out of the question word.
+    const bare = out.replace(/[은는만이가]$/u, "");
+
     return {
       text: out,
       // Not part of a noun phrase, whatever it is next to. Three kinds, and each
@@ -203,8 +244,10 @@ function objectBefore(clause: string, verbStart: number): string {
       grammar:
         out.length === 0 ||
         NOT_AN_OBJECT.test(out) ||
+        NOT_AN_OBJECT.test(bare) ||
         located !== token ||
-        /(?:면|고|서|며)$/u.test(out),
+        CLAUSE_ENDING.test(out) ||
+        CLAUSE_ENDING.test(bare),
     };
   });
 
@@ -225,10 +268,6 @@ function objectBefore(clause: string, verbStart: number): string {
       if (kept.length === 0) continue;
       break;
     }
-    // A topic-marked modifier belongs to a different phrase: "오늘은 main.py를"
-    // is a time and a file, not a two-word target. The head may carry the
-    // particle — it comes off below — so this applies to modifiers only.
-    if (kept.length > 0 && /[은는]$/u.test(token.text)) break;
     kept.unshift(token.text);
   }
 

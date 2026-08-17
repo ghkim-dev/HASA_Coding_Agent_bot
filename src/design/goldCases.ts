@@ -33,6 +33,14 @@ import type { GoldCase } from "./goldRequirements.ts";
  *   3. All 43 cases — the `executable` axis was **added** (2026-08-18). It records
  *      whether the harness could run the plan, which `startable` never claimed;
  *      see the field's own note in `goldRequirements.ts`.
+ *   4. `question-turn` — a requirement was **added** (2026-08-18). "이 오류가 왜
+ *      나는지 알려줄래?" asks the agent to look and report, and the original answer
+ *      recorded nothing because the extractor had no verb for `알려주다`. An answer
+ *      that agrees with a gap is the failure mode this history exists to catch;
+ *      the holdout set found the same verb missing from a different sentence.
+ *   5. `negation-jin-form` — a requirement was **added** (2026-08-18), same cause.
+ *      "무엇이 문제인지만 알려줘" is a request; its target is `null` because the
+ *      sentence names none, so the plan is right to ask which one.
  *
  * No answer has been changed in the other direction — to agree with output that
  * disagreed with the Korean.
@@ -193,12 +201,16 @@ export const GOLD_CASES: readonly GoldCase[] = [
         relation: "new_task",
         requirements: [
           { action: "forbid_modify", polarity: "forbidden", target: null, quote: "수정하진 마" },
+          // "무엇이 문제인지만 알려줘" is a request to look and report. Its object is
+          // the embedded question, not a code target — the sentence names no
+          // target, so the plan should ask for one.
+          { action: "inspect", polarity: "required", target: null, quote: "알려줘" },
         ],
       },
     ],
-    questions: { expected: [], max: 2 },
-    startable: true,
-    executable: true,
+    questions: { expected: ["TARGET_UNRESOLVED"], max: 2 },
+    startable: false,
+    executable: false,
   },
   {
     id: "negation-myeon-an",
@@ -284,7 +296,13 @@ export const GOLD_CASES: readonly GoldCase[] = [
       {
         text: "이 오류가 왜 나는지 알려줄래?",
         relation: "question",
-        requirements: [],
+        // A question in form and a request in content: "tell me why" asks the
+        // agent to look and report. The first draft recorded no requirement here,
+        // which matched an extractor that had no verb for `알려주다` — an answer
+        // copied from a gap.
+        requirements: [
+          { action: "inspect", polarity: "required", target: "오류", quote: "알려줄래" },
+        ],
       },
     ],
     questions: { expected: [], max: 2 },
