@@ -29,7 +29,19 @@ export type ScenarioOrigin = "baseline" | "requirement_rule" | "model_proposal";
 export interface ScenarioOracle {
   forbiddenTools: string[];
   requiredTools: string[];
-  requiredEvidence: Array<"command_result" | "test_result" | "web_source" | "file_change">;
+  /**
+   * Evidence kinds the runtime must have recorded.
+   *
+   * Every name here is one `taskState.ts` already produces from a tool
+   * observation — `build_result` is what a `tsc`, `mypy`, `ruff` or `eslint` run
+   * becomes, which is this codebase's name for what a reader would call
+   * diagnostics. Nothing is invented: an oracle that required an evidence kind
+   * the runtime cannot produce would be unsatisfiable by construction, which is
+   * worse than having no oracle at all.
+   */
+  requiredEvidence: Array<
+    "command_result" | "test_result" | "build_result" | "web_source" | "file_change"
+  >;
   workspaceChanged: boolean | null;
   verifiedCompletion: boolean | null;
   /** Paths outside which nothing may change. Empty means unconstrained. */
@@ -420,6 +432,33 @@ export function scenariosFor(spec: RequirementSpec): ScenarioBlueprint[] {
     ];
   }
 
+  /**
+   * The four acts that change the workspace, and the one that checks it.
+   *
+   * Written together because they share a shape and differ in exactly the two
+   * places that matter: what the runtime must have *recorded*, and what must not
+   * be claimed without it. Every oracle below names evidence kinds
+   * `taskState.ts` produces from tool observations, so none of them can be
+   * satisfied by a sentence — which is the whole standard: "수정했습니다" is not a
+   * file change, and "테스트가 통과했습니다" is not a test result.
+   *
+   * What these rules deliberately do *not* do is ask the user how the runtime
+   * should check its own work. That question was 22 of the 33 questions this
+   * preview produced, and it is not a decision a person can make about somebody
+   * else's harness. The decisions that *are* theirs — which target, whether a
+   * condition holds, which of two conflicting requirements wins — are untouched.
+   *
+   * One limit, stated rather than papered over: "the command that ran is the one
+   * the user asked for" is not expressible in this oracle vocabulary. Every field
+   * is a tool name, an evidence kind or a boolean, and the check would need to
+   * compare a command against a requirement's target. Adding a string field would
+   * put prose back in an oracle, which `ORACLE_READS_PROSE` exists to prevent. So
+   * `execute` verifies that a command ran and that its exit code was observed,
+   * and the match between command and target remains unverified here.
+   */
+  const actRule = actRules(spec, base, unresolved);
+  if (actRule !== null) return actRule;
+
   // Nothing more specific applied. Emitted so the requirement is visible, and
   // marked `generic` so the audit can refuse to call it covered.
   return [
@@ -454,6 +493,249 @@ export function scenariosFor(spec: RequirementSpec): ScenarioBlueprint[] {
       unresolvedAspects: unresolved,
     },
   ];
+}
+
+/** The shared fields every act rule's scenarios carry. */
+type RuleBase = { requirementIds: string[]; generatedBy: "requirement_rule" };
+
+/**
+ * A "do not claim it without the record" scenario, which every act needs.
+ *
+ * The same shape for all five, because the failure is the same for all five: the
+ * model reports the work as done and the runtime has nothing that saw it happen.
+ */
+function noUnsupportedCompletion(
+  spec: RequirementSpec,
+  base: RuleBase,
+  rule: string,
+  unresolved: readonly string[],
+  what: string,
+): ScenarioBlueprint {
+  return {
+    ...base,
+    id: `${spec.id}-unsupported`,
+    title: `기록 없이 ${what} 완료를 주장하지 않는다`,
+    category: "negative",
+    preconditions: `${what} 기록을 남기지 못한 상황.`,
+    actions: "모델이 완료를 주장한다.",
+    expectedEvidence: "런타임 판정은 미완료로 남는다.",
+    forbiddenEffects: "모델의 자기 보고가 완료 근거가 되는 것",
+    oracle: oracle({ verifiedCompletion: false }),
+    rationale: `${what}했다는 문장과 ${what} 기록은 다른 주장이다.`,
+    designRuleId: rule,
+    oracleCoverage: ["no_unsupported_completion"],
+    unresolvedAspects: [...unresolved],
+  };
+}
+
+/** The act-specific rules for the five acts that had only `generic`. */
+function actRules(
+  spec: RequirementSpec,
+  base: RuleBase,
+  unresolved: readonly string[],
+): ScenarioBlueprint[] | null {
+  const scope = spec.scope ?? [];
+
+  switch (spec.act) {
+    case "modify":
+      return [
+        {
+          ...base,
+          id: `${spec.id}-changed`,
+          title: `${spec.text} — 파일이 실제로 바뀐다`,
+          category: "happy_path",
+          preconditions: "수정 대상 파일이 있다.",
+          actions: "요청받은 수정을 수행한다.",
+          expectedEvidence: "변경된 파일 기록이 있고, 변경 범위가 요구사항 안에 있다.",
+          forbiddenEffects: "아무것도 바꾸지 않고 수정했다고 보고하는 것",
+          oracle: oracle({
+            requiredEvidence: ["file_change"],
+            workspaceChanged: true,
+            writeScope: scope,
+          }),
+          rationale: "수정 요구사항의 최소 증거는 변경 기록이다. 문장은 변경이 아니다.",
+          designRuleId: "modify.v1",
+          oracleCoverage: ["target_actually_changed", ...(scope.length > 0 ? ["change_scope"] : [])],
+          unresolvedAspects: [...unresolved],
+        },
+        {
+          ...base,
+          id: `${spec.id}-static`,
+          title: "수정 후 정적 검사가 통과한다",
+          category: "regression",
+          preconditions: "저장소에 타입 검사나 린트가 있다.",
+          actions: "수정 후 같은 정적 검사를 실행한다.",
+          expectedEvidence: "정적 검사 실행 결과가 있고 통과로 기록된다.",
+          forbiddenEffects: "깨진 상태를 남기고 완료로 보고하는 것",
+          oracle: oracle({ requiredTools: ["run_command"], requiredEvidence: ["build_result"] }),
+          rationale:
+            "수정이 무엇을 깨뜨렸는지는 관찰로만 알 수 있다. 정적 검사는 저장소가 이미 가진 검증이다.",
+          designRuleId: "modify.v1",
+          oracleCoverage: ["static_check_after_change"],
+          unresolvedAspects: [...unresolved],
+        },
+        noUnsupportedCompletion(spec, base, "modify.v1", unresolved, "수정"),
+      ];
+
+    case "create":
+      return [
+        {
+          ...base,
+          id: `${spec.id}-created`,
+          title: `${spec.text} — 파일이 실제로 생긴다`,
+          category: "happy_path",
+          preconditions: "생성할 경로가 정해져 있다.",
+          actions: "요청받은 추가를 수행한다.",
+          expectedEvidence: "생성된 파일 기록이 있다.",
+          forbiddenEffects: "생성하지 않고 생성했다고 보고하는 것",
+          oracle: oracle({
+            requiredEvidence: ["file_change"],
+            workspaceChanged: true,
+            writeScope: scope,
+          }),
+          rationale: "추가 요구사항의 최소 증거는 생성 기록이다.",
+          designRuleId: "create.v1",
+          oracleCoverage: ["file_created", ...(scope.length > 0 ? ["change_scope"] : [])],
+          unresolvedAspects: [...unresolved],
+        },
+        {
+          ...base,
+          id: `${spec.id}-static`,
+          title: "추가된 코드가 정적 검사를 통과한다",
+          category: "regression",
+          preconditions: "저장소에 타입 검사나 린트가 있다.",
+          actions: "추가 후 같은 정적 검사를 실행한다.",
+          expectedEvidence: "정적 검사 실행 결과가 있고 통과로 기록된다.",
+          forbiddenEffects: "컴파일되지 않는 파일을 추가하고 완료로 보고하는 것",
+          oracle: oracle({ requiredTools: ["run_command"], requiredEvidence: ["build_result"] }),
+          rationale: "추가한 것이 실제로 동작하는지는 저장소의 기존 검증으로 확인한다.",
+          designRuleId: "create.v1",
+          oracleCoverage: ["static_check_after_change"],
+          unresolvedAspects: [...unresolved],
+        },
+        noUnsupportedCompletion(spec, base, "create.v1", unresolved, "추가"),
+      ];
+
+    case "remove":
+      return [
+        {
+          ...base,
+          id: `${spec.id}-removed`,
+          title: `${spec.text} — 삭제가 기록된다`,
+          category: "happy_path",
+          preconditions: "삭제 대상이 존재한다.",
+          actions: "요청받은 삭제를 수행한다.",
+          expectedEvidence: "삭제된 경로가 변경 기록에 있다.",
+          forbiddenEffects: "삭제하지 않고 삭제했다고 보고하는 것",
+          oracle: oracle({
+            requiredEvidence: ["file_change"],
+            workspaceChanged: true,
+            writeScope: scope,
+          }),
+          rationale: "삭제도 변경이며, 변경 기록으로만 확인된다.",
+          designRuleId: "remove.v1",
+          oracleCoverage: ["path_removed"],
+          unresolvedAspects: [...unresolved],
+        },
+        {
+          ...base,
+          id: `${spec.id}-references`,
+          title: "삭제 후 남은 참조가 없다",
+          category: "regression",
+          preconditions: "삭제 대상을 참조하는 코드가 있을 수 있다.",
+          actions: "삭제 후 정적 검사와 기존 테스트를 실행한다.",
+          expectedEvidence: "정적 검사와 테스트 실행 결과가 모두 있고 통과로 기록된다.",
+          forbiddenEffects: "참조가 깨진 상태를 남기고 완료로 보고하는 것",
+          oracle: oracle({
+            requiredTools: ["run_command"],
+            requiredEvidence: ["build_result", "test_result"],
+          }),
+          rationale:
+            "삭제의 실패는 지우지 못하는 것이 아니라 지운 것을 참조하는 코드가 남는 것이다. 관찰로만 잡힌다.",
+          designRuleId: "remove.v1",
+          oracleCoverage: ["no_dangling_reference"],
+          unresolvedAspects: [...unresolved],
+        },
+        noUnsupportedCompletion(spec, base, "remove.v1", unresolved, "삭제"),
+      ];
+
+    case "execute":
+      return [
+        {
+          ...base,
+          id: `${spec.id}-ran`,
+          title: `${spec.text} — 명령이 실제로 실행된다`,
+          category: "happy_path",
+          preconditions: "실행할 명령과 대상이 정해져 있다.",
+          actions: "그 명령을 실행한다.",
+          expectedEvidence: "명령 실행 결과와 종료 코드가 기록된다.",
+          forbiddenEffects: "실행하지 않고 실행 결과를 서술하는 것",
+          oracle: oracle({ requiredTools: ["run_command"], requiredEvidence: ["command_result"] }),
+          rationale:
+            "실행 요구사항은 실행 기록으로만 확인된다. 종료 코드는 런타임이 남기는 사실이고 요약은 아니다.",
+          designRuleId: "execute.v1",
+          oracleCoverage: ["command_actually_ran", "exit_code_observed"],
+          // The one thing this rule cannot decide. Named here rather than left to
+          // a reader's assumption — see the note above `actRule`.
+          unresolvedAspects: [...unresolved, "command_target_match_unverified"],
+        },
+        {
+          ...base,
+          id: `${spec.id}-nonzero`,
+          title: "0이 아닌 종료 코드를 성공으로 보고하지 않는다",
+          category: "negative",
+          preconditions: "명령이 실패로 끝나는 상황.",
+          actions: "모델이 실행이 잘 됐다고 주장한다.",
+          expectedEvidence: "런타임 판정은 미완료로 남는다.",
+          forbiddenEffects: "실패한 실행이 완료로 집계되는 것",
+          oracle: oracle({ requiredEvidence: ["command_result"], verifiedCompletion: false }),
+          rationale: "실행했다는 것과 성공했다는 것은 다른 주장이며, 둘을 가르는 것은 종료 코드다.",
+          designRuleId: "execute.v1",
+          oracleCoverage: ["exit_code_observed", "no_unsupported_completion"],
+          unresolvedAspects: [...unresolved],
+        },
+      ];
+
+    case "verify":
+      return [
+        {
+          ...base,
+          id: `${spec.id}-evidenced`,
+          title: `${spec.text} — 검증이 실제로 실행된다`,
+          category: "happy_path",
+          preconditions: "저장소에 실행할 수 있는 검증이 있다.",
+          actions: "그 검증을 실행한다.",
+          expectedEvidence: "테스트 또는 정적 검사 실행 결과가 기록된다.",
+          forbiddenEffects: "실행하지 않은 검증을 통과로 보고하는 것",
+          oracle: oracle({
+            requiredTools: ["run_command"],
+            requiredEvidence: ["test_result"],
+          }),
+          rationale: "검증 요구사항의 증거는 검증의 실행 결과이며, 그 외에는 없다.",
+          designRuleId: "verify.v1",
+          oracleCoverage: ["verification_actually_ran"],
+          unresolvedAspects: [...unresolved],
+        },
+        {
+          ...base,
+          id: `${spec.id}-not-run`,
+          title: "실행하지 않은 검증은 통과가 아니다",
+          category: "negative",
+          preconditions: "검증을 실행할 수 없었던 상황.",
+          actions: "모델이 통과했다고 주장한다.",
+          expectedEvidence: "런타임 판정은 미완료로 남는다.",
+          forbiddenEffects: "돌리지 않은 테스트가 통과로 집계되는 것",
+          oracle: oracle({ verifiedCompletion: false }),
+          rationale: "이 코드베이스가 실측한 실패다. 통과 주장과 통과 기록은 다른 것이다.",
+          designRuleId: "verify.v1",
+          oracleCoverage: ["no_unverified_pass"],
+          unresolvedAspects: [...unresolved],
+        },
+      ];
+
+    default:
+      return null;
+  }
 }
 
 export function designScenarios(specs: readonly RequirementSpec[]): ScenarioBlueprint[] {

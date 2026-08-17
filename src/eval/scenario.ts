@@ -126,7 +126,9 @@ export interface EvalScenario {
   /** Requirements that must survive to the end. Defaults to the union of turn requirements. */
   standingRequirements?: string[];
   /** Evidence kinds the task must end with, when the request needed running something. */
-  requiredEvidence?: Array<"command_result" | "test_result" | "web_source" | "file_change">;
+  requiredEvidence?: Array<
+    "command_result" | "test_result" | "build_result" | "web_source" | "file_change"
+  >;
   /** How the run should end, when the scenario is about the ending. */
   expectedTermination?: string[];
   /** True when finishing is not the point — a stall scenario, for instance. */

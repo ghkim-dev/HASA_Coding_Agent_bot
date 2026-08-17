@@ -16,11 +16,11 @@
       "AMBIGUOUS_DECIDED"
     ],
     "exactQuestionSubjects": [
-      "t1-act-execute-2",
-      "t1-act-modify-1"
+      "t1-act-execute-2"
     ],
     "mustContainText": [
       "원인을 수정한다"
     ]
-  }
+  },
+  "note": "modify·create·remove·execute·verify 설계 규칙이 생긴 뒤로 NO_DESIGN_RULE 은 질문이 아니라 Advanced Details 항목이다. 남은 질문 대상은 사용자만 정할 수 있는 것뿐이다."
 }

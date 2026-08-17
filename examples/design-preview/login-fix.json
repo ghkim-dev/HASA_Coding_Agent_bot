@@ -2,7 +2,7 @@
   "turns": [
     "로그인 오류를 수정하고 테스트해줘."
   ],
-  "note": "offline 경로는 금지도 출처도 없는 평범한 기능 요청에서 요구사항을 만들지 못한다. mustContainKinds 를 비워 둔 것은 그 사실의 기록이며, 모델 제안이 붙는 지점이다.",
+  "note": "offline 경로는 금지도 출처도 없는 평범한 기능 요청에서 요구사항을 만들지 못한다. mustContainKinds 를 비워 둔 것은 그 사실의 기록이며, 모델 제안이 붙는 지점이다. modify·create·remove·execute·verify 설계 규칙이 생긴 뒤로 NO_DESIGN_RULE 은 질문이 아니라 Advanced Details 항목이다. 남은 질문 대상은 사용자만 정할 수 있는 것뿐이다.",
   "expect": {
     "mustContainKinds": [
       "functional",
@@ -22,7 +22,6 @@
       "AMBIGUOUS_DECIDED"
     ],
     "exactQuestionSubjects": [
-      "t1-act-modify-1",
       "t1-act-verify-2"
     ],
     "mustContainText": [

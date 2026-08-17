@@ -184,35 +184,157 @@ describe("Oracle 은 런타임 증거만 읽는다", () => {
   });
 });
 
-describe("규칙이 없는 유형은 계속 없다고 말한다", () => {
-  test("modify·execute·create·remove·verify 는 여전히 generic 이다", () => {
-    // The honest half. If this ever passes by silence, somebody widened the
-    // fallback instead of writing a rule.
-    const cases: Array<[string, string]> = [
-      ["로그인 오류를 수정해줘.", "modify"],
-      ["main.py를 실행해줘.", "execute"],
-      ["로그인 테스트를 추가해줘.", "create"],
-      ["사용하지 않는 import를 제거해줘.", "remove"],
-      ["테스트해줘.", "verify"],
+describe("일곱 가지 act 에 모두 규칙이 있다", () => {
+  test("각 act 가 자기 규칙을 갖는다", () => {
+    const cases: Array<[string, string, string]> = [
+      ["로그인 오류를 수정해줘.", "modify", "modify.v1"],
+      ["main.py를 실행해줘.", "execute", "execute.v1"],
+      ["로그인 테스트를 추가해줘.", "create", "create.v1"],
+      ["사용하지 않는 import를 제거해줘.", "remove", "remove.v1"],
+      ["결과를 확인해줘.", "verify", "verify.v1"],
+      ["handleLogin 함수를 설명해줘.", "inspect", "inspect.v1"],
+      ["기존 동작은 그대로 유지해줘.", "preserve", "preserve.v1"],
     ];
-    for (const [text, act] of cases) {
+    for (const [text, act, rule] of cases) {
       const spec = specsFor(text).find((s) => s.act === act);
       assert.ok(spec !== undefined, `${text} 에서 ${act} 를 찾지 못했습니다`);
       const rules = scenariosFor(spec).map((s) => s.designRuleId);
-      assert.ok(rules.includes(GENERIC_RULE), `${act} 에 규칙이 생겼다면 이 테스트를 갱신하십시오`);
+      assert.ok(rules.includes(rule), `${act} → ${rules.join(", ")}`);
+      assert.ok(!rules.includes(GENERIC_RULE), `${act} 가 아직 generic 입니다`);
     }
   });
 
-  test("generic 은 여전히 NO_DESIGN_RULE 을 낸다", async () => {
+  test("각 규칙의 oracle 은 런타임이 실제로 남기는 증거만 요구한다", () => {
+    // `taskState.ts` produces exactly these from tool observations. An oracle
+    // asking for anything else could never be satisfied, which is a worse lie
+    // than having no oracle.
+    const PRODUCED = new Set(["command_result", "test_result", "build_result", "web_source", "file_change"]);
+    for (const text of [
+      "로그인 오류를 수정해줘.",
+      "main.py를 실행해줘.",
+      "로그인 테스트를 추가해줘.",
+      "사용하지 않는 import를 제거해줘.",
+      "결과를 확인해줘.",
+    ]) {
+      for (const spec of specsFor(text)) {
+        for (const scenario of scenariosFor(spec)) {
+          for (const kind of scenario.oracle.requiredEvidence) {
+            assert.ok(PRODUCED.has(kind), `${scenario.id} 가 ${kind} 를 요구합니다`);
+          }
+          assert.ok(decidesSomething(scenario), `${scenario.id} 의 oracle 이 아무것도 판정하지 않습니다`);
+        }
+      }
+    }
+  });
+
+  test("실행하지 않은 검증을 통과로 보고할 수 없다", () => {
+    const spec = specsFor("결과를 확인해줘.").find((s) => s.act === "verify");
+    assert.ok(spec !== undefined);
+    const scenarios = scenariosFor(spec);
+    const ran = scenarios.find((s) => s.category === "happy_path");
+    assert.ok(ran?.oracle.requiredEvidence.includes("test_result"), "실행 결과를 요구하지 않습니다");
+    const notRun = scenarios.find((s) => s.id.endsWith("-not-run"));
+    assert.equal(notRun?.oracle.verifiedCompletion, false);
+  });
+
+  test("수정·추가·삭제는 변경 기록을 요구한다", () => {
+    for (const [text, act] of [
+      ["로그인 오류를 수정해줘.", "modify"],
+      ["로그인 테스트를 추가해줘.", "create"],
+      ["사용하지 않는 import를 제거해줘.", "remove"],
+    ] as const) {
+      const spec = specsFor(text).find((s) => s.act === act);
+      assert.ok(spec !== undefined);
+      const happy = scenariosFor(spec).find((s) => s.category === "happy_path");
+      assert.ok(happy?.oracle.requiredEvidence.includes("file_change"), `${act}: 변경 기록을 요구하지 않습니다`);
+      assert.equal(happy?.oracle.workspaceChanged, true);
+    }
+  });
+
+  test("실행은 명령 실행 기록과 종료 코드로 판정한다", () => {
+    const spec = specsFor("main.py를 실행해줘.").find((s) => s.act === "execute");
+    assert.ok(spec !== undefined);
+    const scenarios = scenariosFor(spec);
+    const ran = scenarios.find((s) => s.id.endsWith("-ran"));
+    assert.ok(ran?.oracle.requiredEvidence.includes("command_result"));
+    assert.ok(ran?.oracleCoverage.includes("exit_code_observed"));
+    // And the limit is written down rather than implied: whether the command that
+    // ran is the one the user asked for is not decidable from this vocabulary.
+    assert.ok(
+      ran?.unresolvedAspects.includes("command_target_match_unverified"),
+      "판정할 수 없는 것을 판정한 것처럼 두었습니다",
+    );
+  });
+
+  test("삭제는 남은 참조까지 확인한다", () => {
+    const spec = specsFor("사용하지 않는 import를 제거해줘.").find((s) => s.act === "remove");
+    assert.ok(spec !== undefined);
+    const regression = scenariosFor(spec).find((s) => s.category === "regression");
+    assert.ok(regression?.oracle.requiredEvidence.includes("build_result"));
+    assert.ok(regression?.oracle.requiredEvidence.includes("test_result"));
+    assert.ok(regression?.oracleCoverage.includes("no_dangling_reference"));
+  });
+});
+
+describe("규칙이 없는 것은 계속 없다고 말한다", () => {
+  test("act 가 없는 요구사항은 여전히 generic 이고 NO_DESIGN_RULE 을 낸다", () => {
+    // The honest half, and the only thing keeping the five new rules from being a
+    // widened fallback. A model's proposal carries no act — the runtime did not
+    // read a verb, a model wrote a sentence — so nothing act-specific can apply
+    // and the audit still says the designer has no rule for it.
+    const spec = specsFor("로그인 오류를 수정해줘.")[0] as RequirementSpec;
+    const proposed: RequirementSpec = {
+      ...spec,
+      id: "t1-model-1",
+      derivedBy: "model_proposal",
+      intent: "ambiguous",
+      act: undefined,
+      target: undefined,
+    };
+    const rules = scenariosFor(proposed).map((s) => s.designRuleId);
+    assert.ok(rules.includes(GENERIC_RULE), rules.join(", "));
+
+    const audit = auditCoverage({ requirements: [proposed], scenarios: scenariosFor(proposed) });
+    const codes = audit.findings.map((f) => f.code);
+    assert.ok(codes.includes("NO_DESIGN_RULE"), codes.join(", "));
+    assert.ok(codes.includes("UNSUPPORTED_REQUIREMENT_KIND"), codes.join(", "));
+  });
+
+  test("NO_DESIGN_RULE 은 사용자 질문이 되지 않는다", async () => {
+    // A gap in this codebase is not a decision a user can make. It stays a
+    // finding — see the advanced output below — and leaves the question list.
     const result = await previewDesign({ turns: ["로그인 오류를 수정해줘."] });
-    const codes = result.closure.audit.findings.map((f) => f.code);
-    assert.ok(codes.includes("NO_DESIGN_RULE"));
+    assert.ok(!questionsFrom(result).some((q) => q.code === "NO_DESIGN_RULE"));
+  });
+
+  test("Advanced Details 에는 그대로 남는다", () => {
+    const proposed: RequirementSpec = {
+      ...(specsFor("로그인 오류를 수정해줘.")[0] as RequirementSpec),
+      id: "t1-model-1",
+      derivedBy: "model_proposal",
+      intent: "ambiguous",
+      act: undefined,
+      target: undefined,
+    };
+    const audit = auditCoverage({ requirements: [proposed], scenarios: scenariosFor(proposed) });
+    assert.ok(audit.findings.some((f) => f.code === "NO_DESIGN_RULE"));
+    assert.equal(audit.ok, false, "규칙이 없는데 감사를 통과했습니다");
   });
 
   test("규칙이 생긴 유형은 질문에서 사라진다", async () => {
-    for (const text of ["handleLogin 함수를 설명해줘.", "기존 동작은 그대로 유지해줘."]) {
+    for (const text of [
+      "handleLogin 함수를 설명해줘.",
+      "기존 동작은 그대로 유지해줘.",
+      "로그인 오류를 수정해줘.",
+      "main.py를 실행해줘.",
+      "사용하지 않는 import를 제거해줘.",
+    ]) {
       const result = await previewDesign({ turns: [text] });
-      assert.deepEqual(questionsFrom(result), [], `${text} 에 대해 여전히 묻고 있습니다`);
+      assert.deepEqual(
+        questionsFrom(result),
+        [],
+        `${text} 에 대해 여전히 묻고 있습니다: ${JSON.stringify(questionsFrom(result).map((q) => q.code))}`,
+      );
     }
   });
 });

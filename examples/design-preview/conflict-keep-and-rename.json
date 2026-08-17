@@ -14,13 +14,11 @@
       "AMBIGUOUS_DECIDED",
       "TARGET_UNRESOLVED"
     ],
-    "exactQuestionSubjects": [
-      "t1-act-modify-2"
-    ],
+    "exactQuestionSubjects": [],
     "mustContainText": [
       "응답 형식을 그대로 유지한다",
       "필드 이름을 수정한다"
     ]
   },
-  "note": "inspect·preserve 설계 규칙이 생긴 뒤로 이 요구사항들은 NO_DESIGN_RULE 을 내지 않으므로 질문 대상에서 빠졌다. 남은 대상은 여전히 규칙이 없는 유형이다."
+  "note": "inspect·preserve 설계 규칙이 생긴 뒤로 이 요구사항들은 NO_DESIGN_RULE 을 내지 않으므로 질문 대상에서 빠졌다. 남은 대상은 여전히 규칙이 없는 유형이다. modify·create·remove·execute·verify 설계 규칙이 생긴 뒤로 NO_DESIGN_RULE 은 질문이 아니라 Advanced Details 항목이다. 남은 질문 대상은 사용자만 정할 수 있는 것뿐이다."
 }
