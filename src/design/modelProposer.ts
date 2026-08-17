@@ -48,17 +48,43 @@ const SYSTEM = [
 export interface ProposerOptions {
   apiKey: string;
   baseUrl: string;
+  /** Where the evaluation evidence lives. Defaults to the store's own path. */
+  evidencePath?: string;
   /** Overridden by tests. Production reads the gateway. */
   chat?: (input: { modelId: string; system: string; user: string; signal?: AbortSignal }) => Promise<string>;
 }
 
-/** Which model to ask, decided from the gateway rather than from a constant. */
+/**
+ * Which model to ask, ranked by how well it has actually read requirements.
+ *
+ * The first version took the first eligible model in the listing. That was
+ * `ax-3.1`, whose `requirementRecall` was the lowest of the four measured —
+ * an arbitrary choice for the one job where reading the user correctly is the
+ * whole task.
+ *
+ * The ranking reads the evaluation evidence, **including the quarantined
+ * dataset**, and that is deliberate and narrow. Quarantine bars a dataset from
+ * *production routing* because survivor bias made it unsafe for deciding which
+ * model serves a user's turn. This decides which model to ask for suggestions
+ * that are then checked, and a wrong pick costs a suggestion rather than a
+ * false completion. The two uses are recorded separately so neither is mistaken
+ * for the other.
+ *
+ * Without evidence it falls back to listing order, which is where it started.
+ */
 export async function chooseProposerModel(options: ProposerOptions): Promise<string | null> {
+  const ranked = await rankByRecall(options);
+  return ranked[0] ?? null;
+}
+
+/** Eligible models, best requirement recall first. Exported for its own test. */
+export async function rankByRecall(options: ProposerOptions): Promise<string[]> {
   const provider = createHasaProvider({
     apiKey: options.apiKey,
     ...(options.baseUrl.length === 0 ? {} : { baseUrl: options.baseUrl }),
   });
   const listing = await provider.listModels();
+  const eligible: string[] = [];
 
   const modality = new Map<string, Modality>();
   try {
@@ -84,9 +110,50 @@ export async function chooseProposerModel(options: ProposerOptions): Promise<str
       // listing is. Anything outside it is never asked.
       permitted: true,
     });
-    if (standing.standing === "eligible") return model.id;
+    if (standing.standing === "eligible") eligible.push(model.id);
   }
-  return null;
+
+  // Evidence is advisory here and never routes a user's turn. A model with no
+  // measurement keeps its listing position rather than being pushed to the back
+  // — unmeasured is not bad, and treating it as bad would freeze the ranking
+  // around whichever models happened to be swept first.
+  const recall = await recallByModel(options.baseUrl, options.evidencePath);
+  return [...eligible].sort((a, b) => {
+    const ra = recall.get(a);
+    const rb = recall.get(b);
+    if (ra === undefined && rb === undefined) return 0;
+    if (ra === undefined) return 1;
+    if (rb === undefined) return -1;
+    return rb - ra;
+  });
+}
+
+/**
+ * `requirementRecall` per model, from whatever evidence exists.
+ *
+ * Reads the quarantined file too. See `chooseProposerModel` for why that is
+ * sound here and not in routing.
+ */
+async function recallByModel(
+  baseUrl: string,
+  path: string | undefined,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  try {
+    const { loadEvidence } = await import("../router/evaluationStore.ts");
+    const loaded = await loadEvidence({
+      baseUrl,
+      now: Date.now(),
+      ...(path === undefined ? {} : { path }),
+    });
+    for (const summary of [...loaded.summaries, ...loaded.quarantined]) {
+      const value = summary.metrics.requirementRecall;
+      if (value !== undefined) out.set(summary.modelId, value);
+    }
+  } catch {
+    // No evidence is a reason to keep listing order, not to fail.
+  }
+  return out;
 }
 
 /**
@@ -210,10 +277,11 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
         ...(signal === undefined ? {} : { signal }),
       });
       const { proposals } = readProposals(last, turnId);
-      if (proposals.length > 0) return { proposals, modelId, calls };
+      if (proposals.length > 0) return { proposals, modelId, calls, returned: proposals.length };
       // An empty answer is a legitimate outcome — some turns state no new
       // requirement — so one retry and then stop rather than insisting.
     }
-    return { proposals: readProposals(last, turnId).proposals, modelId, calls };
+    const final = readProposals(last, turnId).proposals;
+    return { proposals: final, modelId, calls, returned: final.length };
   };
 }

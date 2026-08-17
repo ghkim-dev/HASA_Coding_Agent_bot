@@ -3,6 +3,7 @@ import { exactSourcesIn } from "../agent/sourceProvenance.ts";
 import type { TurnRelation } from "../agent/turnContract.ts";
 import { checkSpan, sentenceAround, type SourceSpan, type SpanProblem } from "./sourceSpan.ts";
 import { checkAlignment, conditionIn, priorityFrom, scopeIn, type Alignment } from "./semanticAlignment.ts";
+import { functionalCandidates } from "./functionalExtract.ts";
 
 /**
  * What the user asked for, in a form a verification plan can be built from.
@@ -53,6 +54,8 @@ export type DerivedBy =
   | "runtime_source"
   | "model_proposal"
   | "system_baseline"
+  /** A verb the user wrote, with the words in front of it. See `functionalExtract`. */
+  | "runtime_action"
   | "carried";
 
 export interface RequirementSpec {
@@ -108,6 +111,11 @@ export function confidenceFor(input: {
     case "runtime_prohibition":
     case "runtime_source":
       return input.aligned === false ? "ambiguous" : "confirmed";
+    case "runtime_action":
+      // Read from the user's words and still a reading. The runtime saw a verb
+      // and a noun; whether that is the requirement they meant is not
+      // something it can be right about.
+      return "ambiguous";
     case "system_baseline":
       return "confirmed";
     case "carried":
@@ -180,6 +188,37 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       dependencies: [],
       conflicts: [],
       derivedBy: "runtime_prohibition",
+    });
+  }
+
+  // Plain functional requests, which have no prohibition and no URL to read.
+  //
+  // `ambiguous` rather than `confirmed`, and the distinction is the point. A
+  // prohibition is something the runtime can be *right* about — the user wrote
+  // "하지 마". What a verb phrase means for a codebase is a reading, and this
+  // one is coarse: it belongs in the plan, visible, and needing the user or a
+  // model to settle it before it decides anything.
+  const claimed = new Set(out.map((spec) => spec.text));
+  for (const candidate of functionalCandidates(input)) {
+    if (claimed.has(candidate.text)) continue;
+    const sourceText = input.text.slice(candidate.span.start, candidate.span.end).trim();
+    const condition = conditionIn(sourceText);
+    out.push({
+      id: `${input.turnId}-act-${candidate.action}-${out.length + 1}`,
+      text: candidate.text,
+      sourceText,
+      span: candidate.span,
+      sourceTurnId: input.turnId,
+      kind: candidate.action === "verify" ? "validation" : "functional",
+      priority: priorityFrom(sourceText, "must"),
+      polarity: "required",
+      status: "explicit",
+      confidence: "ambiguous",
+      ...(condition === null ? {} : { condition }),
+      ...(scopeIn(sourceText).length === 0 ? {} : { scope: scopeIn(sourceText) }),
+      dependencies: [],
+      conflicts: [],
+      derivedBy: "runtime_action",
     });
   }
 

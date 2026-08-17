@@ -8,6 +8,7 @@
     "minQuestions": 0,
     "mustNotInvent": [
       "배포"
-    ]
+    ],
+    "maxQuestions": 4
   }
 }

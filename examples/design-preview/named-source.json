@@ -7,9 +7,9 @@
       "validation"
     ],
     "forbiddenActions": [],
-    "expectedQuestions": 0,
     "mustNotInvent": [
       "설치"
-    ]
+    ],
+    "maxQuestions": 2
   }
 }

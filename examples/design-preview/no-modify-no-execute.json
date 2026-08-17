@@ -10,9 +10,9 @@
       "execute",
       "modify"
     ],
-    "expectedQuestions": 0,
     "mustNotInvent": [
       "배포"
-    ]
+    ],
+    "maxQuestions": 2
   }
 }

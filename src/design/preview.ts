@@ -32,6 +32,38 @@ export interface PreviewTurn {
   relation: TurnRelation;
 }
 
+/**
+ * Why a turn produced no usable model proposal.
+ *
+ * One bucket said "the model contributed nothing" and four different problems
+ * were inside it, each fixed somewhere else. Separating them is what makes the
+ * next two steps — choosing a better model, widening the offline extractor —
+ * something other than guessing.
+ */
+export type ProposalOutcome =
+  /** The model answered with nothing parseable as a list. */
+  | "no_response"
+  /** A list came back and no item had the required shape. */
+  | "malformed"
+  /** Items had shape and their coordinates did not survive the span check. */
+  | "span_rejected"
+  /** Coordinates were fine and the requirement said the opposite of them. */
+  | "semantics_rejected"
+  /** At least one proposal survived everything. */
+  | "accepted"
+  /** No model was asked. */
+  | "not_asked";
+
+export interface TurnProposalReport {
+  turnId: string;
+  outcome: ProposalOutcome;
+  /** Items the model returned, before any check. */
+  returned: number;
+  accepted: number;
+  rejected: number;
+  calls: number;
+}
+
 export interface PreviewResult {
   turns: PreviewTurn[];
   /** Everything that stands, including superseded entries kept for the record. */
@@ -45,7 +77,14 @@ export interface PreviewResult {
   /** Whether a run could start. Never true while anything is unresolved. */
   executable: boolean;
   /** Where the proposals came from, and what went wrong if anything did. */
-  proposals: { source: "offline" | "model"; modelId: string | null; calls: number; error: string | null };
+  proposals: {
+    source: "offline" | "model";
+    modelId: string | null;
+    calls: number;
+    error: string | null;
+    /** Per turn, so a failure can be attributed rather than averaged. */
+    perTurn: TurnProposalReport[];
+  };
 }
 
 /**
@@ -73,7 +112,13 @@ export type Proposer = (input: {
   turnId: string;
   text: string;
   signal?: AbortSignal;
-}) => Promise<{ proposals: RequirementProposal[]; modelId: string | null; calls: number }>;
+}) => Promise<{
+  proposals: RequirementProposal[];
+  modelId: string | null;
+  calls: number;
+  /** Items the model returned before any of them were checked. */
+  returned?: number;
+}>;
 
 export async function previewDesign(input: {
   turns: readonly string[];
@@ -91,6 +136,7 @@ export async function previewDesign(input: {
   let modelId: string | null = null;
   let calls = 0;
   let error: string | null = null;
+  const perTurn: TurnProposalReport[] = [];
 
   for (const turn of turns) {
     // What the runtime reads for itself. Never omitted by a model, because no
@@ -113,6 +159,14 @@ export async function previewDesign(input: {
         });
         incoming.push(...accepted);
         rejected.push(...refused.map((r) => ({ ...r, turnId: turn.turnId })));
+        perTurn.push({
+          turnId: turn.turnId,
+          outcome: outcomeOf(asked.returned ?? asked.proposals.length, accepted.length, refused),
+          returned: asked.returned ?? asked.proposals.length,
+          accepted: accepted.length,
+          rejected: refused.length,
+          calls: asked.calls,
+        });
       } catch (err) {
         // A model failure is reported, not fatal. The offline analysis is the
         // floor and it is already complete without it.
@@ -150,6 +204,37 @@ export async function previewDesign(input: {
       modelId,
       calls,
       error,
+      perTurn:
+        input.propose === undefined
+          ? turns.map((t) => ({
+              turnId: t.turnId,
+              outcome: "not_asked" as const,
+              returned: 0,
+              accepted: 0,
+              rejected: 0,
+              calls: 0,
+            }))
+          : perTurn,
     },
   };
+}
+
+/**
+ * Which of the four ways a turn's proposals failed, or that they did not.
+ *
+ * Ordered by where the failure happened, earliest first, because that is where
+ * the fix goes. A turn whose items were refused for their coordinates is a
+ * prompt problem; one refused for meaning is the model reading the request
+ * backwards; and nothing coming back at all is neither.
+ */
+function outcomeOf(
+  returned: number,
+  accepted: number,
+  refused: readonly RejectedProposal[],
+): ProposalOutcome {
+  if (accepted > 0) return "accepted";
+  if (returned === 0) return "no_response";
+  if (refused.length === 0) return "malformed";
+  if (refused.some((r) => r.reasons.includes("semantics_reversed"))) return "semantics_rejected";
+  return "span_rejected";
 }

@@ -9,6 +9,7 @@
     "mustNotInvent": [
       "삭제",
       "제거"
-    ]
+    ],
+    "maxQuestions": 3
   }
 }

@@ -341,7 +341,7 @@ describe("개인 사용 fixture 15개", () => {
         expect: {
           mustContainKinds?: string[];
           forbiddenActions?: string[];
-          expectedQuestions?: number;
+          maxQuestions?: number;
           minQuestions?: number;
           mustNotInvent?: string[];
         };
@@ -365,8 +365,11 @@ describe("개인 사용 fixture 15개", () => {
         say(`금지가 없어야 하는데 ${forbidden.map((s) => s.text).join(", ")}`);
       }
 
-      if (parsed.expect.expectedQuestions !== undefined && questions.length !== parsed.expect.expectedQuestions) {
-        say(`질문 ${questions.length} 개, 기대 ${parsed.expect.expectedQuestions}`);
+      // A ceiling rather than an exact count. Offline extraction legitimately
+      // asks the user to confirm how a verb phrase was read; what must not
+      // happen is a preview that interrogates.
+      if (parsed.expect.maxQuestions !== undefined && questions.length > parsed.expect.maxQuestions) {
+        say(`질문 ${questions.length} 개, 상한 ${parsed.expect.maxQuestions}`);
       }
       if (parsed.expect.minQuestions !== undefined && questions.length < parsed.expect.minQuestions) {
         say(`질문 ${questions.length} 개, 최소 ${parsed.expect.minQuestions}`);

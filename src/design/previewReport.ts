@@ -48,9 +48,15 @@ export function questionsFrom(result: PreviewResult): Question[] {
 
   for (const finding of result.closure.audit.findings) {
     if (!ASKABLE.has(finding.code)) continue;
-    const key = `${finding.code}:${finding.subject}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    // One question per requirement, not per finding.
+    //
+    // A single extracted requirement can raise `AMBIGUOUS_DECIDED` and
+    // `NO_DESIGN_RULE` and `UNRESOLVED_CONDITION` at once, and asking three
+    // times about the same sentence is how a preview becomes an interrogation.
+    // The first finding for a subject is the one worth asking about; the rest
+    // are in `--advanced`.
+    if (seen.has(finding.subject)) continue;
+    seen.add(finding.subject);
 
     const spec = byId.get(finding.subject);
     const quoted = spec === undefined ? finding.subject : `"${spec.sourceText || spec.text}"`;
@@ -104,8 +110,14 @@ export function questionsFrom(result: PreviewResult): Question[] {
         break;
       case "AMBIGUOUS_DECIDED":
         out.push({
-          about: `${spec?.text ?? finding.subject} 은(는) 아직 확정되지 않았는데 확정된 것처럼 확인하려 하고 있습니다.`,
-          options: ["요구사항을 확정", "확인 방법을 완화", "이번 작업에서 제외"],
+          // Phrased as the question it actually is. For a requirement the
+          // runtime read out of a verb phrase, what is needed is not "확정하라"
+          // but "이렇게 이해한 것이 맞는가" — the user is the only one who knows.
+          about:
+            spec?.derivedBy === "runtime_action"
+              ? `"${spec.sourceText}" 를 "${spec.text}" 로 이해했습니다. 맞습니까?`
+              : `${spec?.text ?? finding.subject} 은(는) 아직 확정되지 않았습니다.`,
+          options: ["맞습니다", "다르게 이해해야 합니다", "이번 작업에서 제외"],
           code: finding.code,
           subject: finding.subject,
         });

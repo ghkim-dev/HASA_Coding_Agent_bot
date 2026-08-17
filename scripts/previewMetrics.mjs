@@ -68,19 +68,26 @@ if (apiKey.trim().length === 0) {
         file,
         accepted: result.requirements.filter((s) => s.derivedBy === "model_proposal").length,
         rejected: result.rejected.length,
-        reasons: [...new Set(result.rejected.flatMap((r) => r.reasons))],
+        outcomes: result.proposals.perTurn.map((t) => t.outcome),
         calls: result.proposals.calls,
         error: result.proposals.error,
       });
     }
     say(renderMetrics(measurePreviews(withModel)));
     say("");
-    say("사례별 모델 제안 처리");
+    // The four ways a proposal fails, counted. One bucket said "the model
+    // contributed nothing" and each of these is fixed somewhere else.
+    const tally = {};
+    for (const row of perCase) for (const o of row.outcomes) tally[o] = (tally[o] ?? 0) + 1;
+    say("제안 결과 분포 (턴 단위)");
     say("-".repeat(60));
+    for (const [k, v] of Object.entries(tally).sort()) say(`  ${k.padEnd(22)} ${v}`);
+    say("");
+    say("사례별 모델 제안 처리");
+    say("-".repeat(72));
     for (const row of perCase) {
       say(
-        `  ${row.file.replace(".json", "").padEnd(32)} 수용 ${row.accepted}  거부 ${row.rejected}  호출 ${row.calls}` +
-          (row.reasons.length > 0 ? `  [${row.reasons.join(", ")}]` : "") +
+        `  ${row.file.replace(".json", "").padEnd(32)} ${row.outcomes.join(",").padEnd(20)} 수용 ${row.accepted}  거부 ${row.rejected}  호출 ${row.calls}` +
           (row.error === null ? "" : `  실패 ${row.error}`),
       );
     }

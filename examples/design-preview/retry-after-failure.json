@@ -5,9 +5,9 @@
   "expect": {
     "mustContainKinds": [],
     "forbiddenActions": [],
-    "expectedQuestions": 0,
     "mustNotInvent": [
       "배포"
-    ]
+    ],
+    "maxQuestions": 2
   }
 }

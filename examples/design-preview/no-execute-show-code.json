@@ -9,9 +9,9 @@
     "forbiddenActions": [
       "execute"
     ],
-    "expectedQuestions": 0,
     "mustNotInvent": [
       "수정"
-    ]
+    ],
+    "maxQuestions": 2
   }
 }

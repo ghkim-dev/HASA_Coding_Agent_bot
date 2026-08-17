@@ -39,8 +39,8 @@ const MUTATIONS = [
   ["M08", "Coverage Audit 우회", "src/design/coverageAudit.ts",
     "return audit.ok;", "return true;"],
   ["M09", "모델의 명시적 confirmed 를 신뢰", "src/design/requirementSpec.ts",
-    'confidence: confidenceFor({\n        derivedBy: "model_proposal",',
-    'confidence: proposal.confidence ?? confidenceFor({\n        derivedBy: "model_proposal",'],
+    "      // Never `confirmed`, whatever the proposal said.\n      confidence: confidenceFor({",
+    "      confidence: proposal.confidence ?? confidenceFor({"],
   ["M10", "system_added 를 explicit 로", "src/design/requirementSpec.ts",
     'status: "system_added" as const,', 'status: "explicit" as const,'],
   ["M11", "derivedBy 위조 거부 제거", "src/design/requirementSpec.ts",
@@ -83,6 +83,11 @@ function suite() {
   }
 }
 
+/** CRLF to LF. Built from char codes so no escape can be mangled in transit. */
+function normalise(text) {
+  return text.split(String.fromCharCode(13) + String.fromCharCode(10)).join(String.fromCharCode(10));
+}
+
 function parse(out) {
   const pass = Number(/^ℹ pass (\d+)$/m.exec(out)?.[1] ?? -1);
   const fail = Number(/^ℹ fail (\d+)$/m.exec(out)?.[1] ?? -1);
@@ -108,7 +113,10 @@ let notApplied = 0;
 let unexpectedlySilent = 0;
 
 for (const [id, label, file, from, to] of MUTATIONS) {
-  const before = readFileSync(file, "utf8");
+  // Normalised, because the working tree carries CRLF and a multi-line search
+  // string written with a bare newline silently matches nothing. That is the
+  // exact failure this script exists to make visible, and it caught itself.
+  const before = normalise(readFileSync(file, "utf8"));
   if (!before.includes(from)) {
     say(`${id} ${label.padEnd(34)} !! 치환 문자열 없음 — 변이 미적용`);
     notApplied += 1;

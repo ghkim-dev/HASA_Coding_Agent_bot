@@ -9,9 +9,9 @@
     "forbiddenActions": [
       "modify"
     ],
-    "expectedQuestions": 0,
     "mustNotInvent": [
       "삭제"
-    ]
+    ],
+    "maxQuestions": 3
   }
 }

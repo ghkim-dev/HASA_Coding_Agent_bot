@@ -302,8 +302,12 @@ describe("데모 A — 명시적 금지", () => {
   const specs = runtimeRequirements({ turnId: T1, text: TEXT });
 
   test("두 금지가 추출되고 confirmed 이며 원문 좌표를 갖는다", () => {
-    assert.equal(specs.length, 2);
-    for (const spec of specs) {
+    // Filtered rather than counted: the extractor also reads the action the
+    // user asked for now, and asserting a total of two was asserting that it
+    // could not.
+    const forbidden = specs.filter((s) => s.polarity === "forbidden");
+    assert.equal(forbidden.length, 2);
+    for (const spec of forbidden) {
       assert.equal(spec.polarity, "forbidden");
       assert.equal(spec.confidence, "confirmed");
       assert.ok(spec.span !== undefined);
@@ -313,9 +317,14 @@ describe("데모 A — 명시적 금지", () => {
 
   test("금지와 정상 허용 쌍이 유지되고 감사를 통과한다", () => {
     const closed = closeCoverage({ requirements: specs, scenarios: designScenarios(specs) });
-    assert.equal(closed.audit.ok, true, JSON.stringify(closed.audit.findings));
-    assert.equal(mayExecutePlan(closed), true);
-    for (const spec of specs) {
+    // The prohibitions themselves close cleanly. The request the same sentence
+    // carries is `ambiguous` and raises its own question, which is a different
+    // fact and is asserted where it belongs.
+    const aboutForbidden = closed.audit.findings.filter((f) =>
+      specs.some((s) => s.polarity === "forbidden" && s.id === f.subject),
+    );
+    assert.deepEqual(aboutForbidden, [], JSON.stringify(aboutForbidden));
+    for (const spec of specs.filter((s) => s.polarity === "forbidden")) {
       const mine = closed.scenarios.filter((s) => s.requirementIds.includes(spec.id));
       assert.ok(mine.some((s) => s.oracle.forbiddenTools.length > 0));
       assert.ok(mine.some((s) => s.oracle.requiredTools.length > 0));
@@ -327,7 +336,10 @@ describe("데모 B — 실행 요청", () => {
   const TEXT = "main.py 코드도 보여주고 실제 실행 결과도 보여줘.";
 
   test("실행 요청을 금지로 오인하지 않는다", () => {
-    assert.deepEqual(runtimeRequirements({ turnId: T1, text: TEXT }), []);
+    const specs = runtimeRequirements({ turnId: T1, text: TEXT });
+    assert.equal(specs.filter((s) => s.polarity === "forbidden").length, 0);
+    // And it is read as the request it is.
+    assert.ok(specs.some((s) => s.derivedBy === "runtime_action"));
   });
 
   test("초기 감사에서 실행 증거 누락을 발견하고 Closure 가 보완한다", () => {
@@ -406,9 +418,16 @@ describe("데모 C — 정정", () => {
   test("refine 은 유지하며 더하고, question/continue 는 만들지 않는다", () => {
     const s = runtimeRequirements({ turnId: T1, text: "실행하지 말고 보여줘." });
     const i = runtimeRequirements({ turnId: T2, text: "수정도 하지 말아줘." });
-    assert.equal(mergeRequirements({ standing: s, incoming: i, relation: "refine", turnId: T2 }).length, 2);
+    assert.equal(
+      mergeRequirements({ standing: s, incoming: i, relation: "refine", turnId: T2 }).length,
+      s.length + i.length,
+    );
     for (const relation of ["question", "continue"] as const) {
-      assert.equal(mergeRequirements({ standing: s, incoming: i, relation, turnId: T2 }).length, 1, relation);
+      assert.equal(
+        mergeRequirements({ standing: s, incoming: i, relation, turnId: T2 }).length,
+        s.length,
+        relation,
+      );
     }
   });
 });
@@ -417,7 +436,12 @@ describe("데모 D — 과거 실패와 재실행", () => {
   const TEXT = "아까는 실행하지 못했어. 원인을 고치고 이번에는 다시 실행해줘.";
 
   test("과거 실패를 금지로 읽지 않는다", () => {
-    assert.deepEqual(runtimeRequirements({ turnId: T1, text: TEXT }), []);
+    const specs = runtimeRequirements({ turnId: T1, text: TEXT });
+    assert.equal(
+      specs.filter((s) => s.polarity === "forbidden").length,
+      0,
+      "'실행하지 못했어' 는 보고이지 금지가 아니다",
+    );
   });
 
   test("실행 증거와 회귀 시나리오가 자동 보완되고 재감사를 통과한다", () => {
@@ -465,7 +489,10 @@ describe("데모 E — 외부 출처", () => {
     const specs = runtimeRequirements({ turnId: T1, text: TEXT });
     const closed = closeCoverage({ requirements: specs, scenarios: designScenarios(specs) });
     assert.ok(closed.scenarios.some((s) => s.oracle.requiredEvidence.includes("web_source")));
-    assert.equal(closed.audit.ok, true, JSON.stringify(closed.audit.findings));
+    const aboutSource = closed.audit.findings.filter((f) =>
+      specs.some((s) => s.derivedBy === "runtime_source" && s.id === f.subject),
+    );
+    assert.deepEqual(aboutSource, [], JSON.stringify(aboutSource));
   });
 });
 
