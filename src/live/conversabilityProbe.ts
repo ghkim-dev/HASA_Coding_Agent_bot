@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { dirname } from "node:path";
 import { createHasaProvider } from "../provider/hasa/createProvider.ts";
 import { HasaCatalog, type Modality } from "../provider/hasa/hasaCatalog.ts";
@@ -105,6 +106,34 @@ export interface ProbeFile {
 }
 
 /**
+ * Whether to call this model at all.
+ *
+ * The gateway's own model listing is what this credential may call. The portal
+ * catalogue is what exists. Calling something in the second and not the first
+ * is asking to be refused, and the first run of this probe did exactly that:
+ * fourteen catalogue-only models, twelve 403s, and a run of `키에 모델 미허용`
+ * down the provider's transaction log that reads as somebody sweeping an
+ * endpoint for what they can reach.
+ *
+ *     the listing already had the answer
+ *     and it was asked for, and then ignored
+ *
+ * Worse, `not_permitted` classified as `INCONCLUSIVE`, and resume only reused
+ * settled answers — so every subsequent run would have produced the same burst
+ * again. It is the most settled answer there is for a given key.
+ *
+ * So a model outside the listing is recorded as `not_permitted` *without being
+ * called*, and the record says it was derived rather than measured.
+ */
+export function shouldProbe(input: { inGatewayListing: boolean }): boolean {
+  return input.inGatewayListing;
+}
+
+/** Answers a model outside the listing is given, without a request. */
+export const NOT_OFFERED_DETAIL =
+  "이 자격 증명에 제공되는 모델 목록에 없습니다. 호출하지 않고 기록했습니다.";
+
+/**
  * What a status means for *chat support*, which is not the same question as
  * conversability state.
  *
@@ -138,207 +167,254 @@ async function save(path: string, file: ProbeFile): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
-const out = (line: string): void => {
-  process.stdout.write(`${line}\n`);
-};
-
-const apiKey = process.env["HASA_API_KEY"] ?? "";
-const baseUrl = (process.env["HASA_BASE_URL"] ?? "").replace(/\/+$/, "");
-const force = process.argv.includes("--force");
-
-if (apiKey.trim().length === 0) {
-  out("HASA_API_KEY is not set. T1 NOT RUN — no credential, and no probe to report.");
-  process.exit(2);
-}
-
-const context = {
-  baseUrlFingerprint: fingerprint(baseUrl),
-  credentialFingerprint: fingerprint(apiKey),
-};
-out(`endpoint   : ${context.baseUrlFingerprint}`);
-out(`credential : ${context.credentialFingerprint}`);
-
-// --- who there is to ask ----------------------------------------------------
-
-const provider = createHasaProvider({ apiKey, ...(baseUrl.length === 0 ? {} : { baseUrl }) });
-const listing = await provider.listModels();
-const listed = new Set(listing.models.map((m) => m.id));
-
-const catalog = new HasaCatalog(
-  createMediaTransport({ origin: baseUrl.replace(/\/v1\/?$/, ""), apiKey }),
-);
-const entries = new Map<string, { modality: Modality; callable: boolean | null }>();
-try {
-  for (const entry of await catalog.all()) {
-    entries.set(entry.id, { modality: entry.modality, callable: entry.callable ?? null });
-  }
-} catch (err) {
-  out(`catalogue unavailable: ${(err as Error).message}`);
-}
-
-const ids = [...new Set([...listed, ...entries.keys()])].sort();
-out(`catalogue  : ${entries.size} entries`);
-out(`gateway    : ${listed.size} models`);
-out(`to ask     : ${ids.length}`);
-
-// --- resume -----------------------------------------------------------------
-
-const previous = force ? null : await load(STORE);
-const settled = new Map<string, ProbeRecord>();
-if (
-  previous !== null &&
-  previous.baseUrlFingerprint === context.baseUrlFingerprint &&
-  previous.credentialFingerprint === context.credentialFingerprint
-) {
-  const now = Date.now();
-  for (const record of previous.records) {
-    const age = now - Date.parse(record.measuredAt);
-    // Only a settled answer is reused. An inconclusive one is exactly what a
-    // re-run is for, and a stale one is not an answer about today.
-    const settledState =
-      record.state === "CONVERSATIONAL_VERIFIED" || record.state === "NON_CONVERSATIONAL_VERIFIED";
-    if (settledState && age < CONVERSABILITY_TTL_MS) settled.set(record.modelId, record);
-  }
-  out(`resumed    : ${settled.size} already settled, ${ids.length - settled.size} to ask`);
-} else if (previous !== null) {
-  out("resumed    : none — the stored probe was taken against a different endpoint or key");
-}
-
-// --- ask --------------------------------------------------------------------
-
-const url = baseUrl.endsWith("/v1") ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`;
-const records: ProbeRecord[] = [];
-let controlAnswered = [...settled.values()].some((r) => r.support === "chat_supported");
-let rateLimited = 0;
-let stopped = false;
-
-const file = (): ProbeFile => ({
-  format: "t1-conversability-v1",
-  ...context,
-  controlAnswered,
-  records: [...records].sort((a, b) => a.modelId.localeCompare(b.modelId)),
-});
-
-out("");
-out(`${"model".padEnd(26)} ${"modality".padEnd(11)} ${"status".padEnd(7)} ${"support".padEnd(18)} latency`);
-
-for (const id of ids) {
-  const entry = entries.get(id) ?? null;
-  const base = {
-    modelId: id,
-    inCatalogue: entry !== null,
-    modality: entry?.modality ?? null,
-    callable: entry?.callable ?? null,
-    inGatewayListing: listed.has(id),
-    measuredAt: new Date().toISOString(),
-    probeVersion: PROBE_VERSION,
-    ...context,
+/**
+ * The probe itself.
+ *
+ * Behind a function and an entry-point guard because importing this module used
+ * to *run* it: a test that imported `shouldProbe` re-executed the whole live
+ * probe, and `pnpm test` would have called the gateway on every run. Top-level
+ * await in a file that also exports is a script pretending to be a module.
+ */
+export async function main(): Promise<number> {
+    const out = (line: string): void => {
+    process.stdout.write(`${line}\n`);
   };
 
-  const already = settled.get(id);
-  if (already !== undefined) {
-    records.push({ ...already, ...base, measuredAt: already.measuredAt });
-    out(
-      `${id.padEnd(26)} ${String(base.modality ?? "-").padEnd(11)} ${String(already.status ?? "-").padEnd(7)} ${already.support.padEnd(18)} (cached)`,
-    );
-    continue;
+  const apiKey = process.env["HASA_API_KEY"] ?? "";
+  const baseUrl = (process.env["HASA_BASE_URL"] ?? "").replace(/\/+$/, "");
+  const force = process.argv.includes("--force");
+
+  if (apiKey.trim().length === 0) {
+    out("HASA_API_KEY is not set. T1 NOT RUN — no credential, and no probe to report.");
+    return 2;
   }
 
-  if (stopped) {
-    records.push({ ...base, support: "not_probed", state: "UNKNOWN", status: null, detail: "이 실행에서는 묻지 않았습니다.", latencyMs: null });
-    continue;
-  }
+  const context = {
+    baseUrlFingerprint: fingerprint(baseUrl),
+    credentialFingerprint: fingerprint(apiKey),
+  };
+  out(`endpoint   : ${context.baseUrlFingerprint}`);
+  out(`credential : ${context.credentialFingerprint}`);
 
-  const started = Date.now();
-  let status: number | null = null;
-  let support: ChatSupport;
-  let state: ConversabilityState;
-  let detail: string;
+  // --- who there is to ask ----------------------------------------------------
 
+  const provider = createHasaProvider({ apiKey, ...(baseUrl.length === 0 ? {} : { baseUrl }) });
+  const listing = await provider.listModels();
+  const listed = new Set(listing.models.map((m) => m.id));
+
+  const catalog = new HasaCatalog(
+    createMediaTransport({ origin: baseUrl.replace(/\/v1\/?$/, ""), apiKey }),
+  );
+  const entries = new Map<string, { modality: Modality; callable: boolean | null }>();
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    status = response.status;
-    // Read and discard. Nothing from the body is kept: it can echo the request
-    // and there is no reason for it to reach a file.
-    await response.text();
-    ({ state, detail } = classifyStatus(status));
-    support = supportFor(status);
-    if (support === "chat_supported") controlAnswered = true;
-    if (status === 429) {
-      rateLimited += 1;
-      if (rateLimited >= RATE_LIMIT_PATIENCE) {
-        stopped = true;
-        out(`\nstopping: ${RATE_LIMIT_PATIENCE} consecutive rate limits. Re-run to resume.`);
-      }
-    } else {
-      rateLimited = 0;
+    for (const entry of await catalog.all()) {
+      entries.set(entry.id, { modality: entry.modality, callable: entry.callable ?? null });
     }
   } catch (err) {
-    const name = (err as Error).name;
-    support = name === "TimeoutError" || name === "AbortError" ? "timeout" : "network_failure";
-    state = "INCONCLUSIVE";
-    detail = `요청이 끝나지 않았습니다: ${name}`;
+    out(`catalogue unavailable: ${(err as Error).message}`);
   }
 
-  const latencyMs = Date.now() - started;
-  records.push({ ...base, support, state, status, detail, latencyMs });
-  out(
-    `${id.padEnd(26)} ${String(base.modality ?? "-").padEnd(11)} ${String(status ?? "-").padEnd(7)} ${support.padEnd(18)} ${latencyMs}ms`,
+  const ids = [...new Set([...listed, ...entries.keys()])].sort();
+  out(`catalogue  : ${entries.size} entries`);
+  out(`gateway    : ${listed.size} models`);
+  out(`to ask     : ${ids.length}`);
+
+  // --- resume -----------------------------------------------------------------
+
+  const previous = force ? null : await load(STORE);
+  const settled = new Map<string, ProbeRecord>();
+  if (
+    previous !== null &&
+    previous.baseUrlFingerprint === context.baseUrlFingerprint &&
+    previous.credentialFingerprint === context.credentialFingerprint
+  ) {
+    const now = Date.now();
+    for (const record of previous.records) {
+      const age = now - Date.parse(record.measuredAt);
+      // A settled answer is reused. An inconclusive one is what a re-run is for,
+      // and a stale one is not an answer about today.
+      //
+      // `not_permitted` is settled, and treating it as retryable is what turned
+      // one avoidable burst of 403s into a burst on every run. The record is
+      // already scoped to a credential fingerprint, so "this key may not call
+      // it" is exactly as stable as "this model has no chat endpoint" — the file
+      // is discarded wholesale when the key changes.
+      const settledState =
+        record.state === "CONVERSATIONAL_VERIFIED" ||
+        record.state === "NON_CONVERSATIONAL_VERIFIED" ||
+        record.support === "not_permitted";
+      if (settledState && age < CONVERSABILITY_TTL_MS) settled.set(record.modelId, record);
+    }
+    out(`resumed    : ${settled.size} already settled, ${ids.length - settled.size} to ask`);
+  } else if (previous !== null) {
+    out("resumed    : none — the stored probe was taken against a different endpoint or key");
+  }
+
+  // --- ask --------------------------------------------------------------------
+
+  const url = baseUrl.endsWith("/v1") ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`;
+  const records: ProbeRecord[] = [];
+  let controlAnswered = [...settled.values()].some((r) => r.support === "chat_supported");
+  let rateLimited = 0;
+  let stopped = false;
+
+  const file = (): ProbeFile => ({
+    format: "t1-conversability-v1",
+    ...context,
+    controlAnswered,
+    records: [...records].sort((a, b) => a.modelId.localeCompare(b.modelId)),
+  });
+
+  out("");
+  out(`${"model".padEnd(26)} ${"modality".padEnd(11)} ${"status".padEnd(7)} ${"support".padEnd(18)} latency`);
+
+  for (const id of ids) {
+    const entry = entries.get(id) ?? null;
+    const base = {
+      modelId: id,
+      inCatalogue: entry !== null,
+      modality: entry?.modality ?? null,
+      callable: entry?.callable ?? null,
+      inGatewayListing: listed.has(id),
+      measuredAt: new Date().toISOString(),
+      probeVersion: PROBE_VERSION,
+      ...context,
+    };
+
+
+    // Not offered to this credential. Recorded, never called — see `shouldProbe`.
+    if (!shouldProbe(base)) {
+      records.push({
+        ...base,
+        support: "not_permitted",
+        state: "INCONCLUSIVE",
+        status: null,
+        detail: NOT_OFFERED_DETAIL,
+        latencyMs: null,
+      });
+      out(
+        `${id.padEnd(26)} ${String(base.modality ?? "-").padEnd(11)} ${"-".padEnd(7)} ${"not_permitted".padEnd(18)} (not called)`,
+      );
+      continue;
+    }
+    const already = settled.get(id);
+    if (already !== undefined) {
+      records.push({ ...already, ...base, measuredAt: already.measuredAt });
+      out(
+        `${id.padEnd(26)} ${String(base.modality ?? "-").padEnd(11)} ${String(already.status ?? "-").padEnd(7)} ${already.support.padEnd(18)} (cached)`,
+      );
+      continue;
+    }
+
+    if (stopped) {
+      records.push({ ...base, support: "not_probed", state: "UNKNOWN", status: null, detail: "이 실행에서는 묻지 않았습니다.", latencyMs: null });
+      continue;
+    }
+
+    const started = Date.now();
+    let status: number | null = null;
+    let support: ChatSupport;
+    let state: ConversabilityState;
+    let detail: string;
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: id, messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      status = response.status;
+      // Read and discard. Nothing from the body is kept: it can echo the request
+      // and there is no reason for it to reach a file.
+      await response.text();
+      ({ state, detail } = classifyStatus(status));
+      support = supportFor(status);
+      if (support === "chat_supported") controlAnswered = true;
+      if (status === 429) {
+        rateLimited += 1;
+        if (rateLimited >= RATE_LIMIT_PATIENCE) {
+          stopped = true;
+          out(`\nstopping: ${RATE_LIMIT_PATIENCE} consecutive rate limits. Re-run to resume.`);
+        }
+      } else {
+        rateLimited = 0;
+      }
+    } catch (err) {
+      const name = (err as Error).name;
+      support = name === "TimeoutError" || name === "AbortError" ? "timeout" : "network_failure";
+      state = "INCONCLUSIVE";
+      detail = `요청이 끝나지 않았습니다: ${name}`;
+    }
+
+    const latencyMs = Date.now() - started;
+    records.push({ ...base, support, state, status, detail, latencyMs });
+    out(
+      `${id.padEnd(26)} ${String(base.modality ?? "-").padEnd(11)} ${String(status ?? "-").padEnd(7)} ${support.padEnd(18)} ${latencyMs}ms`,
+    );
+
+    // Written every time, so an interruption costs one model rather than a run.
+    await save(STORE, file());
+    await new Promise((resolve) => setTimeout(resolve, GAP_MS));
+  }
+
+  await save(STORE, file());
+
+  // --- report -----------------------------------------------------------------
+
+  out("");
+  if (!controlAnswered) {
+    out("NO MODEL ANSWERED. Every 404 above is about the path, not about the models.");
+    out("Nothing here should be read as evidence. Check the base URL and re-run.");
+    return 1;
+  }
+
+  const by = (support: ChatSupport): ProbeRecord[] => records.filter((r) => r.support === support);
+  const codingPool = records.filter(
+    (r) =>
+      poolEligibility({
+        modelId: r.modelId,
+        modality: r.modality,
+        converses: r.support === "chat_supported" ? true : r.support === "chat_unsupported" ? false : undefined,
+        permitted: r.support === "not_permitted" ? false : undefined,
+        pool: DEFAULT_POOL,
+      }).standing === "eligible",
   );
 
-  // Written every time, so an interruption costs one model rather than a run.
-  await save(STORE, file());
-  await new Promise((resolve) => setTimeout(resolve, GAP_MS));
+  const section = (title: string, rows: readonly ProbeRecord[]): void => {
+    out(`\n${title} (${rows.length})`);
+    for (const r of rows) {
+      const role = semanticProfileFor(r.modelId).profile?.role ?? "-";
+      out(`  ${r.modelId.padEnd(26)} ${String(r.modality ?? "-").padEnd(11)} ${role}`);
+    }
+  };
+
+  out("── T1 SUMMARY ─────────────────────────────────────────────");
+  out(`asked                : ${records.filter((r) => r.support !== "not_probed").length} / ${ids.length}`);
+  out(`control answered     : ${controlAnswered}`);
+  section("chat supported", by("chat_supported"));
+  section("chat unsupported (a role, not a score)", by("chat_unsupported"));
+  section("not permitted by this credential", by("not_permitted"));
+  section("request rejected", by("request_rejected"));
+  section("timeout", by("timeout"));
+  section("network failure", by("network_failure"));
+  section("gateway unavailable", by("gateway_unavailable"));
+  section("not probed in this run", by("not_probed"));
+
+  out(`\ncoding pool eligible : ${codingPool.length}`);
+  for (const r of codingPool) out(`  ${r.modelId}`);
+  out(`\nwritten to ${STORE}`);
+
+  return 0;
 }
 
-await save(STORE, file());
-
-// --- report -----------------------------------------------------------------
-
-out("");
-if (!controlAnswered) {
-  out("NO MODEL ANSWERED. Every 404 above is about the path, not about the models.");
-  out("Nothing here should be read as evidence. Check the base URL and re-run.");
-  process.exit(1);
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (err: Error) => {
+      process.stderr.write(`${err.stack ?? err.message}
+`);
+      process.exit(2);
+    },
+  );
 }
-
-const by = (support: ChatSupport): ProbeRecord[] => records.filter((r) => r.support === support);
-const codingPool = records.filter(
-  (r) =>
-    poolEligibility({
-      modelId: r.modelId,
-      modality: r.modality,
-      converses: r.support === "chat_supported" ? true : r.support === "chat_unsupported" ? false : undefined,
-      permitted: r.support === "not_permitted" ? false : undefined,
-      pool: DEFAULT_POOL,
-    }).standing === "eligible",
-);
-
-const section = (title: string, rows: readonly ProbeRecord[]): void => {
-  out(`\n${title} (${rows.length})`);
-  for (const r of rows) {
-    const role = semanticProfileFor(r.modelId).profile?.role ?? "-";
-    out(`  ${r.modelId.padEnd(26)} ${String(r.modality ?? "-").padEnd(11)} ${role}`);
-  }
-};
-
-out("── T1 SUMMARY ─────────────────────────────────────────────");
-out(`asked                : ${records.filter((r) => r.support !== "not_probed").length} / ${ids.length}`);
-out(`control answered     : ${controlAnswered}`);
-section("chat supported", by("chat_supported"));
-section("chat unsupported (a role, not a score)", by("chat_unsupported"));
-section("not permitted by this credential", by("not_permitted"));
-section("request rejected", by("request_rejected"));
-section("timeout", by("timeout"));
-section("network failure", by("network_failure"));
-section("gateway unavailable", by("gateway_unavailable"));
-section("not probed in this run", by("not_probed"));
-
-out(`\ncoding pool eligible : ${codingPool.length}`);
-for (const r of codingPool) out(`  ${r.modelId}`);
-out(`\nwritten to ${STORE}`);
