@@ -139,7 +139,7 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|오늘|어제|내일)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -171,24 +171,59 @@ function objectBefore(clause: string, verbStart: number): string {
   const marked = /((?:[^\s,]+\s+){0,2}[^\s,]+)\s*(?:을|를)\s*$/.exec(before);
   const phrase = marked?.[1] ?? before;
 
-  const tokens = phrase
-    .split(/\s+/)
-    .map((token) => {
-      // Location particles can trail any token: a stray "안에서만" would
-      // otherwise push "auth" out of the window and leave a bare "폴더".
-      let out = token.replace(/(?:안에서만|에서만|에서|안에|까지|부터)$/u, "");
+  const tokens = phrase.split(/\s+/).map((token) => {
+    // Location particles can trail any token: a stray "안에서만" would
+    // otherwise push "auth" out of the window and leave a bare "폴더".
+    const located = token.replace(/(?:안에서만|에서만|에서|안에|까지|부터)$/u, "");
+    let out = located;
 
-      // The additive `도`, but only when two syllables survive it. Stripping it
-      // unconditionally turns "속도" into "속"; "결과도" and "코드도" are the
-      // cases worth recovering and both leave a word behind.
-      const dropped = out.replace(/도$/u, "");
-      if (out.endsWith("도") && dropped.length >= 2) out = dropped;
+    // The additive `도`, but only when two syllables survive it. Stripping it
+    // unconditionally turns "속도" into "속"; "결과도" and "코드도" are the
+    // cases worth recovering and both leave a word behind.
+    const dropped = out.replace(/도$/u, "");
+    if (out.endsWith("도") && dropped.length >= 2) out = dropped;
 
-      // `을`/`를` mark an object unambiguously, so they can go anywhere they
-      // appear. The rest wait until the phrase is chosen — see below.
-      return out.replace(/[을를]$/u, "").trim();
-    })
-    .filter((t) => t.length > 0 && !NOT_AN_OBJECT.test(t));
+    // `을`/`를` mark an object unambiguously, so they can go anywhere they
+    // appear. The rest wait until the phrase is chosen — see below.
+    out = out.replace(/[을를]$/u, "").trim();
+
+    return {
+      text: out,
+      // Not part of a noun phrase, whatever it is next to. Three kinds, and each
+      // one was a wrong target in a real sentence: a locative that had its
+      // particle taken off ("CI에서 pytest를" → "CI pytest"), a clause ending
+      // ("실패하면 로그를" → "실패하면 로그"), and a grammar word.
+      grammar:
+        out.length === 0 ||
+        NOT_AN_OBJECT.test(out) ||
+        located !== token ||
+        /(?:면|고|서|며)$/u.test(out),
+    };
+  });
+
+  // The last unbroken run of noun tokens, and no further.
+  //
+  // Taking the last two *surviving* tokens reached across whatever sat between
+  // them, so an adverbial phrase before the object became part of it —
+  // "src 폴더 안에서만 로그를 추가해줘" gave the target "폴더 로그". Reading from
+  // the right and stopping at the first non-noun keeps the phrase the sentence
+  // actually built. Before the head is found the same tokens are *skipped*
+  // rather than final, because Korean puts trailing adverbs between the object
+  // and its verb: "auth 폴더 안에서만 수정하고" still targets "auth 폴더".
+  const kept: string[] = [];
+  for (let i = tokens.length - 1; i >= 0 && kept.length < 2; i -= 1) {
+    const token = tokens[i];
+    if (token === undefined) continue;
+    if (token.grammar) {
+      if (kept.length === 0) continue;
+      break;
+    }
+    // A topic-marked modifier belongs to a different phrase: "오늘은 main.py를"
+    // is a time and a file, not a two-word target. The head may carry the
+    // particle — it comes off below — so this applies to modifiers only.
+    if (kept.length > 0 && /[은는]$/u.test(token.text)) break;
+    kept.unshift(token.text);
+  }
 
   // Case particles come off last, and only from the token that ends the phrase.
   //
@@ -197,7 +232,6 @@ function objectBefore(clause: string, verbStart: number): string {
   // the grammar words are gone also means the particle is taken off the noun
   // that survived rather than off whichever adverb happened to be last:
   // "기존 API 호환성은 반드시" keeps `호환성`, not `반드시`.
-  const kept = tokens.slice(-2);
   const lastAt = kept.length - 1;
   if (lastAt >= 0) kept[lastAt] = (kept[lastAt] ?? "").replace(/(?:만|[이가은는의로])$/u, "");
 

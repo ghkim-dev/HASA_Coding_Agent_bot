@@ -158,6 +158,53 @@ describe("조사와 파일명", () => {
   });
 });
 
+/**
+ * Where the noun phrase starts, which is not "two tokens back".
+ *
+ * Every case here produced a wrong target while the window was "the last two
+ * surviving tokens": the tokens that survived were not adjacent in the sentence,
+ * so an adverbial phrase sitting between the object and its verb became part of
+ * the object. Reading right-to-left and stopping at the first non-noun is what
+ * fixed them, and these are the sentences that decide it.
+ */
+describe("목적어 구는 어디서 끊기는가", () => {
+  test("위치를 나타내는 말은 목적어에 붙지 않는다", () => {
+    assert.deepEqual(texts("src 폴더 안에서만 로그를 추가해줘."), ["로그를 추가한다"]);
+    assert.deepEqual(texts("CI에서 pytest를 실행해줘."), ["pytest를 실행한다"]);
+  });
+
+  test("뒤따르는 부사는 목적어를 끊지 않는다", () => {
+    // The mirror image, and the reason the rule is not "stop at anything odd":
+    // Korean puts trailing adverbs between the object and its verb.
+    assert.deepEqual(texts("auth 폴더 안에서만 수정하고 끝내줘."), ["auth 폴더를 수정한다"]);
+    assert.deepEqual(texts("기존 동작은 그대로 유지해줘."), ["기존 동작을 그대로 유지한다"]);
+  });
+
+  test("조건절은 목적어에 붙지 않는다", () => {
+    assert.deepEqual(texts("테스트가 실패하면 로그를 추가해줘."), ["로그를 추가한다"]);
+  });
+
+  test("주제 조사가 붙은 앞말은 다른 구다", () => {
+    assert.deepEqual(texts("오늘은 main.py를 실행해줘."), ["main.py를 실행한다"]);
+  });
+
+  test("때를 나타내는 말은 목적어가 아니다", () => {
+    // Bare, with no particle to give it away. Without the word list these become
+    // "오늘 main.py" and "어제 로그" — a date bound to a file.
+    assert.deepEqual(texts("오늘 main.py를 실행해줘."), ["main.py를 실행한다"]);
+    assert.deepEqual(texts("내일 로그를 추가해줘."), ["로그를 추가한다"]);
+  });
+
+  test("관형형은 목적어의 일부로 남는다", () => {
+    // The other direction: `실패한` modifies `부분` and belongs to the phrase.
+    assert.deepEqual(texts("실패한 부분을 수정해줘."), ["실패한 부분을 수정한다"]);
+  });
+
+  test("보조 용언은 목적어에 남지 않는다", () => {
+    assert.deepEqual(texts("사용하지 않는 import를 제거해줘."), ["import를 제거한다"]);
+  });
+});
+
 describe("유지 요청", () => {
   test("호환성 유지는 요구사항이 된다", () => {
     assert.deepEqual(texts("API 호환성을 유지해줘."), ["API 호환성을 그대로 유지한다"]);

@@ -15,15 +15,36 @@ import { executionReadiness, type RequirementSpec } from "./requirementSpec.ts";
  * and `--json` carry all of it.
  */
 
-/** Findings that become a question rather than a repair. */
-const ASKABLE: ReadonlySet<FindingCode> = new Set<FindingCode>([
+/**
+ * Findings that become a question rather than a repair, worst first.
+ *
+ * The order is load-bearing. Only one question is asked per requirement — three
+ * about one sentence is an interrogation — and which one survives used to be
+ * whichever the audit happened to emit first. That put `NO_DESIGN_RULE` ahead of
+ * `UNRESOLVED_CONDITION` for "테스트가 실패하면 로그를 추가해줘": the plan asked
+ * how it would know the logging was done and never asked the only question that
+ * mattered, which is whether the condition holds at all.
+ *
+ * So they are ranked by what an answer unblocks. A conflict and a condition stop
+ * the work outright and only the user can settle them; a missing target stops one
+ * requirement; a missing verification rule leaves work that can start but cannot
+ * be checked. Ranked last on purpose — it is the most common finding and the
+ * least urgent, and it was crowding out the rest.
+ */
+const ASKABLE: readonly FindingCode[] = [
   "REQUIREMENT_CONFLICT",
   "UNRESOLVED_CONDITION",
-  "SEMANTIC_ALIGNMENT_UNKNOWN",
-  "NO_DESIGN_RULE",
-  "AMBIGUOUS_DECIDED",
   "TARGET_UNRESOLVED",
-]);
+  "SEMANTIC_ALIGNMENT_UNKNOWN",
+  "AMBIGUOUS_DECIDED",
+  "NO_DESIGN_RULE",
+];
+
+/** How urgent a finding's question is. Lower comes first. */
+function askRank(code: FindingCode): number {
+  const at = ASKABLE.indexOf(code);
+  return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+}
 
 export interface Question {
   /** What is unclear, in the user's terms. */
@@ -47,15 +68,24 @@ export function questionsFrom(result: PreviewResult): Question[] {
   const seen = new Set<string>();
   const out: Question[] = [];
 
-  for (const finding of result.closure.audit.findings) {
-    if (!ASKABLE.has(finding.code)) continue;
-    // One question per requirement, not per finding.
-    //
-    // A single extracted requirement can raise `AMBIGUOUS_DECIDED` and
-    // `NO_DESIGN_RULE` and `UNRESOLVED_CONDITION` at once, and asking three
-    // times about the same sentence is how a preview becomes an interrogation.
-    // The first finding for a subject is the one worth asking about; the rest
-    // are in `--advanced`.
+  // One question per requirement, not per finding.
+  //
+  // A single extracted requirement can raise `AMBIGUOUS_DECIDED` and
+  // `NO_DESIGN_RULE` and `UNRESOLVED_CONDITION` at once, and asking three times
+  // about the same sentence is how a preview becomes an interrogation. So the
+  // findings are ranked by urgency first and the survivor per subject is the
+  // most urgent one — not the first one the audit produced. The rest are in
+  // `--advanced`.
+  //
+  // Sorted with the index as a tiebreak so the audit's own order still decides
+  // between two findings of equal rank, and the whole function stays
+  // deterministic on the same input.
+  const askable = result.closure.audit.findings
+    .map((finding, index) => ({ finding, index }))
+    .filter(({ finding }) => askRank(finding.code) !== Number.MAX_SAFE_INTEGER)
+    .sort((a, b) => askRank(a.finding.code) - askRank(b.finding.code) || a.index - b.index);
+
+  for (const { finding } of askable) {
     if (seen.has(finding.subject)) continue;
     seen.add(finding.subject);
 

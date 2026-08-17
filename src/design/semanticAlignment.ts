@@ -43,8 +43,19 @@ const REMOVE = /제거|삭제|없애|바꾸|변경|rename|remove|delete|replace/
 const EXECUTE = /실행|돌리|구동|run\b|execute/;
 const ANALYSE_ONLY = /분석만|설명만|보여주기만|읽기만|analy[sz]e only|only explain/;
 const PAST_FAILURE = /못했|실패했|안\s*됐|failed|couldn't/;
-/** `하면서` is "while doing", not "if". See the note in `sourceSpan.ts`. */
-const CONDITION = /라면|이면(?!서)|하면(?!서)|경우|한해|일\s*때|if\b|when\b|unless\b/;
+/**
+ * `하면서` is "while doing", not "if". See the note in `sourceSpan.ts`.
+ *
+ * And `하면 안 돼` is not a condition either — it is how Korean forbids
+ * something, so "실행하면 안 돼" states a prohibition with nothing unsettled about
+ * it. Read as a condition it produced the question "이 조건을 어떻게 확인해야 할지
+ * 정해지지 않았습니다" about a sentence that had no condition in it, and blocked a
+ * prohibition the runtime had understood perfectly. The lookahead is narrow on
+ * purpose: "실패하면 안전하게 롤백해줘" is still a condition, because `안전` is not
+ * the negation.
+ */
+const CONDITION =
+  /라면|이면(?!서)|하면(?!서)(?!\s*안\s*(?:돼|되|된|됩))|경우|한해|일\s*때|if\b|when\b|unless\b/;
 const SOFT = /가능하면|가급적|되도록|원하면|if possible|preferably|nice to have/;
 const HARD = /반드시|꼭|필수|무조건|must\b|required/;
 const WHOLE = /전체|모든|전부|모두|저장소\s*전체|all files|entire|whole repo/;

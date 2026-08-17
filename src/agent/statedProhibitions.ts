@@ -47,15 +47,41 @@ export type ProhibitedClass = "execute" | "modify";
  */
 const NEG = "(?:마|말|않고)";
 
+/**
+ * `하지` and its contraction `하진`.
+ *
+ * "수정하진 마" is the same prohibition as "수정하지 마", and only the second one
+ * was recognised. The asymmetry was measurable and one-sided: `functionalExtract`
+ * already treats both forms as a negation, so the contracted sentence produced no
+ * prohibition *and* no positive requirement — the runtime read "수정하진 마" as
+ * having asked for nothing at all, and the action gate had nothing to refuse.
+ */
+const STEM = "하[지진]";
+
+/**
+ * "실행하면 안 돼" — the negation after the verb ending rather than after `하지`.
+ *
+ * The interrogative is excluded. "실행하면 안 돼?" is a user asking whether they
+ * may run it, not forbidding it, and a false positive is the only way this module
+ * can hurt — so the lookahead refuses the pattern when a question mark closes the
+ * same clause.
+ */
+const MYEON_AN = "(?:면|서는)\\s*안\\s*(?:돼|되|된|됩)(?![^.!。\\n]*[?？])";
+
 const EXECUTE_DIRECT = new RegExp(
   [
     // A particle may sit between the stem and 하지: "실행도 하지 마",
     // "실행은 하지 말고". A missed prohibition is the dangerous direction —
     // this module exists because one was missed — and requiring the two to be
     // joined missed every sentence that puts a particle between them.
-    `실행(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
-    `돌리지\\s*${NEG}`,
-    `구동(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
+    `실행(?:도|은|는|을|를|만)?\\s*${STEM}\\s*${NEG}`,
+    `돌리[지진]\\s*${NEG}`,
+    `구동(?:도|은|는|을|를|만)?\\s*${STEM}\\s*${NEG}`,
+    // Both endings, because the negation attaches after either: "실행하면 안 돼"
+    // and "실행해서는 안 된다" are one prohibition in two conjugations.
+    `실행[하해]${MYEON_AN}`,
+    `돌[리려]${MYEON_AN}`,
+    `구동[하해]${MYEON_AN}`,
     // "실행하라는 게 아니라" — a correction rather than a prohibition, and the
     // sentence that produced this whole investigation.
     "실행하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
@@ -68,11 +94,16 @@ const EXECUTE_DIRECT = new RegExp(
 
 const MODIFY_DIRECT = new RegExp(
   [
-    `수정(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
-    `고치지\\s*${NEG}`,
-    `바꾸지\\s*${NEG}`,
-    `변경(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
-    `건드리지\\s*${NEG}`,
+    `수정(?:도|은|는|을|를|만)?\\s*${STEM}\\s*${NEG}`,
+    `고치[지진]\\s*${NEG}`,
+    `바꾸[지진]\\s*${NEG}`,
+    `변경(?:도|은|는|을|를|만)?\\s*${STEM}\\s*${NEG}`,
+    `건드리[지진]\\s*${NEG}`,
+    `수정[하해]${MYEON_AN}`,
+    `고[치쳐]${MYEON_AN}`,
+    `바[꾸꿔]${MYEON_AN}`,
+    `변경[하해]${MYEON_AN}`,
+    `건드[리려]${MYEON_AN}`,
     "수정하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
     "don't\\s+(?:modify|edit|change)",
     "do\\s+not\\s+(?:modify|edit|change)",
