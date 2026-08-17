@@ -32,6 +32,8 @@ export type FindingCode =
   | "INVENTED_REQUIREMENT"
   /** No design rule covers this requirement; only a generic placeholder exists. */
   | "NO_DESIGN_RULE"
+  /** The request states nothing to do. Only the harness's own baselines are present. */
+  | "NO_USER_REQUIREMENT"
   | "UNSUPPORTED_REQUIREMENT_KIND"
   /** A scenario exists and its oracle decides nothing about the requirement. */
   | "ORACLE_INSUFFICIENT"
@@ -90,6 +92,23 @@ export function auditCoverage(input: {
     for (const id of scenario.requirementIds) {
       byRequirement.set(id, [...(byRequirement.get(id) ?? []), scenario]);
     }
+  }
+
+  // Nothing was asked for, so there is nothing to be ready to do.
+  //
+  // The harness's own baselines are `must`, `confirmed`, `resolved` and covered
+  // by `system.v1` — by construction, on every request. So a turn holding only
+  // those passed every check and came out `ok`, which the preview reports as
+  // executable: "고마워." was a plan ready to run. Two baselines agreeing with
+  // each other is not a requirement, and an audit that cannot say so hands
+  // execution permission to a greeting.
+  if (!live.some((spec) => spec.status !== "system_added")) {
+    findings.push({
+      code: "NO_USER_REQUIREMENT",
+      subject: "request",
+      detail:
+        "이 요청에서 읽어낼 수 있는 사용자 요구사항이 없습니다. 하네스 기본 조건만으로는 실행할 것이 없습니다.",
+    });
   }
 
   // Every `must` needs at least one check.

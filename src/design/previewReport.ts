@@ -18,18 +18,24 @@ import { executionReadiness, type RequirementSpec } from "./requirementSpec.ts";
 /**
  * Findings that become a question rather than a repair, worst first.
  *
- * The order is load-bearing. Only one question is asked per requirement — three
- * about one sentence is an interrogation — and which one survives used to be
- * whichever the audit happened to emit first. That put `NO_DESIGN_RULE` ahead of
- * `UNRESOLVED_CONDITION` for "테스트가 실패하면 로그를 추가해줘": the plan asked
- * how it would know the logging was done and never asked the only question that
- * mattered, which is whether the condition holds at all.
+ * Two rules decide what is on this list, and the second one is what took
+ * `NO_DESIGN_RULE` off it.
  *
- * So they are ranked by what an answer unblocks. A conflict and a condition stop
- * the work outright and only the user can settle them; a missing target stops one
- * requirement; a missing verification rule leaves work that can start but cannot
- * be checked. Ranked last on purpose — it is the most common finding and the
- * least urgent, and it was crowding out the rest.
+ * **It has to be the user's decision.** Every code here is something only the
+ * person who made the request can settle: which target they meant, whether a
+ * condition holds, which of two contradictory requirements wins, what a
+ * paraphrase was supposed to say. "The designer has no verification rule for this
+ * kind of requirement" is not in that class — it is a gap in *this* codebase, and
+ * asking a user to design an oracle for someone else's harness is asking them to
+ * do our work and calling it a clarifying question. It was 22 of the 33 questions
+ * these fixtures produced. It is still a finding, still reported, and now it
+ * appears in `--advanced` where an engineer can act on it.
+ *
+ * **The order is load-bearing.** Only one question is asked per requirement —
+ * three about one sentence is an interrogation — and which one survived used to be
+ * whichever the audit emitted first. That put `NO_DESIGN_RULE` ahead of
+ * `UNRESOLVED_CONDITION` for "테스트가 실패하면 로그를 추가해줘": the plan asked how
+ * it would know the logging was done and never asked whether the condition holds.
  */
 const ASKABLE: readonly FindingCode[] = [
   "REQUIREMENT_CONFLICT",
@@ -37,7 +43,6 @@ const ASKABLE: readonly FindingCode[] = [
   "TARGET_UNRESOLVED",
   "SEMANTIC_ALIGNMENT_UNKNOWN",
   "AMBIGUOUS_DECIDED",
-  "NO_DESIGN_RULE",
 ];
 
 /** How urgent a finding's question is. Lower comes first. */
@@ -123,18 +128,6 @@ export function questionsFrom(result: PreviewResult): Question[] {
         out.push({
           about: `${quoted} 에서 무엇을 요구하시는지 확실하지 않습니다.`,
           options: ["요구사항을 다시 설명", "이 부분은 이번 작업에서 제외"],
-          code: finding.code,
-          subject: finding.subject,
-        });
-        break;
-      case "NO_DESIGN_RULE":
-        out.push({
-          about: `${spec?.text ?? finding.subject} 을(를) 어떻게 확인해야 통과라고 볼 수 있는지 정해진 방법이 없습니다.`,
-          options: [
-            "무엇을 보면 됐다고 볼 수 있는지 알려주기",
-            "이 요구사항은 확인 없이 진행",
-            "이번 작업에서 제외",
-          ],
           code: finding.code,
           subject: finding.subject,
         });
@@ -386,6 +379,8 @@ export function renderJson(result: PreviewResult): unknown {
   return {
     turns: result.turns,
     executable: result.executable,
+    mayExecute: result.mayExecute,
+    plannedTools: result.plannedTools,
     proposals: result.proposals,
     requirements: result.requirements.map((spec) => ({
       id: spec.id,

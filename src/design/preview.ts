@@ -1,5 +1,6 @@
 import type { TurnRelation } from "../agent/turnContract.ts";
 import {
+  executionReadiness,
   acceptProposals,
   markConflicts,
   mergeRequirements,
@@ -90,6 +91,26 @@ export interface PreviewResult {
   closure: ClosureResult;
   /** Whether a run could start. Never true while anything is unresolved. */
   executable: boolean;
+  /**
+   * Whether the runtime may run tools for this request at all.
+   *
+   * Narrower than `executable` and separate on purpose. `executable` is a verdict
+   * about the *plan* — every requirement covered, nothing unresolved.
+   * `mayExecute` is the permission a caller reads before proposing an action, and
+   * it additionally insists that at least one of the user's own requirements is
+   * ready. Without that clause a request holding nothing but the harness's
+   * baselines came out ready to run: "고마워." was a plan with no findings, and no
+   * findings read as permission.
+   */
+  mayExecute: boolean;
+  /**
+   * Tools this plan would run, from the oracles that ask for them.
+   *
+   * Empty whenever `mayExecute` is false — not as a formality, but because that is
+   * the claim: a request with nothing in it has no tool plan, and an empty list is
+   * the only honest answer a caller can act on.
+   */
+  plannedTools: string[];
   /** Where the proposals came from, and what went wrong if anything did. */
   proposals: {
     source: "offline" | "model";
@@ -211,6 +232,23 @@ export async function previewDesign(input: {
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 
+  // The user's own, live. `system_added` is the harness talking to itself.
+  const ownRequirements = withSystem.filter(
+    (spec) => spec.status !== "system_added" && spec.supersededBy === undefined,
+  );
+  const mayExecute =
+    closure.audit.ok && ownRequirements.some((spec) => executionReadiness(spec) === "ready");
+  const ownIds = new Set(ownRequirements.map((spec) => spec.id));
+  const plannedTools = mayExecute
+    ? [
+        ...new Set(
+          closure.scenarios
+            .filter((scenario) => scenario.requirementIds.some((id) => ownIds.has(id)))
+            .flatMap((scenario) => scenario.oracle.requiredTools),
+        ),
+      ].sort()
+    : [];
+
   return {
     turns,
     requirements: withSystem,
@@ -219,6 +257,8 @@ export async function previewDesign(input: {
     initialAudit,
     closure,
     executable: closure.audit.ok,
+    mayExecute,
+    plannedTools,
     proposals: {
       source: input.propose === undefined ? "offline" : "model",
       modelId,
