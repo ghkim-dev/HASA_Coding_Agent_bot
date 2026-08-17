@@ -106,23 +106,33 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
         // `.arena/capability-matrix.json` is the CLI's store and stays the
         // CLI's. The VS Code extension keeps its probe results in extension
         // storage under a different layout, so the path belongs to whoever
-        // owns the disk — the design layer is handed `PermissionEvidence` and
-        // never learns where it came from.
+        // owns the disk — the design layer is handed a `PermissionEvidenceStore`
+        // and never learns where anything is kept.
         const matrix = await readCapabilityMatrix({
           path: ".arena/capability-matrix.json",
           keyFingerprint,
           baseUrl: provider.baseUrl,
         }).catch(() => null);
 
-        propose = await createModelProposer({
-          provider,
-          now: () => Date.now(),
-          permission: evidenceFromMatrix({
+        const { createFilePermissionStore } = await import("../cli/permissionEvidenceFile.ts");
+        const store = createFilePermissionStore({
+          base: evidenceFromMatrix({
             matrix,
             keyFingerprint,
             baseUrl: provider.baseUrl,
             now: Date.now(),
           }),
+        });
+
+        // Read through the store rather than from the matrix directly, so a
+        // refusal recorded by an earlier *process* is in force before the first
+        // call of this one. Without this the proposer stopped calling a forbidden
+        // model for the rest of its run and the next run called it again.
+        propose = await createModelProposer({
+          provider,
+          now: () => Date.now(),
+          store,
+          permission: await store.load({ keyFingerprint, baseUrl: provider.baseUrl }),
         });
       } catch (err) {
         setupError = err instanceof Error ? err.message : String(err);

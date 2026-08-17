@@ -6,6 +6,7 @@ import {
   isForbiddenDenial,
   permittedModels,
   type PermissionEvidence,
+  type PermissionEvidenceStore,
 } from "./modelPermission.ts";
 
 /**
@@ -73,11 +74,19 @@ export interface ProposerOptions {
    */
   now: () => number;
   /**
-   * Told when a model this record called `permitted` answered 403.
+   * Where to write down a refusal so the next process does not repeat it.
    *
-   * The corrected record is handed over so whoever owns the file can write it
-   * back or re-probe. Optional: the proposer stops using the model either way.
+   * Optional in the type and load-bearing in practice. Without it a 403 is
+   * remembered only inside this proposer instance: the run stops calling the
+   * model, the process exits, and the next one reads a record that still says
+   * `permitted` and calls it again. That is a burst of 403s spread across
+   * restarts, which is indistinguishable from probing a permission boundary.
+   *
+   * The design layer never learns where the store keeps anything — see
+   * `PermissionEvidenceStore`.
    */
+  store?: PermissionEvidenceStore;
+  /** Told about the refusal too, for a report that wants to mention it. */
   onDenied?: (denial: { modelId: string; permission: PermissionEvidence | null }) => void;
 }
 
@@ -167,8 +176,29 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
         );
       } catch (err) {
         if (!isForbiddenDenial(err)) throw err;
+        // Stop here. Not "try the next permitted model" — a 403 on one model is
+        // not evidence about another, and walking the list to find one that
+        // answers is precisely the probing this must never do. One refusal, one
+        // stop, one record.
         revoked = modelId;
-        permission = denyObserved(permission, modelId, options.now());
+        const at = options.now();
+        permission = denyObserved(permission, modelId, at);
+        if (options.store !== undefined && permission !== null) {
+          // Awaited before the error is re-thrown, so the record is on disk by the
+          // time the caller sees the failure. A refusal remembered only in memory
+          // is forgotten by the next process, which then makes the same call.
+          //
+          // A failing store must not replace the 403 with a filesystem error: the
+          // caller needs to see why their request stopped.
+          await options.store
+            .recordForbidden({
+              keyFingerprint: permission.keyFingerprint,
+              baseUrl: permission.baseUrl,
+              modelId,
+              at,
+            })
+            .catch(() => undefined);
+        }
         options.onDenied?.({ modelId, permission });
         throw err;
       }

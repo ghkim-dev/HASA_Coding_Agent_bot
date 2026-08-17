@@ -90,8 +90,20 @@ describe("공개 목록은 이 키의 호출 권한이 아니다", () => {
   });
 
   test("403 을 받은 모델은 제외된다", () => {
-    assert.equal(permissionFor(EVIDENCE, "denied-one", NOW).standing, "denied");
+    assert.equal(permissionFor(EVIDENCE, "denied-one", NOW).standing, "server_forbidden");
     assert.ok(!permittedModels(EVIDENCE, CATALOGUE, NOW).includes("denied-one"));
+  });
+
+  test("내부 상태 이름은 영구 권한을 단정하지 않는다", () => {
+    // A 403 says the server refused this call. Which of a serving policy, a
+    // temporary block, an account restriction or a plan change caused it is not
+    // in an HTTP status, and a name like `denied` invites code that acts as
+    // though it were.
+    const row = permissionFor(EVIDENCE, "denied-one", NOW);
+    assert.equal(row.standing, "server_forbidden");
+    assert.equal(row.reason, "server_forbidden_at_probe");
+    assert.match(row.basis, /서버 정책·일시 차단·계정 정책/);
+    assert.doesNotMatch(row.basis, /영구|권한이 없습니다/);
   });
 
   test("권한 unknown 은 permitted 로 승격되지 않는다", () => {
@@ -147,10 +159,21 @@ describe("측정 시각에는 유효기간이 있다", () => {
     assert.deepEqual(permittedModels(EVIDENCE, CATALOGUE, at(PERMISSION_MAX_AGE_MS + 1)), []);
   });
 
-  test("만료는 denied 에도 같이 적용된다", () => {
-    // Not a safety hole: `unknown` is not permission either, and a month-old
-    // 403 describes a plan the key may no longer be on.
+  test("거부는 만료로 풀리지 않는다", () => {
+    // Reversed deliberately, and this is the safety half of the policy. An
+    // expired `permitted` becoming `unknown` costs one re-probe. An expired
+    // refusal becoming `unknown` would mean the next request calls the model to
+    // find out whether it is still forbidden — using a real credential to explore
+    // an access boundary, which is how a key gets blocked. It stays forbidden
+    // until a permission API or the user says otherwise.
     const row = permissionFor(EVIDENCE, "denied-one", at(PERMISSION_MAX_AGE_MS * 30));
+    assert.equal(row.standing, "server_forbidden");
+    assert.ok(!permittedModels(EVIDENCE, CATALOGUE, at(PERMISSION_MAX_AGE_MS * 30)).includes("denied-one"));
+  });
+
+  test("permitted 는 여전히 만료된다", () => {
+    // The asymmetry only makes sense if the other side still expires.
+    const row = permissionFor(EVIDENCE, "permitted-one", at(PERMISSION_MAX_AGE_MS + 1));
     assert.equal(row.standing, "unknown");
     assert.equal(row.reason, "expired");
   });
@@ -185,14 +208,14 @@ describe("측정 시각에는 유효기간이 있다", () => {
 });
 
 describe("실제 403 은 기록보다 우선한다", () => {
-  test("permitted 기록이 있어도 403 을 관측하면 denied 가 된다", () => {
+  test("permitted 기록이 있어도 403 을 관측하면 server_forbidden 이 된다", () => {
     const before = permissionFor(EVIDENCE, "permitted-one", NOW);
     assert.equal(before.standing, "permitted");
 
     const corrected = denyObserved(EVIDENCE, "permitted-one", NOW);
     const after = permissionFor(corrected, "permitted-one", NOW);
-    assert.equal(after.standing, "denied");
-    assert.equal(after.reason, "denied_live");
+    assert.equal(after.standing, "server_forbidden");
+    assert.equal(after.reason, "server_forbidden_live");
     assert.deepEqual(permittedModels(corrected, CATALOGUE, NOW), []);
   });
 
@@ -202,13 +225,13 @@ describe("실제 403 은 기록보다 우선한다", () => {
     const late = Date.parse(MEASURED_AT) + PERMISSION_MAX_AGE_MS * 2;
     const corrected = denyObserved(EVIDENCE, "permitted-one", late);
     const row = permissionFor(corrected, "permitted-one", late);
-    assert.equal(row.standing, "denied");
-    assert.equal(row.reason, "denied_live");
+    assert.equal(row.standing, "server_forbidden");
+    assert.equal(row.reason, "server_forbidden_live");
   });
 
   test("기록에 없던 모델의 거부도 기록된다", () => {
     const corrected = denyObserved(EVIDENCE, "never-probed", NOW);
-    assert.equal(permissionFor(corrected, "never-probed", NOW).standing, "denied");
+    assert.equal(permissionFor(corrected, "never-probed", NOW).standing, "server_forbidden");
   });
 
   test("기록이 없으면 만들어내지 않는다", () => {
@@ -457,7 +480,13 @@ describe("design 계층은 게이트웨이를 직접 다루지 않는다", () =>
       if (file.endsWith(".test.ts")) continue;
       const source = await readFile(join(dir, file), "utf8");
       for (const [pattern, label] of FORBIDDEN) {
-        source.split("\n").forEach((line, i) => {
+        // The trailing `\r` comes off first, and that is not cosmetic: `.` does
+        // not match a carriage return, so `//.*$` could never reach the end of a
+        // CRLF line and every comment in a CRLF file was scanned as code. This
+        // test reported `modelProposer.ts` for the comment explaining why that
+        // file does *not* unwrap `choices[0]`.
+        source.split("\n").forEach((raw, i) => {
+          const line = raw.replace(/\r$/, "");
           // A comment explaining why the thing is absent is not the thing.
           const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
           if (pattern.test(code)) offences.push(`${file}:${i + 1} ${label} — ${line.trim()}`);

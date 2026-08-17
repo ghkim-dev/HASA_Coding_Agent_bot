@@ -46,16 +46,32 @@ import type { CapabilityMatrix, CapabilityStatus } from "../protocol/capability.
  * credential and no waiting.
  */
 
-export type PermissionStanding = "permitted" | "denied" | "unknown";
+/**
+ * The three standings, and why the middle one is not called `denied`.
+ *
+ * A 403 says the server refused this call. It does not say *why*, and the
+ * candidates are not equivalent: a model-serving policy, a temporary block, an
+ * account-level restriction, a plan that changed an hour ago. `denied` reads as a
+ * settled fact about the key — "this credential does not have access" — and
+ * nothing in an HTTP status supports that. `server_forbidden` says only what was
+ * observed: the server said no.
+ *
+ * The distinction is load-bearing rather than cosmetic. A name that claims
+ * permanence invites code that acts on it — re-probing to "confirm", or clearing
+ * it once it looks stale — and probing a 403 to find out whether it is still a 403
+ * is using a user's credential to explore an access boundary, which is how keys
+ * get blocked.
+ */
+export type PermissionStanding = "permitted" | "server_forbidden" | "unknown";
 
 /** Why a standing came out the way it did. Structural, so tests need no prose. */
 export type PermissionReason =
   /** The key called it and got an answer. */
   | "chat_succeeded"
-  /** The gateway answered 403 when the probe ran. */
-  | "gateway_denied"
-  /** The gateway answered 403 just now, superseding whatever the record said. */
-  | "denied_live"
+  /** The server answered 403 when the probe ran. */
+  | "server_forbidden_at_probe"
+  /** The server answered 403 during this session, superseding the record. */
+  | "server_forbidden_live"
   /** Nothing has ever been established for this key and this model. */
   | "never_probed"
   /** There is a record and it is older than a record may be. */
@@ -151,10 +167,16 @@ function basisFor(reason: PermissionReason, ageMs: number | null): string {
   switch (reason) {
     case "chat_succeeded":
       return `이 자격 증명으로 chat 호출이 성공한 기록이 있습니다 (측정 후 ${hoursOf(ageMs ?? 0)} 경과)`;
-    case "gateway_denied":
-      return "이 자격 증명에 대해 게이트웨이가 403 을 반환했습니다";
-    case "denied_live":
-      return "이 자격 증명으로 방금 호출했을 때 게이트웨이가 403 을 반환했습니다";
+    case "server_forbidden_at_probe":
+      return (
+        "권한 측정 시 서버가 403(접근 거부) 을 반환했습니다. 서버 정책·일시 차단·계정 정책을 " +
+        "구별할 수 없으므로 자동으로 다시 호출하지 않습니다"
+      );
+    case "server_forbidden_live":
+      return (
+        "이 세션에서 호출했을 때 서버가 403(접근 거부) 을 반환했습니다. 사용자가 직접 갱신하거나 " +
+        "계정별 권한 API 가 생기기 전까지 자동으로 다시 호출하지 않습니다"
+      );
     case "never_probed":
       return "이 자격 증명으로 호출해 본 기록이 없습니다";
     case "expired":
@@ -188,12 +210,30 @@ export function permissionFor(
   if (evidence === null || found === undefined) return decide("unknown", "never_probed", modelId, null);
 
   const age = ageOf(found.observedAt ?? evidence.measuredAt, now);
+
+  // A refusal does not expire into permission to try again.
+  //
+  // Asymmetric on purpose, and the asymmetry is the safety property. An expired
+  // `permitted` becomes `unknown`, which selects nothing — the cost is one
+  // re-probe. An expired `server_forbidden` becoming `unknown` would mean the
+  // next request calls the model again to find out whether it is still forbidden,
+  // which is exactly the "use 403s to explore the permission surface" behaviour
+  // that gets a key blocked. It stays forbidden until something outside this
+  // module says otherwise: a real permission API, or the user explicitly clearing
+  // it. A record whose *timestamp* is unreadable or future-dated is a different
+  // matter — that is not a measurement at all, and nothing can be read from it.
+  if (found.chat === "denied" && !("problem" in age && age.problem !== "expired")) {
+    return decide(
+      "server_forbidden",
+      found.source === "live" ? "server_forbidden_live" : "server_forbidden_at_probe",
+      modelId,
+      "problem" in age ? null : age.ageMs,
+    );
+  }
+
   if ("problem" in age) return decide("unknown", age.problem, modelId, null);
 
   if (found.chat === "pass") return decide("permitted", "chat_succeeded", modelId, age.ageMs);
-  if (found.chat === "denied") {
-    return decide("denied", found.source === "live" ? "denied_live" : "gateway_denied", modelId, age.ageMs);
-  }
   return decide("unknown", "never_probed", modelId, age.ageMs);
 }
 
@@ -249,6 +289,56 @@ export function denyObserved(
     ? evidence.models.map((m) => (m.modelId === modelId ? observed : m))
     : [...evidence.models, observed];
   return { ...evidence, models };
+}
+
+/**
+ * Where permission evidence lives, without saying where that is.
+ *
+ * The CLI keeps it in `.arena/capability-matrix.json` next to the repository; the
+ * VS Code extension keeps it in extension storage under a different layout, and a
+ * future host will keep it somewhere else again. None of that is the design
+ * layer's business, and a `path` parameter reaching in here would make it so —
+ * which is why this is an interface with no filesystem vocabulary in it at all.
+ *
+ * Implementations are expected to be *atomic*: `recordForbidden` must either land
+ * completely or not at all. A half-written record is worse than none, because the
+ * thing it protects against is calling a forbidden model again.
+ *
+ * What may be stored is fixed by what the argument shapes allow: a credential
+ * fingerprint, a base URL, model ids, statuses and timestamps. There is no field
+ * for an API key, an `Authorization` header or a response body, and that is
+ * deliberate — a store cannot leak what it was never handed.
+ */
+export interface PermissionEvidenceStore {
+  /**
+   * The record for this credential and gateway, or null.
+   *
+   * Implementations must verify *both* — a record gathered under another key or
+   * against another gateway is evidence about somebody else.
+   */
+  load(input: { keyFingerprint: string; baseUrl: string }): Promise<PermissionEvidence | null>;
+  /**
+   * Writes down that the server refused this model for this credential.
+   *
+   * Called after a real 403 and nothing else. Must be atomic, and must survive a
+   * process restart — the whole point is that the next process does not repeat the
+   * call.
+   */
+  recordForbidden(input: {
+    keyFingerprint: string;
+    baseUrl: string;
+    modelId: string;
+    /** When it was observed, from the caller's clock. */
+    at: number;
+  }): Promise<void>;
+  /**
+   * Drops the record for this credential entirely.
+   *
+   * For a user who has changed their plan and is explicitly asking for a fresh
+   * measurement. Never called automatically: an expiry that cleared refusals would
+   * turn every stale record into a new 403.
+   */
+  invalidate(input: { keyFingerprint: string; baseUrl: string }): Promise<void>;
 }
 
 /**
