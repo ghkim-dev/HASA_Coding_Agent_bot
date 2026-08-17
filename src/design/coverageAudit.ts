@@ -1,5 +1,5 @@
 import type { RequirementSpec } from "./requirementSpec.ts";
-import type { ScenarioBlueprint } from "./scenarioBlueprint.ts";
+import { GENERIC_RULE, type ScenarioBlueprint } from "./scenarioBlueprint.ts";
 
 /**
  * Whether a plan is fit to run, decided before anything runs.
@@ -27,7 +27,17 @@ export type FindingCode =
   | "SCENARIO_OVERLOADED"
   | "SCENARIO_WITHOUT_REQUIREMENT"
   | "ORACLE_READS_PROSE"
-  | "INVENTED_REQUIREMENT";
+  | "INVENTED_REQUIREMENT"
+  /** No design rule covers this requirement; only a generic placeholder exists. */
+  | "NO_DESIGN_RULE"
+  | "UNSUPPORTED_REQUIREMENT_KIND"
+  /** A scenario exists and its oracle decides nothing about the requirement. */
+  | "ORACLE_INSUFFICIENT"
+  | "SOURCE_SPAN_INVALID"
+  | "SEMANTIC_ALIGNMENT_UNKNOWN"
+  | "REQUIREMENT_CONFLICT"
+  | "UNRESOLVED_CONDITION"
+  | "MODEL_MAY_NOT_BE_CALLED";
 
 export interface Finding {
   code: FindingCode;
@@ -169,6 +179,74 @@ export function auditCoverage(input: {
     }
   }
 
+  // Design-rule coverage. "A scenario exists" and "the requirement can be
+  // verified" are different claims, and the gap between them was written down
+  // as a known risk: a generic happy-path attached to everything answers the
+  // first for every requirement and the second for none.
+  for (const spec of live) {
+    const scenarios = byRequirement.get(spec.id) ?? [];
+    if (scenarios.length === 0) continue;
+
+    // The presence of a generic placeholder *is* the signal: the designer emits
+    // one only when no rule matched. Asking whether some non-generic scenario
+    // exists let the always-attached completion check mask a missing rule.
+    if (scenarios.some((s) => s.designRuleId === GENERIC_RULE)) {
+      findings.push({
+        code: "NO_DESIGN_RULE",
+        subject: spec.id,
+        detail: `generic 시나리오만 있습니다. 이 요구사항 유형(${spec.kind}/${spec.polarity})을 덮은 것으로 표시하지 않습니다.`,
+      });
+      findings.push({
+        code: "UNSUPPORTED_REQUIREMENT_KIND",
+        subject: spec.id,
+        detail: `설계기가 ${spec.kind}/${spec.polarity} 를 다루는 규칙을 갖고 있지 않습니다.`,
+      });
+    }
+
+    // An oracle that decides nothing about this requirement is a scenario that
+    // runs and answers a different question.
+    if (spec.priority === "must" && !scenarios.some((s) => s.oracleCoverage.length > 0)) {
+      findings.push({
+        code: "ORACLE_INSUFFICIENT",
+        subject: spec.id,
+        detail: "must 요구사항의 성공을 입증하는 oracle 이 없습니다.",
+      });
+    }
+  }
+
+  // What the runtime could not settle. Reported rather than decided, because
+  // deciding it is what a plan must not do on the user's behalf.
+  for (const spec of live) {
+    if (spec.span === undefined && spec.status !== "system_added") {
+      findings.push({
+        code: "SOURCE_SPAN_INVALID",
+        subject: spec.id,
+        detail: "사용자 원문 좌표가 없습니다. 근거를 다시 확인할 수 없습니다.",
+      });
+    }
+    if (spec.alignment?.verdict === "unknown") {
+      findings.push({
+        code: "SEMANTIC_ALIGNMENT_UNKNOWN",
+        subject: spec.id,
+        detail: `인용 구절과 요구사항의 대응을 확인할 수 없습니다: ${spec.alignment.detail}`,
+      });
+    }
+    if (spec.conflicts.length > 0) {
+      findings.push({
+        code: "REQUIREMENT_CONFLICT",
+        subject: spec.id,
+        detail: `${spec.conflicts.join(", ")} 와(과) 동시에 만족될 수 없습니다. 사용자 확인이 필요합니다.`,
+      });
+    }
+    if (spec.condition !== undefined) {
+      findings.push({
+        code: "UNRESOLVED_CONDITION",
+        subject: spec.id,
+        detail: "조건이 확인되기 전에는 무조건 규칙으로 확정할 수 없습니다.",
+      });
+    }
+  }
+
   const known = new Set(live.map((r) => r.id));
   for (const scenario of input.scenarios) {
     if (scenario.requirementIds.length === 0 && scenario.generatedBy !== "baseline") {
@@ -210,7 +288,7 @@ export function auditCoverage(input: {
     for (const model of input.plannedModels) {
       if (!permitted.has(model)) {
         findings.push({
-          code: "SCENARIO_WITHOUT_REQUIREMENT",
+          code: "MODEL_MAY_NOT_BE_CALLED",
           subject: model,
           detail: `실행 계획에 호출 권한이 없는 모델이 포함돼 있습니다: ${model}`,
         });

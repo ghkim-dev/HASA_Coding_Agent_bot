@@ -49,9 +49,13 @@ const NEG = "(?:마|말|않고)";
 
 const EXECUTE_DIRECT = new RegExp(
   [
-    `실행하지\\s*${NEG}`,
+    // A particle may sit between the stem and 하지: "실행도 하지 마",
+    // "실행은 하지 말고". A missed prohibition is the dangerous direction —
+    // this module exists because one was missed — and requiring the two to be
+    // joined missed every sentence that puts a particle between them.
+    `실행(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
     `돌리지\\s*${NEG}`,
-    `구동하지\\s*${NEG}`,
+    `구동(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
     // "실행하라는 게 아니라" — a correction rather than a prohibition, and the
     // sentence that produced this whole investigation.
     "실행하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
@@ -64,10 +68,10 @@ const EXECUTE_DIRECT = new RegExp(
 
 const MODIFY_DIRECT = new RegExp(
   [
-    `수정하지\\s*${NEG}`,
+    `수정(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
     `고치지\\s*${NEG}`,
     `바꾸지\\s*${NEG}`,
-    `변경하지\\s*${NEG}`,
+    `변경(?:도|은|는|을|를|만)?\\s*하지\\s*${NEG}`,
     `건드리지\\s*${NEG}`,
     "수정하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
     "don't\\s+(?:modify|edit|change)",

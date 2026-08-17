@@ -115,3 +115,22 @@ describe("mapping a prohibition to the tools it covers", () => {
     assert.equal(classForbidding(none, "run_command"), null);
   });
 });
+
+describe("조사가 낀 금지도 읽는다", () => {
+  test("동사 어간과 하지 사이의 조사", () => {
+    // Found while writing the auto-design demos: "수정도 하지 말아줘" is a plain
+    // prohibition and was not read as one, because the patterns required the
+    // stem and 하지 to be joined. A missed prohibition is the direction that
+    // lets a forbidden action through.
+    assert.deepEqual(forbids("수정도 하지 말아줘."), ["modify"]);
+    assert.deepEqual(forbids("실행도 하지 마세요."), ["execute"]);
+    assert.deepEqual(forbids("수정은 하지 말고 분석만 해줘."), ["modify"]);
+    assert.deepEqual(forbids("실행만 하지 말아주세요."), ["execute"]);
+  });
+
+  test("조사를 넓혀도 요청은 여전히 통과한다", () => {
+    assert.deepEqual(forbids("실행을 해서 결과를 보여줘."), []);
+    assert.deepEqual(forbids("수정을 해서 버그를 고쳐줘."), []);
+    assert.deepEqual(forbids("실행은 했는데 결과가 이상해."), []);
+  });
+});

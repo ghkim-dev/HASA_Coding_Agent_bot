@@ -160,3 +160,123 @@ INVENTED_REQUIREMENT                  존재하지 않는 요구사항 참조
 - ScenarioBlueprint → 실행 가능한 `EvalScenario` 변환
 - Arena 연동 (설계 후보 충돌 시)
 - requirement 간 `dependencies` / `conflicts` 자동 도출 — 필드는 있으나 채우지 않음
+
+---
+
+# 요구사항 신뢰 경계 (2차)
+
+## 확정 권한은 출처가 정한다
+
+`confirmed`는 계획이 묻지 않고 행동해도 되는 표시다. 모델이 자기 제안에 그것을
+붙일 수 있으면 자기 해석을 사실로 승격시킬 수 있다. 그래서 권한을 **출처**로
+고정한다.
+
+```
+runtime_prohibition   confirmed   런타임이 원문에서 읽음
+runtime_source        confirmed   같음
+model_proposal        ambiguous   무엇을 보내든 항상
+carried               이전 값 유지
+system_baseline       confirmed, explicit 불가
+사용자 승인            confirmed   다음 턴에서 사용자가 동의
+```
+
+`confidenceFor`가 유일한 결정 지점이다. 모델의 `confidence`는
+`modelClaimedConfidence`에 정보로 남고 아무것도 결정하지 않는다.
+
+제안이 `derivedBy`·`status`·`sourceText`·`id`를 실어 보내면 거부한다. 검사받는
+대신 믿어지려는 시도이기 때문이다.
+
+## SourceSpan — 모델은 좌표만 준다
+
+문자열 포함 검사는 약하다.
+
+```
+사용자 : 실행하지 말고 코드만 분석해줘.
+제안   : 실행이 필수 요구사항이다.   sourceText: "실행"
+```
+
+"실행"은 원문에 있다. **금지당하는 대상으로서** 있고, 부분 문자열 검사는 그
+차이를 볼 수 없다.
+
+그래서 모델은 `{turnId, start, end}`를 주고 런타임이 직접 자른다. 모델이 함께
+보낸 `quote`는 그 절단과 대조한다.
+
+오프셋은 **UTF-16 코드 단위**다. `text.slice(start, end)`가 정의 그 자체이고,
+한국어는 음절당 1단위, BMP 밖 이모지는 2단위다. 서로게이트 쌍 가운데를 자르면
+거부한다 — 모델이 의도한 경계를 추측하면 규약이 조용히 근사치가 된다.
+
+거부 사유: `out_of_range` `empty` `reversed` `split_surrogate` `quote_mismatch`
+`wrong_turn` `too_slight` `negation_truncated` `condition_truncated`
+
+`negation_truncated`는 **인접성**으로 판단한다. 같은 문장에 부정이 있다는 이유로
+잡으면 `실행하지 말고` 옆의 `코드만 분석해줘`까지 거부한다. 절단면 바로 뒤가
+부정으로 이어지는지를 본다.
+
+## 의미·극성
+
+인용이 맞아도 뜻이 뒤집힐 수 있다. 결정론적으로 판단 가능한 것만 잡는다.
+
+```
+polarity_reversed             금지 구절로 요구를 세움
+keep_vs_remove                유지 구절로 제거를 세움
+execute_vs_analyse            분석만 요청에서 실행을 세움
+past_failure_as_prohibition   과거 실패 보고를 금지로 읽음
+conditional_made_absolute     조건부를 무조건 must 로
+priority_promoted             가능하면 을 must 로
+scope_widened                 특정 경로를 전체로
+target_substituted            지목한 대상이 요구사항에 없음 (unknown)
+```
+
+나머지는 전부 `unknown` → `ambiguous`다. 불확실한 것을 확정하는 것보다 다시
+읽는 비용이 싸다.
+
+우선순위는 모델이 아니라 **원문**에서 읽는다. `반드시`는 must, `가능하면`은 may.
+모델은 모든 것을 must로 올릴 유인이 있고, 그러면 사용자가 "가능하면"이라고 한
+것 때문에 전체가 실패한다.
+
+## 설계 규칙 자체의 감사
+
+이전 슬라이스의 남은 위험이었다.
+
+> 규칙 기반 설계기는 알려진 실패 형태만 덮으며 그 누락은 Coverage Audit로 잡히지 않음
+
+각 Blueprint가 `designRuleId`, `oracleCoverage`, `unresolvedAspects`를 갖는다.
+설계기는 맞는 규칙이 없을 때만 `generic`을 낸다. **generic의 존재 자체가 신호**이고
+감사는 그것을 `NO_DESIGN_RULE`로 잡는다 — "시나리오가 있다"와 "요구사항을 검증할
+수 있다"는 다른 주장이다.
+
+## Coverage Closure
+
+첫 finding에서 멈추는 것만으로는 자동설계가 아니다. 절반은 설계기가 미처 내지
+못한 시나리오이고 추가는 기계적이다. 나머지 절반은 사용자만 정할 수 있고, 거기에
+시나리오를 추가하는 것은 계획이 사용자를 대신해 결정하는 것이다.
+
+```
+자동 보완              EXECUTION_WITHOUT_EVIDENCE
+                      MODIFY_WITHOUT_REGRESSION
+                      FORBIDDEN_WITHOUT_POSITIVE_PAIR
+                      FORBIDDEN_WITHOUT_SIDE_EFFECT_ORACLE
+                      SOURCE_WITHOUT_PROVENANCE_CHECK
+
+사용자에게 물음        REQUIREMENT_CONFLICT
+                      UNRESOLVED_CONDITION
+                      SEMANTIC_ALIGNMENT_UNKNOWN
+                      AMBIGUOUS_DECIDED
+                      NO_DESIGN_RULE
+```
+
+매 pass마다 **재감사**한다. 추가된 시나리오도 시나리오이고 같은 구조 규칙을
+받는다. 재감사 없이 닫으면 실제로 실행되는 계획은 그 상태로 감사된 적이 없다.
+
+종료를 보장하는 것은 `attempted` 중복 방지다. 같은 finding을 두 번 보완하지
+않으므로 수렴한다. `maxPasses`는 보완이 연쇄하게 될 때를 위한 보험이고, 현재
+설계에서는 도달하지 않는다.
+
+## 아직 없는 것
+
+- ScenarioBlueprint → EvalScenario 변환 (의도적으로 보류)
+- 실제 모델 제안 경로 (현재 fixture)
+- Harness Planner, Arena 연동
+- `dependencies` 자동 도출
+- 규칙 커버리지 자체의 메타 감사 — `NO_DESIGN_RULE`이 누락을 보고하지만
+  새 요구사항 유형에 맞는 규칙은 사람이 써야 한다
