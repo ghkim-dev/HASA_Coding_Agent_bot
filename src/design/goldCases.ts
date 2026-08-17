@@ -3,11 +3,39 @@ import type { GoldCase } from "./goldRequirements.ts";
 /**
  * The answers, written from the Korean and not from the output.
  *
- * Thirty-two cases, each one a sentence a person actually types at a coding
+ * Forty-three cases, each one a sentence a person actually types at a coding
  * agent. What every case records is in `goldRequirements.ts`; what matters about
  * *this* file is the discipline: when the extractor disagrees with a case, the
  * case is the thing that is right until somebody argues otherwise in the
  * `KNOWN_MISSES` table, with a reason and a verdict.
+ *
+ * ## This is the development set, and it is frozen
+ *
+ * These 43 cases have been read by the implementation, so they can no longer
+ * measure generalisation — every fix since they were written had them in view.
+ * They stay as the regression set, and `holdoutCases.ts` is where an unseen
+ * measurement now comes from. Its answers were written before any of the code
+ * that reads them, and its hash is recorded so that fact stays checkable.
+ *
+ * ## Change history
+ *
+ * Every edit to an answer is listed here with why. An answer changed to match
+ * the implementation is the one thing that would make this file worthless, so
+ * "the implementation disagreed" is never a reason on its own.
+ *
+ *   1. `no-connective-as-target` — a requirement was **added**. The first draft
+ *      recorded one `verify` for "버그를 재현해줘. 그리고 검증해줘." and the second
+ *      clause is a second request with no named target. The extractor was right
+ *      and the answer was incomplete.
+ *   2. `particle-bound-noun` — the target was **corrected** from `있는 모델` to
+ *      `모델`. `있는` is a verb ending, not part of the noun phrase; the original
+ *      answer copied a fragment.
+ *   3. All 43 cases — the `executable` axis was **added** (2026-08-18). It records
+ *      whether the harness could run the plan, which `startable` never claimed;
+ *      see the field's own note in `goldRequirements.ts`.
+ *
+ * No answer has been changed in the other direction — to agree with output that
+ * disagreed with the Korean.
  *
  * ## How the targets were decided
  *
@@ -45,6 +73,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 2 },
     startable: false,
+    executable: false,
   },
   {
     id: "run-named-file",
@@ -61,6 +90,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
   {
     id: "add-test-file",
@@ -77,6 +107,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
   {
     id: "remove-dead-code",
@@ -93,6 +124,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
 
   // --- 금지 -----------------------------------------------------------------
@@ -112,6 +144,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "no-modify-no-execute",
@@ -130,6 +163,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 3 },
     startable: true,
+    executable: true,
   },
   {
     id: "particle-between-stem-and-negation",
@@ -147,6 +181,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "negation-jin-form",
@@ -163,6 +198,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "negation-myeon-an",
@@ -180,6 +216,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 정정 · 보완 · 질문 · 계속 ---------------------------------------------
@@ -206,6 +243,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "refinement",
@@ -229,6 +267,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "question-turn",
@@ -250,6 +289,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "continuation",
@@ -267,6 +307,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 복합 요청과 병렬 동사 -------------------------------------------------
@@ -287,6 +328,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 3 },
     startable: true,
+    executable: true,
   },
   {
     id: "two-inspects-one-sentence",
@@ -304,6 +346,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "after-then",
@@ -320,6 +363,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 조사와 생략된 목적어 -------------------------------------------------
@@ -336,6 +380,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 1 },
     startable: false,
+    executable: false,
   },
   {
     id: "omitted-object-execute",
@@ -350,6 +395,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 1 },
     startable: false,
+    executable: false,
   },
   {
     id: "omitted-object-inspect",
@@ -364,6 +410,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 1 },
     startable: false,
+    executable: false,
   },
   {
     id: "particle-eseoman",
@@ -380,6 +427,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "particle-bound-noun",
@@ -396,6 +444,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "particle-eun-neun",
@@ -412,6 +461,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 과거 실패 보고 -------------------------------------------------------
@@ -430,6 +480,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "past-failure-retry",
@@ -451,6 +502,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 2 },
     startable: false,
+    executable: false,
   },
   {
     id: "past-failure-not-a-prohibition",
@@ -467,6 +519,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 조건부 -------------------------------------------------------------
@@ -490,6 +543,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["UNRESOLVED_CONDITION"], max: 2 },
     startable: false,
+    executable: false,
   },
   {
     id: "conditional-requirement",
@@ -506,6 +560,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["UNRESOLVED_CONDITION"], max: 2 },
     startable: false,
+    executable: false,
   },
   {
     id: "while-modifying-not-conditional",
@@ -523,6 +578,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 기존 동작 유지 -------------------------------------------------------
@@ -541,6 +597,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
   {
     id: "preserve-and-modify",
@@ -558,6 +615,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["REQUIREMENT_CONFLICT"], max: 2 },
     startable: false,
+    executable: false,
   },
 
   // --- 코드 분석 · 설명 -----------------------------------------------------
@@ -576,6 +634,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
   {
     id: "analyse-structure",
@@ -592,6 +651,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
   {
     id: "named-source",
@@ -608,6 +668,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 2 },
     startable: true,
+    executable: true,
   },
 
   // --- 한국어 · 영어 혼합 ---------------------------------------------------
@@ -626,6 +687,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
   {
     id: "mixed-command-name",
@@ -642,6 +704,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
   {
     id: "mixed-english-error-name",
@@ -658,6 +721,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 1 },
     startable: true,
+    executable: true,
   },
 
   // --- 잘못된 대상 결합 방지 -------------------------------------------------
@@ -677,6 +741,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 2 },
     startable: false,
+    executable: false,
   },
   {
     id: "no-connective-as-target",
@@ -697,6 +762,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 2 },
     startable: false,
+    executable: false,
   },
 
   // --- 과다 질문 방지 -------------------------------------------------------
@@ -715,6 +781,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: [], max: 0 },
     startable: true,
+    executable: true,
   },
   {
     id: "one-question-per-requirement",
@@ -729,6 +796,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 1 },
     startable: false,
+    executable: false,
   },
 
   // --- 요구사항 발명 방지 ---------------------------------------------------
@@ -739,6 +807,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     turns: [{ text: "적당히 잘 좀 해줘.", relation: "new_task", requirements: [] }],
     questions: { expected: [], max: 1 },
     startable: false,
+    executable: false,
   },
   {
     id: "thanks-no-requirement",
@@ -747,6 +816,7 @@ export const GOLD_CASES: readonly GoldCase[] = [
     turns: [{ text: "고마워, 잘 됐어.", relation: "new_task", requirements: [] }],
     questions: { expected: [], max: 1 },
     startable: false,
+    executable: false,
   },
   {
     id: "no-invented-deploy",
@@ -764,5 +834,6 @@ export const GOLD_CASES: readonly GoldCase[] = [
     ],
     questions: { expected: ["TARGET_UNRESOLVED"], max: 2 },
     startable: false,
+    executable: false,
   },
 ];

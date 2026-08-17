@@ -70,11 +70,12 @@ describe("Gold 집합 자체", () => {
     );
   });
 
-  test("모든 사례에 8개 축의 정답이 기록돼 있다", () => {
+  test("모든 사례에 9개 축의 정답이 기록돼 있다", () => {
     for (const gold of GOLD_CASES) {
       assert.ok(gold.why.length > 0, `${gold.id}: 왜 이 사례가 있는지가 없습니다`);
       assert.ok(gold.turns.length > 0, `${gold.id}: 턴이 없습니다`);
-      assert.equal(typeof gold.startable, "boolean", `${gold.id}: 실행 가능 여부가 없습니다`);
+      assert.equal(typeof gold.startable, "boolean", `${gold.id}: 시작 가능 여부가 없습니다`);
+      assert.equal(typeof gold.executable, "boolean", `${gold.id}: 실행 가능 여부가 없습니다`);
       assert.ok(gold.questions.max >= 0, `${gold.id}: 질문 상한이 없습니다`);
       for (const turn of gold.turns) {
         assert.ok(turn.relation.length > 0, `${gold.id}: relation 이 없습니다`);
@@ -146,20 +147,35 @@ describe("요구사항 정확성 — 분모를 함께", () => {
 });
 
 describe("질문 정확성 — 분모를 함께", () => {
-  test("recall 11/12, precision 11/33", () => {
-    // Both numbers are what they are. Precision is dominated by `NO_DESIGN_RULE`
-    // on the acts that still have no design rule — `modify`, `execute`,
-    // `create`, `remove`, `verify` — which is an honest report of a gap rather
-        // than a question the user should be asked. `inspect` and `preserve` were
-    // the two rules added here, and their share of these questions is gone.
-    assert.deepEqual(score.questionRecall, { hit: 11, of: 12, value: 0.917 });
-    assert.deepEqual(score.questionPrecision, { hit: 11, of: 33, value: 0.333 });
+  test("recall 12/12, precision 13/13", () => {
+    // Precision was 11/33. The 22 false positives were all `NO_DESIGN_RULE` —
+    // the plan asking a user to design its verification rules — and they are gone
+    // because the five missing act rules were written, not because the question
+    // was suppressed: recall went *up* at the same time, from 11/12 to 12/12.
+    assert.deepEqual(score.questionRecall, { hit: 12, of: 12, value: 1 });
+    assert.deepEqual(score.questionPrecision, { hit: 13, of: 13, value: 1 });
   });
 
-  test("남은 초과 질문은 전부 NO_DESIGN_RULE 이다", () => {
-    const codes = new Set(score.unexpectedQuestions.map((q) => q.code));
-    assert.deepEqual([...codes], ["NO_DESIGN_RULE"]);
-    assert.equal(score.unexpectedQuestions.length, 22);
+  test("초과 질문이 하나도 없다", () => {
+    assert.deepEqual(score.unexpectedQuestions, []);
+  });
+
+  test("질문을 없애서 precision 을 만든 것이 아니다", () => {
+    // The cheap way to a perfect precision is to ask nothing at all. So: every
+    // case whose gold expects a question got one, and the total asked is the total
+    // expected — 13 questions across 43 cases, none of them about our own
+    // verification rules.
+    const askedTotal = GOLD_CASES.reduce(
+      (sum, gold) => sum + questionsFrom(previews.get(gold.id) as PreviewResult).length,
+      0,
+    );
+    assert.equal(askedTotal, 13);
+    assert.deepEqual(score.missingQuestions, []);
+    for (const gold of GOLD_CASES) {
+      if (gold.questions.expected.length === 0) continue;
+      const asked = questionsFrom(previews.get(gold.id) as PreviewResult);
+      assert.ok(asked.length > 0, `${gold.id}: 물어야 하는데 묻지 않았습니다`);
+    }
   });
 
   test("사용자가 직접 말한 요구를 되묻지 않는다", () => {
@@ -199,9 +215,27 @@ describe("질문 정확성 — 분모를 함께", () => {
   });
 });
 
-describe("실행 가능 여부", () => {
-  test("42/43", () => {
-    assert.deepEqual(score.startabilityAccuracy, { hit: 42, of: 43, value: 0.977 });
+describe("Startable 과 Executable 은 다른 주장이다", () => {
+  test("Requirement Startability 43/43", () => {
+    // Understanding the sentence. Says nothing about whether anything may run.
+    assert.deepEqual(score.requirementStartability, { hit: 43, of: 43, value: 1 });
+  });
+
+  test("Harness Executability 43/43", () => {
+    // A different claim with its own denominator: every requirement covered by a
+    // design rule, and nothing the audit could not close.
+    assert.deepEqual(score.harnessExecutability, { hit: 43, of: 43, value: 1 });
+  });
+
+  test("두 축을 교차하면 남는 사례가 없다", () => {
+    assert.deepEqual(score.cross.startableNotExecutable, []);
+    assert.deepEqual(score.cross.executableNotStartable, []);
+  });
+
+  test("사용자 요구사항이 없는데 Executable 인 사례는 0건이다", () => {
+    // The invariant, measured over the whole set rather than asserted about one
+    // sentence. `고마워.` used to be a plan ready to run.
+    assert.deepEqual(score.cross.executableWithoutUserRequirement, []);
   });
 
   test("대상이 열린 요구사항이 있으면 시작 가능이 아니다", () => {
@@ -211,6 +245,9 @@ describe("실행 가능 여부", () => {
       const known = KNOWN_MISSES.some((m) => m.caseId === gold.id && m.axis === "startability");
       if (known) continue;
       assert.equal(startableOf(preview), false, `${gold.id}: 시작 가능으로 표시됐습니다`);
+      assert.equal(preview.executable, false, `${gold.id}: 실행 가능으로 표시됐습니다`);
+      assert.equal(preview.mayExecute, false, `${gold.id}: 도구 실행이 허용됐습니다`);
+      assert.deepEqual(preview.plannedTools, [], `${gold.id}: 실행 계획이 남아 있습니다`);
     }
   });
 });

@@ -109,14 +109,28 @@ export interface GoldCase {
     max: number;
   };
   /**
-   * Whether work could start with nothing further from the user.
+   * Whether the *request* was understood well enough to begin.
    *
    * Judged by the definition in `executionReadiness`: at least one requirement,
    * every one of them grounded, intended, targeted, unconditional and
-   * unconflicted. Oracle coverage is a separate claim and is reported separately
-   * — see `UNMEASURED`.
+   * unconflicted. This is a claim about reading Korean, and nothing else.
    */
   startable: boolean;
+  /**
+   * Whether the *harness* could run it — a different claim, kept separate.
+   *
+   * Startability says the sentence was understood. Executability additionally
+   * requires that every requirement have a verification rule with a runtime
+   * oracle behind it, and that the audit found nothing it could not close. The
+   * two were reported as one number, which made "we understood the request" read
+   * as "we can safely run it": `startability 42/43` said nothing about whether a
+   * single one of those plans was runnable.
+   *
+   * Answered here by the definition rather than by observation — startable, plus a
+   * design rule for every requirement — so the cross-tabulation in `GoldScore` can
+   * show where the engine disagrees.
+   */
+  executable: boolean;
 }
 
 /** Codes that must never be asked about a verb the user wrote themselves. */
@@ -140,24 +154,16 @@ export interface KnownGap {
  * that was edited until it agreed.
  */
 export const KNOWN_MISSES: readonly KnownGap[] = [
-  {
-    caseId: "preserve-and-modify",
-    axis: "question",
-    verdict: "defect",
-    reason:
-      "'함수 이름을 바꿔주고 기존 이름도 그대로 유지해줘' 는 충돌이지만 markConflicts 가 잡지 못한다. " +
-      "sharedSubject 의 명사 필터가 '이름' 을 제외하는데, 이름 바꾸기와 이름 유지 문장에서 공유되는 " +
-      "명사가 바로 그 '이름' 이다. 필터를 그냥 풀면 일반적인 문장에서 거짓 충돌이 생기므로 별도 설계가 " +
-      "필요하다.",
-  },
-  {
-    caseId: "preserve-and-modify",
-    axis: "startability",
-    verdict: "defect",
-    reason:
-      "같은 원인. 충돌이 기록되지 않으므로 두 요구사항이 모두 ready 로 남고, 사용자가 풀어야 하는 " +
-      "모순을 그대로 실행 가능으로 표시한다.",
-  },
+  // Empty, and that is a measurement rather than a claim: the test below asserts
+  // this list is *exactly* the set of remaining disagreements, so an empty table
+  // is only green while every one of the 43 cases agrees on all nine axes.
+  //
+  // The two entries that were here — `preserve-and-modify` on questions and on
+  // startability — were one defect: `markConflicts` could not see a rename that
+  // contradicts a keep, because `sharedSubject` filters `이름` out of its noun
+  // list and `이름` is the noun those two sentences share. Closed by reading the
+  // acts and their targets instead of two texts sharing a word; see `actsCollide`
+  // in `requirementSpec.ts`.
 ];
 
 /**
@@ -345,8 +351,28 @@ export interface GoldScore {
   questionPrecision: Ratio;
   /** Cases within their question ceiling, over cases. */
   questionCeiling: Ratio;
-  /** Cases whose startability was read correctly, over cases. */
-  startabilityAccuracy: Ratio;
+  /**
+   * Cases whose *requirement startability* was read correctly, over cases.
+   *
+   * A measure of reading the request. Not a measure of whether anything could
+   * safely run — see `harnessExecutability`, which is the claim people actually
+   * want when they read a number like this one.
+   */
+  requirementStartability: Ratio;
+  /** Cases whose *harness executability* the engine got right, over cases. */
+  harnessExecutability: Ratio;
+  /**
+   * The two axes crossed, because the interesting cases are the disagreements.
+   *
+   * `executableWithoutUserRequirement` must be zero. It is the invariant the
+   * audit's `NO_USER_REQUIREMENT` finding exists for: a request holding nothing
+   * but the harness's own baselines passed every check and came out ready to run.
+   */
+  cross: {
+    startableNotExecutable: string[];
+    executableNotStartable: string[];
+    executableWithoutUserRequirement: string[];
+  };
   /** Every gold requirement nothing answered, for naming rather than counting. */
   missed: Array<{ caseId: string; turnId: string; gold: GoldRequirement }>;
   /** Everything extracted that no gold requirement asked for. */
@@ -382,6 +408,12 @@ export function scoreGold(
   let questionHits = 0;
   let withinCeiling = 0;
   let startableHits = 0;
+  let executableHits = 0;
+  const cross: GoldScore["cross"] = {
+    startableNotExecutable: [],
+    executableNotStartable: [],
+    executableWithoutUserRequirement: [],
+  };
 
   const missed: GoldScore["missed"] = [];
   const spurious: GoldScore["spurious"] = [];
@@ -428,7 +460,18 @@ export function scoreGold(
     }
     if (asked.length <= gold.questions.max) withinCeiling += 1;
 
-    if (startableOf(preview) === gold.startable) startableHits += 1;
+    const startable = startableOf(preview);
+    if (startable === gold.startable) startableHits += 1;
+    if (preview.executable === gold.executable) executableHits += 1;
+
+    // The two axes crossed. Read from the engine's own verdicts, so a
+    // disagreement names a case rather than moving a decimal.
+    if (startable && !preview.executable) cross.startableNotExecutable.push(gold.id);
+    if (preview.executable && !startable) cross.executableNotStartable.push(gold.id);
+    const own = preview.requirements.filter(
+      (spec) => spec.status !== "system_added" && spec.supersededBy === undefined,
+    );
+    if (own.length === 0 && preview.executable) cross.executableWithoutUserRequirement.push(gold.id);
   }
 
   // Recall counts the gold rows an extraction answered; precision counts the
@@ -447,7 +490,9 @@ export function scoreGold(
     questionRecall: ratio(expectedQuestions - missingQuestions.length, expectedQuestions),
     questionPrecision: ratio(questionHits, askedQuestions),
     questionCeiling: ratio(withinCeiling, cases.length),
-    startabilityAccuracy: ratio(startableHits, cases.length),
+    requirementStartability: ratio(startableHits, cases.length),
+    harnessExecutability: ratio(executableHits, cases.length),
+    cross,
     missed,
     spurious,
     unexpectedQuestions,
