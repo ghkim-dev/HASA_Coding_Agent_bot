@@ -3,7 +3,7 @@ import { exactSourcesIn } from "../agent/sourceProvenance.ts";
 import type { TurnRelation } from "../agent/turnContract.ts";
 import { checkSpan, sentenceAround, type SourceSpan, type SpanProblem } from "./sourceSpan.ts";
 import { checkAlignment, conditionIn, priorityFrom, scopeIn, type Alignment } from "./semanticAlignment.ts";
-import { functionalCandidates } from "./functionalExtract.ts";
+import { functionalCandidates, type ActionKind } from "./functionalExtract.ts";
 
 /**
  * What the user asked for, in a form a verification plan can be built from.
@@ -97,6 +97,31 @@ export interface RequirementSpec {
   provenance: Provenance;
   /** Whether the user asked for this act. Not whether the target is known. */
   intent: Intent;
+  /**
+   * The act the runtime read out of the verb, when a verb is where this came
+   * from.
+   *
+   * Carried as a field because the designer has to branch on it and the
+   * alternative is reading it back out of prose. It was already being recorded —
+   * inside the id, as `t1-act-inspect-2` — which is the same fact kept somewhere
+   * a rule cannot honestly use: an id is an identifier, and a design rule keyed
+   * on a substring of one is keyed on a naming convention.
+   *
+   * Absent for prohibitions, sources, baselines and model proposals. A model
+   * cannot set it: `acceptProposals` builds every field of an accepted spec
+   * itself and never copies this one.
+   */
+  act?: ActionKind;
+  /**
+   * The words the sentence bound to that verb, when it bound any.
+   *
+   * The user's own noun phrase, particles removed — `로그인 오류`, not the
+   * runtime's rendered sentence `로그인 오류를 수정한다`. Absent exactly when
+   * `binding` is `unresolved`, and carried for the same reason as `act`: the
+   * alternative is recovering it by unparsing `text`, which is prose surgery on a
+   * string this layer wrote itself.
+   */
+  target?: string;
   /** Whether the act has a target. `unresolved` is open, never invented. */
   binding: Binding;
   /** What the model claimed, kept as information and never as authority. */
@@ -269,6 +294,8 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       status: "explicit",
       provenance: "verified",
       intent: intentFor({ derivedBy: "runtime_action" }),
+      act: candidate.action,
+      ...(candidate.object.length === 0 ? {} : { target: candidate.object }),
       // The one place the target can genuinely be open: Korean leaves the
       // object implicit, and the extractor reports that rather than filling it.
       binding: candidate.object.length > 0 ? "resolved" : "unresolved",

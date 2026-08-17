@@ -14,11 +14,10 @@
       "AMBIGUOUS_DECIDED",
       "TARGET_UNRESOLVED"
     ],
-    "exactQuestionSubjects": [
-      "t1-act-preserve-1"
-    ],
+    "exactQuestionSubjects": [],
     "mustContainText": [
       "기존 테스트를 그대로 유지한다"
     ]
-  }
+  },
+  "note": "inspect·preserve 설계 규칙이 생긴 뒤로 이 요구사항들은 NO_DESIGN_RULE 을 내지 않으므로 질문 대상에서 빠졌다. 남은 대상은 여전히 규칙이 없는 유형이다."
 }
