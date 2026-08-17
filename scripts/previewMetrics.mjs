@@ -51,7 +51,26 @@ if (apiKey.trim().length === 0) {
   let propose = null;
   let setup = null;
   try {
-    propose = await createModelProposer({ apiKey, baseUrl });
+    // Same assembly as the CLI: a provider is built here, and permission comes
+    // from a probe run under this credential — never from the public listing.
+    const { createHasaProvider } = await import("../src/provider/hasa/createProvider.ts");
+    const { readCapabilityMatrix } = await import("../src/provider/hasa/hasaLiveProbe.ts");
+    const { fingerprint } = await import("../src/hasa-client/redact.ts");
+    const { evidenceFromMatrix } = await import("../src/design/modelPermission.ts");
+
+    const provider = createHasaProvider({ apiKey, ...(baseUrl.length === 0 ? {} : { baseUrl }) });
+    const keyFingerprint = fingerprint(apiKey);
+    const matrix = await readCapabilityMatrix({
+      path: ".arena/capability-matrix.json",
+      keyFingerprint,
+      baseUrl: provider.baseUrl,
+    }).catch(() => null);
+    const permission = evidenceFromMatrix({ matrix, keyFingerprint, baseUrl: provider.baseUrl });
+    if (permission === null) {
+      setup = "이 자격 증명에 대한 권한 기록이 없습니다. 공개 목록을 권한으로 쓰지 않으므로 모델 경로를 건너뜁니다.";
+    } else {
+      propose = await createModelProposer({ provider, permission });
+    }
   } catch (err) {
     setup = err instanceof Error ? err.message : String(err);
   }

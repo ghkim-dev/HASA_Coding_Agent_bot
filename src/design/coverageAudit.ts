@@ -24,6 +24,8 @@ export type FindingCode =
   | "SOURCE_WITHOUT_PROVENANCE_CHECK"
   | "EXECUTION_WITHOUT_EVIDENCE"
   | "AMBIGUOUS_DECIDED"
+  /** The user asked for this act and never said what to do it to. */
+  | "TARGET_UNRESOLVED"
   | "SCENARIO_OVERLOADED"
   | "SCENARIO_WITHOUT_REQUIREMENT"
   | "ORACLE_READS_PROSE"
@@ -130,7 +132,10 @@ export function auditCoverage(input: {
       }
     }
 
-    if (spec.confidence === "ambiguous" && scenarios.length > 0) {
+    // Intent only. Asking "이 요구사항이 맞습니까?" about a verb the user
+    // wrote is asking them to re-authorise their own request; the target is a
+    // separate question and gets its own finding below.
+    if (spec.intent === "ambiguous" && scenarios.length > 0) {
       const decided = scenarios.some(
         (s) => s.oracle.verifiedCompletion === true || s.oracle.workspaceChanged === true,
       );
@@ -141,6 +146,16 @@ export function auditCoverage(input: {
           detail: "모호한 요구사항을 확정된 것처럼 판정하는 시나리오가 있습니다.",
         });
       }
+    }
+
+    // The act was asked for and has nothing to act on. Distinct from
+    // AMBIGUOUS_DECIDED because the answer is a target, not a yes.
+    if (spec.intent === "confirmed" && spec.binding === "unresolved") {
+      findings.push({
+        code: "TARGET_UNRESOLVED",
+        subject: spec.id,
+        detail: "요청한 작업은 분명하지만 그 대상이 무엇인지 정해지지 않았습니다.",
+      });
     }
 
     if (spec.kind === "validation" && spec.derivedBy === "runtime_source") {

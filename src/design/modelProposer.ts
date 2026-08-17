@@ -1,10 +1,7 @@
-import { createHasaProvider } from "../provider/hasa/createProvider.ts";
-import { HasaCatalog, type Modality } from "../provider/hasa/hasaCatalog.ts";
-import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
-import { conversabilityFor, fingerprint } from "../router/conversability.ts";
-import { poolEligibility } from "../router/poolEligibility.ts";
-import type { RequirementProposal } from "./requirementSpec.ts";
+import type { LlmProvider } from "../provider/types.ts";
 import type { Proposer } from "./preview.ts";
+import { parseProposals } from "./proposalParse.ts";
+import { permittedModels, type PermissionEvidence } from "./modelPermission.ts";
 
 /**
  * Asks a real model for requirement candidates, and lets it decide nothing.
@@ -46,201 +43,55 @@ const SYSTEM = [
 ].join("\n");
 
 export interface ProposerOptions {
-  apiKey: string;
-  baseUrl: string;
-  /** Where the evaluation evidence lives. Defaults to the store's own path. */
-  evidencePath?: string;
-  /** Overridden by tests. Production reads the gateway. */
-  chat?: (input: { modelId: string; system: string; user: string; signal?: AbortSignal }) => Promise<string>;
+  /**
+   * An already-built provider. Not an api key.
+   *
+   * Assembly belongs at the composition root — `previewCli` — the way
+   * `createAgentModel` and `createTextToolModel` already take one. This module
+   * opened its own socket instead, and reimplemented the URL, the bearer header,
+   * the timeout, the retry and the OpenAI response shape that the provider layer
+   * owns, each one a second and weaker copy.
+   */
+  provider: LlmProvider;
+  /**
+   * What this credential is known to be able to call. `null` means nothing was
+   * established, which selects nothing — see `modelPermission`.
+   */
+  permission: PermissionEvidence | null;
 }
 
 /**
- * Which model to ask, ranked by how well it has actually read requirements.
+ * Which model to ask.
  *
- * The first version took the first eligible model in the listing. That was
- * `ax-3.1`, whose `requirementRecall` was the lowest of the four measured —
- * an arbitrary choice for the one job where reading the user correctly is the
- * whole task.
+ * Permission first, and permission is not the catalogue. `listModels()` is
+ * kept only for its order — every id it returns is checked against evidence
+ * gathered under *this* credential, and one with no such evidence is not asked.
  *
- * The ranking reads the evaluation evidence, **including the quarantined
- * dataset**, and that is deliberate and narrow. Quarantine bars a dataset from
- * *production routing* because survivor bias made it unsafe for deciding which
- * model serves a user's turn. This decides which model to ask for suggestions
- * that are then checked, and a wrong pick costs a suggestion rather than a
- * false completion. The two uses are recorded separately so neither is mistaken
- * for the other.
+ * ## Why recall no longer ranks these
  *
- * Without evidence it falls back to listing order, which is where it started.
+ * It used to sort by `requirementRecall` from the Coding Agent sweep, reading
+ * the quarantined dataset alongside the production one. Two things were wrong
+ * with that and only one was the quarantine. `requirementRecall` measures
+ * whether a *whole agent loop* wrote the user's requirements into its contract
+ * over a long task; a proposer emits a short JSON array with character offsets
+ * in one call. Nothing establishes that the first predicts the second, so the
+ * ranking was authority the number had not earned — and no argument about
+ * quarantine could have fixed that, because the metric was the wrong metric
+ * before the question of which file it came from arose.
+ *
+ * So: permitted models in catalogue order, and the selection says plainly that
+ * it had no measured basis. A proposer-specific measurement is what would
+ * change this; `proposerMetrics.ts` defines what it would have to contain.
  */
 export async function chooseProposerModel(options: ProposerOptions): Promise<string | null> {
-  const ranked = await rankByRecall(options);
+  const ranked = await rankByPermission(options);
   return ranked[0] ?? null;
 }
 
-/** Eligible models, best requirement recall first. Exported for its own test. */
-export async function rankByRecall(options: ProposerOptions): Promise<string[]> {
-  const provider = createHasaProvider({
-    apiKey: options.apiKey,
-    ...(options.baseUrl.length === 0 ? {} : { baseUrl: options.baseUrl }),
-  });
-  const listing = await provider.listModels();
-  const eligible: string[] = [];
-
-  const modality = new Map<string, Modality>();
-  try {
-    const catalog = new HasaCatalog(
-      createMediaTransport({ origin: options.baseUrl.replace(/\/v1\/?$/, ""), apiKey: options.apiKey }),
-    );
-    for (const entry of await catalog.all()) modality.set(entry.id, entry.modality);
-  } catch {
-    // Unknown modality is unknown, which `poolEligibility` treats as not
-    // eligible rather than as permission.
-  }
-  const probed = conversabilityFor({
-    baseUrlFingerprint: fingerprint(options.baseUrl),
-    credentialFingerprint: fingerprint(options.apiKey),
-  });
-
-  for (const model of listing.models) {
-    const standing = poolEligibility({
-      modelId: model.id,
-      modality: modality.get(model.id) ?? null,
-      ...(probed.has(model.id) ? { converses: probed.get(model.id)! } : {}),
-      // In the listing means this credential may call it; that is what the
-      // listing is. Anything outside it is never asked.
-      permitted: true,
-    });
-    if (standing.standing === "eligible") eligible.push(model.id);
-  }
-
-  // Evidence is advisory here and never routes a user's turn. A model with no
-  // measurement keeps its listing position rather than being pushed to the back
-  // — unmeasured is not bad, and treating it as bad would freeze the ranking
-  // around whichever models happened to be swept first.
-  const recall = await recallByModel(options.baseUrl, options.evidencePath);
-  return [...eligible].sort((a, b) => {
-    const ra = recall.get(a);
-    const rb = recall.get(b);
-    if (ra === undefined && rb === undefined) return 0;
-    if (ra === undefined) return 1;
-    if (rb === undefined) return -1;
-    return rb - ra;
-  });
-}
-
-/**
- * `requirementRecall` per model, from whatever evidence exists.
- *
- * Reads the quarantined file too. See `chooseProposerModel` for why that is
- * sound here and not in routing.
- */
-async function recallByModel(
-  baseUrl: string,
-  path: string | undefined,
-): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  try {
-    const { loadEvidence } = await import("../router/evaluationStore.ts");
-    const loaded = await loadEvidence({
-      baseUrl,
-      now: Date.now(),
-      ...(path === undefined ? {} : { path }),
-    });
-    for (const summary of [...loaded.summaries, ...loaded.quarantined]) {
-      const value = summary.metrics.requirementRecall;
-      if (value !== undefined) out.set(summary.modelId, value);
-    }
-  } catch {
-    // No evidence is a reason to keep listing order, not to fail.
-  }
-  return out;
-}
-
-/**
- * Reads a model's answer into proposals, refusing what it may not decide.
- *
- * Exported for its own tests: malformed, empty and over-reaching answers are
- * the cases that matter and none of them needs a gateway to produce.
- */
-export function readProposals(
-  raw: string,
-  turnId: string,
-): { proposals: RequirementProposal[]; forged: number } {
-  const start = raw.indexOf("[");
-  const end = raw.lastIndexOf("]");
-  if (start === -1 || end <= start) return { proposals: [], forged: 0 };
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return { proposals: [], forged: 0 };
-  }
-  if (!Array.isArray(parsed)) return { proposals: [], forged: 0 };
-
-  const proposals: RequirementProposal[] = [];
-  let forged = 0;
-
-  for (const item of parsed) {
-    if (typeof item !== "object" || item === null) continue;
-    const row = item as Record<string, unknown>;
-
-    // Fields the model may not send. Passed through so `acceptProposals`
-    // records `forged_provenance` rather than being handed a cleaned object —
-    // a refusal nobody sees is a boundary nobody can check.
-    const overreach = ["confirmed", "confidence", "derivedBy", "status", "sourceText", "id", "executable"];
-    const reaching = overreach.filter((f) => row[f] !== undefined);
-    if (reaching.length > 0) forged += 1;
-
-    if (typeof row["text"] !== "string") continue;
-    if (typeof row["start"] !== "number" || typeof row["end"] !== "number") continue;
-
-    proposals.push({
-      text: row["text"],
-      span: { turnId, start: row["start"], end: row["end"] },
-      ...(typeof row["kind"] === "string" ? { kind: row["kind"] as never } : {}),
-      ...(typeof row["priority"] === "string" ? { priority: row["priority"] as never } : {}),
-      ...(typeof row["polarity"] === "string" ? { polarity: row["polarity"] as never } : {}),
-      // Deliberately forwarded when present, so the refusal is visible.
-      ...(reaching.length > 0 ? ({ derivedBy: "model_proposal" } as never) : {}),
-    });
-  }
-
-  return { proposals, forged };
-}
-
-/** The default transport: one chat completion, no tools, no streaming. */
-async function askGateway(input: {
-  modelId: string;
-  system: string;
-  user: string;
-  apiKey: string;
-  baseUrl: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const base = input.baseUrl.replace(/\/+$/, "");
-  const url = base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
-  const timeout = AbortSignal.timeout(TIMEOUT_MS);
-  const signal =
-    input.signal === undefined ? timeout : AbortSignal.any([timeout, input.signal]);
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${input.apiKey}` },
-    body: JSON.stringify({
-      model: input.modelId,
-      messages: [
-        { role: "system", content: input.system },
-        { role: "user", content: input.user },
-      ],
-      max_tokens: 800,
-      temperature: 0,
-    }),
-    signal,
-  });
-  if (!response.ok) throw new Error(`gateway ${response.status}`);
-  const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return body.choices?.[0]?.message?.content ?? "";
+/** Models this credential may call, catalogue order. Exported for its own test. */
+export async function rankByPermission(options: ProposerOptions): Promise<string[]> {
+  const listing = await options.provider.listModels();
+  return permittedModels(options.permission, listing.models.map((m) => m.id));
 }
 
 /**
@@ -255,33 +106,34 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
     throw new Error("이 자격 증명으로 호출할 수 있는 대화형 모델이 없습니다.");
   }
 
-  const chat =
-    options.chat ??
-    ((input) =>
-      askGateway({
-        ...input,
-        apiKey: options.apiKey,
-        baseUrl: options.baseUrl,
-      }));
-
   return async ({ turnId, text, signal }) => {
     let calls = 0;
     let last = "";
     for (let attempt = 1; attempt <= MAX_CALLS; attempt += 1) {
       if (signal?.aborted === true) throw new Error("aborted");
       calls += 1;
-      last = await chat({
-        modelId,
-        system: SYSTEM,
-        user: attempt === 1 ? text : `${text}\n\n(JSON 배열만 출력하십시오.)`,
-        ...(signal === undefined ? {} : { signal }),
-      });
-      const { proposals } = readProposals(last, turnId);
-      if (proposals.length > 0) return { proposals, modelId, calls, returned: proposals.length };
+      // Normalized in, normalized out. `response.text` is the provider's job;
+      // reading `choices[0].message.content` here was a second, weaker
+      // unwrapping of a wire format this layer must not know exists.
+      const response = await options.provider.chat(
+        {
+          modelId,
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: attempt === 1 ? text : `${text}\n\n(JSON 배열만 출력하십시오.)` },
+          ],
+          temperature: 0,
+          maxOutputTokens: 800,
+        },
+        { timeoutMs: TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) },
+      );
+      last = response.text;
+      const parse = parseProposals(last, turnId);
+      if (parse.proposals.length > 0) return { proposals: parse.proposals, modelId, calls, parse };
       // An empty answer is a legitimate outcome — some turns state no new
       // requirement — so one retry and then stop rather than insisting.
     }
-    const final = readProposals(last, turnId).proposals;
-    return { proposals: final, modelId, calls, returned: final.length };
+    const parse = parseProposals(last, turnId);
+    return { proposals: parse.proposals, modelId, calls, parse };
   };
 }

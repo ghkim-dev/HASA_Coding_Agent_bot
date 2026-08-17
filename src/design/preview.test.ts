@@ -4,8 +4,9 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { previewDesign, relationOf, type Proposer } from "./preview.ts";
 import { questionsFrom, renderAdvanced, renderJson, renderReport } from "./previewReport.ts";
-import { readProposals, MAX_CALLS } from "./modelProposer.ts";
-import { measurePreviews } from "./previewMetrics.ts";
+import { MAX_CALLS } from "./modelProposer.ts";
+import { parseProposals } from "./proposalParse.ts";
+import { measurePreviews, renderMetrics } from "./previewMetrics.ts";
 import { spansOf } from "./sourceSpan.ts";
 
 /**
@@ -19,12 +20,19 @@ import { spansOf } from "./sourceSpan.ts";
 
 const FIXTURES = "examples/design-preview";
 
-/** A model that answers exactly what a test wants, without a gateway. */
+/**
+ * A model that answers exactly what a test wants, without a gateway.
+ *
+ * The raw string goes through the real parser. A helper that handed back a
+ * hand-written outcome would be testing the fixture rather than the code that
+ * has to tell an empty answer from a malformed one.
+ */
 function proposerReturning(raw: string, modelId = "test-model"): Proposer {
   let calls = 0;
   return async ({ turnId }) => {
     calls += 1;
-    return { proposals: readProposals(raw, turnId).proposals, modelId, calls };
+    const parse = parseProposals(raw, turnId);
+    return { proposals: parse.proposals, modelId, calls, parse };
   };
 }
 
@@ -100,7 +108,7 @@ describe("모델은 제안만 한다", () => {
     const refused = result.rejected;
     // Either it was refused for over-reaching, or it was accepted as ambiguous.
     // Never confirmed.
-    assert.ok(fromModel.every((s) => s.confidence === "ambiguous"));
+    assert.ok(fromModel.every((s) => s.intent === "ambiguous"));
     assert.ok(fromModel.length + refused.length > 0);
   });
 
@@ -153,9 +161,9 @@ describe("모델 응답이 정상이 아닐 때", () => {
   test("abort 는 즉시 멈춘다", async () => {
     const controller = new AbortController();
     controller.abort();
-    const aborting: Proposer = async ({ signal }) => {
+    const aborting: Proposer = async ({ signal, turnId }) => {
       if (signal?.aborted === true) throw new Error("aborted");
-      return { proposals: [], modelId: null, calls: 1 };
+      return { proposals: [], modelId: null, calls: 1, parse: parseProposals("", turnId) };
     };
     const result = await previewDesign({
       turns: [TEXT],
@@ -344,6 +352,14 @@ describe("개인 사용 fixture 15개", () => {
           maxQuestions?: number;
           minQuestions?: number;
           mustNotInvent?: string[];
+          /** Questions this request makes it right to ask. */
+          requiredQuestionCodes?: string[];
+          /** Questions this request must never produce. */
+          forbiddenQuestionCodes?: string[];
+          /** The exact set of requirements asked about. Pins the count too. */
+          exactQuestionSubjects?: string[];
+          /** Requirement texts the extractor must produce for this turn. */
+          mustContainText?: string[];
         };
       };
       const result = await previewDesign({ turns: parsed.turns });
@@ -365,14 +381,40 @@ describe("개인 사용 fixture 15개", () => {
         say(`금지가 없어야 하는데 ${forbidden.map((s) => s.text).join(", ")}`);
       }
 
-      // A ceiling rather than an exact count. Offline extraction legitimately
-      // asks the user to confirm how a verb phrase was read; what must not
-      // happen is a preview that interrogates.
+      // A ceiling alone could not fail. `expectedQuestions` was an exact
+      // count; replacing it with `maxQuestions` left fifteen of sixteen
+      // fixtures with no lower bound at all, so a regression that stopped
+      // asking a needed question passed silently. The ceiling is kept — an
+      // interrogating preview is its own failure — and the floor comes back as
+      // three checks that say *which* questions, not how many.
       if (parsed.expect.maxQuestions !== undefined && questions.length > parsed.expect.maxQuestions) {
         say(`질문 ${questions.length} 개, 상한 ${parsed.expect.maxQuestions}`);
       }
       if (parsed.expect.minQuestions !== undefined && questions.length < parsed.expect.minQuestions) {
         say(`질문 ${questions.length} 개, 최소 ${parsed.expect.minQuestions}`);
+      }
+
+      const codes = new Set(questions.map((q) => q.code));
+      for (const code of parsed.expect.requiredQuestionCodes ?? []) {
+        if (!codes.has(code as never)) say(`반드시 있어야 할 질문 ${code} 이(가) 없습니다`);
+      }
+      for (const code of parsed.expect.forbiddenQuestionCodes ?? []) {
+        if (codes.has(code as never)) say(`있어서는 안 될 질문 ${code} 이(가) 나왔습니다`);
+      }
+      if (parsed.expect.exactQuestionSubjects !== undefined) {
+        const got = [...new Set(questions.map((q) => q.subject))].sort();
+        const want = [...parsed.expect.exactQuestionSubjects].sort();
+        if (JSON.stringify(got) !== JSON.stringify(want)) {
+          say(`질문 대상이 다릅니다: ${JSON.stringify(got)} != ${JSON.stringify(want)}`);
+        }
+      }
+
+      // What the extractor must read out of this turn. Without this a
+      // regression that stops extracting anything satisfies every question
+      // check above by asking nothing.
+      const texts = live.map((s) => s.text);
+      for (const want of parsed.expect.mustContainText ?? []) {
+        if (!texts.includes(want)) say(`요구사항 "${want}" 이(가) 추출되지 않았습니다: ${JSON.stringify(texts)}`);
       }
 
       // Nothing the user did not ask for. Checked against the requirement text
@@ -396,7 +438,68 @@ describe("개인 사용 fixture 15개", () => {
     const metrics = measurePreviews(results);
     assert.equal(metrics.source, "offline");
     assert.equal(metrics.cases, files.length);
-    assert.equal(metrics.inventedRequirements, 0, "offline 경로에서 발명이 나왔습니다");
-    assert.ok(metrics.ambiguousRate >= 0 && metrics.ambiguousRate <= 1);
+    assert.equal(metrics.refusedProposalInventionCount, 0, "offline 경로에서 발명이 나왔습니다");
+    assert.ok(metrics.ambiguousIntentRate.of > 0, "요구사항이 하나도 없으면 비율은 의미가 없습니다");
+    assert.ok(metrics.ambiguousIntentRate.hit <= metrics.ambiguousIntentRate.of);
+  });
+
+  test("모든 비율은 분모를 함께 보고한다", async () => {
+    // A rate on its own cannot be checked. `1.0` over one case and `1.0` over
+    // fifteen were printed identically, and the first one is not a result.
+    const files = (await readdir(FIXTURES)).filter((f) => f.endsWith(".json")).sort();
+    const results = [];
+    for (const file of files) {
+      const parsed = JSON.parse(await readFile(join(FIXTURES, file), "utf8")) as { turns: string[] };
+      results.push(await previewDesign({ turns: parsed.turns }));
+    }
+    const metrics = measurePreviews(results);
+
+    const ratios: Array<[string, { hit: number; of: number; value: number | null }]> = [
+      ["ambiguousIntentRate", metrics.ambiguousIntentRate],
+      ["unresolvedBindingRate", metrics.unresolvedBindingRate],
+      ["blockedRate", metrics.blockedRate],
+      ["semanticUnknownRate", metrics.semanticUnknownRate],
+      ["noDesignRuleRate", metrics.noDesignRuleRate],
+      ["questionCases", metrics.questionCases],
+      ["remediableClosureRate", metrics.remediableClosureRate],
+      ["fullyResolvedRate", metrics.fullyResolvedRate],
+      ["executableRate", metrics.executableRate],
+    ];
+    for (const [name, r] of ratios) {
+      assert.ok(r.hit <= r.of, `${name}: 분자 ${r.hit} 가 분모 ${r.of} 보다 큽니다`);
+      assert.equal(r.value === null, r.of === 0, `${name}: 분모 0 이면 value 는 null 이어야 합니다`);
+    }
+
+    const rendered = renderMetrics(metrics);
+    for (const [name, r] of ratios) {
+      if (r.value !== null) {
+        assert.ok(rendered.includes(`(${r.hit}/${r.of})`), `${name} 의 분모가 출력에 없습니다`);
+      }
+    }
+  });
+
+  test("gold annotation 없이 recall·precision 을 출력하지 않는다", async () => {
+    const result = await previewDesign({ turns: ["로그인 오류를 수정하고 테스트해줘."] });
+    const rendered = renderMetrics(measurePreviews([result]));
+    // Naming a number "recall" without a gold list is the failure this guards.
+    for (const word of ["recall", "Recall", "precision", "Precision", "재현율", "정밀도", "정확도"]) {
+      const inMeasured = rendered.split("[이 fixture 로는 계산할 수 없는 값]")[0] ?? "";
+      assert.ok(!inMeasured.includes(word), `측정하지 않은 ${word} 를 지표로 출력했습니다`);
+    }
+    assert.ok(rendered.includes("계산할 수 없는 값"), "무엇을 못 재는지 밝히지 않았습니다");
+  });
+
+  test("closure 지표는 미해결이 남은 사례를 성공으로 세지 않는다", async () => {
+    // The old `closureSuccessRate` was 1 for this case: every finding left is
+    // one nobody may repair without the user, so "all remediable ones closed"
+    // is true — and reading that as "closed" is how twenty open questions get
+    // reported as a success.
+    const result = await previewDesign({ turns: ["기존 클라이언트가 사용 중이라면 API 형식을 변경하지 마."] });
+    const metrics = measurePreviews([result]);
+    assert.ok(result.closure.unresolved.length > 0, "이 fixture 는 미해결 finding 이 있어야 합니다");
+    assert.equal(metrics.remediableClosureRate.value, 1, "보완 가능한 finding 은 모두 닫혔습니다");
+    assert.equal(metrics.fullyResolvedRate.value, 0, "그런데도 finding 은 남아 있습니다");
+    assert.ok(metrics.unresolvedFindingsPerCase > 0);
+    assert.equal(metrics.executableRate.value, 0);
   });
 });

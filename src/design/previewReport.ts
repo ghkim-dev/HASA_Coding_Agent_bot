@@ -1,6 +1,6 @@
 import type { Finding, FindingCode } from "./coverageAudit.ts";
 import type { PreviewResult } from "./preview.ts";
-import type { RequirementSpec } from "./requirementSpec.ts";
+import { executionReadiness, type RequirementSpec } from "./requirementSpec.ts";
 
 /**
  * The plan, in sentences somebody who does not work on this can read.
@@ -22,6 +22,7 @@ const ASKABLE: ReadonlySet<FindingCode> = new Set<FindingCode>([
   "SEMANTIC_ALIGNMENT_UNKNOWN",
   "NO_DESIGN_RULE",
   "AMBIGUOUS_DECIDED",
+  "TARGET_UNRESOLVED",
 ]);
 
 export interface Question {
@@ -110,14 +111,27 @@ export function questionsFrom(result: PreviewResult): Question[] {
         break;
       case "AMBIGUOUS_DECIDED":
         out.push({
-          // Phrased as the question it actually is. For a requirement the
-          // runtime read out of a verb phrase, what is needed is not "확정하라"
-          // but "이렇게 이해한 것이 맞는가" — the user is the only one who knows.
-          about:
-            spec?.derivedBy === "runtime_action"
-              ? `"${spec.sourceText}" 를 "${spec.text}" 로 이해했습니다. 맞습니까?`
-              : `${spec?.text ?? finding.subject} 은(는) 아직 확정되지 않았습니다.`,
+          // Reaches here only when the *intent* is genuinely in doubt — in
+          // practice, a model's paraphrase. A verb the user wrote themselves no
+          // longer arrives here, and asking them to re-authorise their own
+          // request was the largest single source of unnecessary questions.
+          about: `${spec?.text ?? finding.subject} 은(는) 요청하신 내용이 맞습니까? 사용자가 직접 말한 것이 아니라 제안된 내용입니다.`,
           options: ["맞습니다", "다르게 이해해야 합니다", "이번 작업에서 제외"],
+          code: finding.code,
+          subject: finding.subject,
+        });
+        break;
+      case "TARGET_UNRESOLVED":
+        out.push({
+          // The act is not in question, only what to do it to. Merged into the
+          // question above, this asked the user to re-confirm a request they
+          // had just made and buried the one thing actually missing.
+          about: `"${spec?.sourceText ?? finding.subject}" 라고 하셨는데, 어떤 파일이나 대상을 말씀하시는지 알려주세요.`,
+          options: [
+            "대상을 알려주기",
+            "저장소에서 찾아보고 후보를 먼저 제시",
+            "이번 작업에서 제외",
+          ],
           code: finding.code,
           subject: finding.subject,
         });
@@ -259,7 +273,7 @@ export function renderAdvanced(result: PreviewResult): string {
   for (const spec of result.requirements) {
     const span = spec.span === undefined ? "-" : `${spec.span.turnId}:${spec.span.start}-${spec.span.end}`;
     lines.push(
-      `  ${spec.id.padEnd(24)} ${spec.status.padEnd(12)} ${spec.polarity.padEnd(9)} ${spec.priority.padEnd(6)} ${spec.confidence.padEnd(9)} ${spec.derivedBy.padEnd(20)} ${span}`,
+      `  ${spec.id.padEnd(24)} ${spec.status.padEnd(12)} ${spec.polarity.padEnd(9)} ${spec.priority.padEnd(6)} ${spec.intent.padEnd(9)} ${spec.binding.padEnd(10)} ${executionReadiness(spec).padEnd(7)} ${spec.derivedBy.padEnd(20)} ${span}`,
     );
     if (spec.sourceText.length > 0) lines.push(`      원문 "${spec.sourceText}"`);
     if (spec.supersededBy !== undefined) lines.push(`      superseded by ${spec.supersededBy}`);
@@ -353,7 +367,10 @@ export function renderJson(result: PreviewResult): unknown {
       priority: spec.priority,
       polarity: spec.polarity,
       status: spec.status,
-      confidence: spec.confidence,
+      provenance: spec.provenance,
+      intent: spec.intent,
+      binding: spec.binding,
+      executionReadiness: executionReadiness(spec),
       modelClaimedConfidence: spec.modelClaimedConfidence ?? null,
       derivedBy: spec.derivedBy,
       condition: spec.condition ?? null,

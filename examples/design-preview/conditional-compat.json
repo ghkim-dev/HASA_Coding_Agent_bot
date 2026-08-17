@@ -9,10 +9,22 @@
     "forbiddenActions": [
       "modify"
     ],
-    "minQuestions": 1,
     "mustNotInvent": [
       "배포"
     ],
-    "maxQuestions": 3
+    "maxQuestions": 3,
+    "requiredQuestionCodes": [
+      "UNRESOLVED_CONDITION"
+    ],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [
+      "t1-forbid-modify"
+    ],
+    "mustContainText": [
+      "이번 요청에서 파일을 수정하지 않는다"
+    ]
   }
 }

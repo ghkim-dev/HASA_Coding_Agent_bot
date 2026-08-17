@@ -13,6 +13,18 @@
     "mustNotInvent": [
       "삭제"
     ],
-    "maxQuestions": 2
+    "maxQuestions": 2,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [
+      "t2-act-inspect-2"
+    ],
+    "mustContainText": [
+      "코드를 살펴본다",
+      "이번 요청에서 명령을 실행하지 않는다"
+    ]
   }
 }

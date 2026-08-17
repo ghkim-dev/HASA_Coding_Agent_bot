@@ -87,7 +87,32 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       setupError = "HASA_API_KEY 가 없어 모델에 묻지 않았습니다.";
     } else {
       try {
-        propose = await createModelProposer({ apiKey, baseUrl });
+        // The composition root, and the only place a credential appears.
+        //
+        // The provider is assembled here and handed down; the design layer gets
+        // an `LlmProvider` and a permission record, never a key. Permission
+        // comes from a probe run under *this* credential — never from
+        // `GET /v1/models`, which answers without a key at all.
+        const { createHasaProvider } = await import("../provider/hasa/createProvider.ts");
+        const { readCapabilityMatrix } = await import("../provider/hasa/hasaLiveProbe.ts");
+        const { fingerprint } = await import("../hasa-client/redact.ts");
+        const { evidenceFromMatrix } = await import("./modelPermission.ts");
+
+        const provider = createHasaProvider({
+          apiKey,
+          ...(baseUrl.length === 0 ? {} : { baseUrl }),
+        });
+        const keyFingerprint = fingerprint(apiKey);
+        const matrix = await readCapabilityMatrix({
+          path: ".arena/capability-matrix.json",
+          keyFingerprint,
+          baseUrl: provider.baseUrl,
+        }).catch(() => null);
+
+        propose = await createModelProposer({
+          provider,
+          permission: evidenceFromMatrix({ matrix, keyFingerprint, baseUrl: provider.baseUrl }),
+        });
       } catch (err) {
         setupError = err instanceof Error ? err.message : String(err);
       }

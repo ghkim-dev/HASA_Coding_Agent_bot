@@ -12,6 +12,7 @@ import {
 import { designScenarios, type ScenarioBlueprint } from "./scenarioBlueprint.ts";
 import { auditCoverage, type AuditResult } from "./coverageAudit.ts";
 import { closeCoverage, type ClosureResult } from "./coverageClosure.ts";
+import type { ParseOutcome, ParseResult } from "./proposalParse.ts";
 
 /**
  * What the design engine makes of a request, without doing any of it.
@@ -41,11 +42,9 @@ export interface PreviewTurn {
  * something other than guessing.
  */
 export type ProposalOutcome =
-  /** The model answered with nothing parseable as a list. */
-  | "no_response"
-  /** A list came back and no item had the required shape. */
-  | "malformed"
-  /** Items had shape and their coordinates did not survive the span check. */
+  /** Every parse outcome, kept distinct. See `proposalParse.ts`. */
+  | ParseOutcome
+  /** Parsed, and the coordinates did not survive the span check. */
   | "span_rejected"
   /** Coordinates were fine and the requirement said the opposite of them. */
   | "semantics_rejected"
@@ -57,8 +56,12 @@ export type ProposalOutcome =
 export interface TurnProposalReport {
   turnId: string;
   outcome: ProposalOutcome;
-  /** Items the model returned, before any check. */
-  returned: number;
+  /** What the parser made of the answer, before any requirement check. */
+  parseOutcome: ParseOutcome | "not_asked";
+  /** Items present in the model's array, whatever became of them. */
+  itemsSeen: number;
+  /** Items that claimed authority they do not have. */
+  forbiddenFieldItems: number;
   accepted: number;
   rejected: number;
   calls: number;
@@ -116,8 +119,12 @@ export type Proposer = (input: {
   proposals: RequirementProposal[];
   modelId: string | null;
   calls: number;
-  /** Items the model returned before any of them were checked. */
-  returned?: number;
+  /**
+   * What the parser found. Supplied by the proposer because only it sees the
+   * answer — and required, so an outcome cannot be invented downstream from a
+   * proposal count.
+   */
+  parse: ParseResult;
 }>;
 
 export async function previewDesign(input: {
@@ -161,8 +168,10 @@ export async function previewDesign(input: {
         rejected.push(...refused.map((r) => ({ ...r, turnId: turn.turnId })));
         perTurn.push({
           turnId: turn.turnId,
-          outcome: outcomeOf(asked.returned ?? asked.proposals.length, accepted.length, refused),
-          returned: asked.returned ?? asked.proposals.length,
+          outcome: outcomeOf(asked.parse, accepted.length, refused),
+          parseOutcome: asked.parse.outcome,
+          itemsSeen: asked.parse.itemsSeen,
+          forbiddenFieldItems: asked.parse.forbiddenFieldItems,
           accepted: accepted.length,
           rejected: refused.length,
           calls: asked.calls,
@@ -209,7 +218,9 @@ export async function previewDesign(input: {
           ? turns.map((t) => ({
               turnId: t.turnId,
               outcome: "not_asked" as const,
-              returned: 0,
+              parseOutcome: "not_asked" as const,
+              itemsSeen: 0,
+              forbiddenFieldItems: 0,
               accepted: 0,
               rejected: 0,
               calls: 0,
@@ -228,13 +239,15 @@ export async function previewDesign(input: {
  * backwards; and nothing coming back at all is neither.
  */
 function outcomeOf(
-  returned: number,
+  parse: ParseResult,
   accepted: number,
   refused: readonly RejectedProposal[],
 ): ProposalOutcome {
   if (accepted > 0) return "accepted";
-  if (returned === 0) return "no_response";
-  if (refused.length === 0) return "malformed";
+  // Nothing survived the requirement checks, so the parse outcome is the
+  // answer — unless the checks are what rejected it, which is later and more
+  // specific.
   if (refused.some((r) => r.reasons.includes("semantics_reversed"))) return "semantics_rejected";
-  return "span_rejected";
+  if (refused.length > 0) return "span_rejected";
+  return parse.outcome;
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   acceptProposals,
   applyUserApproval,
-  confidenceFor,
+  intentFor, executionReadiness,
   markConflicts,
   mergeRequirements,
   runtimeRequirements,
@@ -50,7 +50,7 @@ describe("확정 권한 — 모델은 스스로 confirmed 가 될 수 없다", (
       userText: TEXT,
       proposals: [at(TEXT, "코드만 설명해줘", { text: "코드를 설명한다", confidence: "confirmed" })],
     });
-    assert.equal(accepted[0]?.confidence, "ambiguous");
+    assert.equal(accepted[0]?.intent, "ambiguous");
     assert.equal(accepted[0]?.modelClaimedConfidence, "confirmed", "모델 주장은 정보로 남는다");
   });
 
@@ -60,7 +60,7 @@ describe("확정 권한 — 모델은 스스로 confirmed 가 될 수 없다", (
       userText: TEXT,
       proposals: [at(TEXT, "코드만 설명해줘", { text: "코드를 설명한다" })],
     });
-    assert.equal(accepted[0]?.confidence, "ambiguous");
+    assert.equal(accepted[0]?.intent, "ambiguous");
     assert.equal(accepted[0]?.modelClaimedConfidence, undefined);
   });
 
@@ -89,7 +89,7 @@ describe("확정 권한 — 모델은 스스로 confirmed 가 될 수 없다", (
 
   test("런타임이 읽은 금지는 confirmed", () => {
     const specs = runtimeRequirements({ turnId: T1, text: TEXT });
-    assert.equal(specs[0]?.confidence, "confirmed");
+    assert.equal(specs[0]?.intent, "confirmed");
     assert.equal(specs[0]?.derivedBy, "runtime_prohibition");
   });
 
@@ -105,7 +105,7 @@ describe("확정 권한 — 모델은 스스로 confirmed 가 될 수 없다", (
       approvedIds: [accepted[0]!.id],
       turnId: T2,
     });
-    assert.equal(approved[0]?.confidence, "confirmed");
+    assert.equal(approved[0]?.intent, "confirmed");
   });
 
   test("승인이 아닌 답변은 confirmed 로 만들지 않는다", () => {
@@ -120,14 +120,14 @@ describe("확정 권한 — 모델은 스스로 confirmed 가 될 수 없다", (
       approvedIds: [accepted[0]!.id],
       turnId: T2,
     });
-    assert.equal(answered[0]?.confidence, "ambiguous");
+    assert.equal(answered[0]?.intent, "ambiguous");
   });
 
   test("inherited confirmed 는 유지된다", () => {
     const standing = runtimeRequirements({ turnId: T1, text: TEXT });
     const merged = mergeRequirements({ standing, incoming: [], relation: "continue", turnId: T2 });
     assert.equal(merged[0]?.status, "inherited");
-    assert.equal(merged[0]?.confidence, "confirmed");
+    assert.equal(merged[0]?.intent, "confirmed");
   });
 
   test("system_added 는 explicit 이 될 수 없다", () => {
@@ -139,11 +139,30 @@ describe("확정 권한 — 모델은 스스로 confirmed 가 될 수 없다", (
   });
 
   test("확정 권한은 한 함수가 결정한다", () => {
-    assert.equal(confidenceFor({ derivedBy: "model_proposal" }), "ambiguous");
-    assert.equal(confidenceFor({ derivedBy: "runtime_prohibition" }), "confirmed");
-    assert.equal(confidenceFor({ derivedBy: "carried", previous: "confirmed" }), "confirmed");
-    assert.equal(confidenceFor({ derivedBy: "model_proposal", userApproved: true }), "confirmed");
-    assert.equal(confidenceFor({ derivedBy: "runtime_prohibition", conditional: true }), "ambiguous");
+    assert.equal(intentFor({ derivedBy: "model_proposal" }), "ambiguous");
+    assert.equal(intentFor({ derivedBy: "runtime_prohibition" }), "confirmed");
+    assert.equal(intentFor({ derivedBy: "carried", previous: "confirmed" }), "confirmed");
+    assert.equal(intentFor({ derivedBy: "model_proposal", userApproved: true }), "confirmed");
+    // The user wrote the verb. Whether the runtime knows what to apply it to is
+    // `binding`, and asking about it as if the request itself were in doubt is
+    // the confusion this axis was split to end.
+    assert.equal(intentFor({ derivedBy: "runtime_action" }), "confirmed");
+  });
+
+  test("조건은 의도가 아니라 실행 가능성을 막는다", () => {
+    // Preserves what `confidenceFor({conditional: true}) === "ambiguous"` used
+    // to protect: a requirement scoped to an unsettled condition may not be
+    // acted on without asking. It is asserted on the axis that actually means
+    // that, so the guarantee survives the split rather than being dropped with
+    // the input that used to carry it.
+    const conditional = runtimeRequirements({
+      turnId: T1,
+      text: "기존 클라이언트가 사용 중이라면 API 형식을 변경하지 마.",
+    }).find((s) => s.polarity === "forbidden");
+    assert.ok(conditional !== undefined);
+    assert.ok(conditional.condition !== undefined, "조건이 기록되지 않았습니다");
+    assert.equal(conditional.intent, "confirmed", "무엇을 하지 말라는지는 분명하다");
+    assert.equal(executionReadiness(conditional), "blocked", "조건이 풀리기 전에는 실행할 수 없다");
   });
 });
 
@@ -309,7 +328,7 @@ describe("데모 A — 명시적 금지", () => {
     assert.equal(forbidden.length, 2);
     for (const spec of forbidden) {
       assert.equal(spec.polarity, "forbidden");
-      assert.equal(spec.confidence, "confirmed");
+      assert.equal(spec.intent, "confirmed");
       assert.ok(spec.span !== undefined);
       assert.equal(TEXT.slice(spec.span.start, spec.span.end).trim(), spec.sourceText);
     }
@@ -382,7 +401,7 @@ describe("데모 C — 정정", () => {
     const original = merged.find((s) => s.id === standing[0]!.id);
     assert.equal(original?.supersededBy, T2);
     const fresh = merged.find((s) => s.id === "t2-forbid-execute");
-    assert.equal(fresh?.confidence, "confirmed");
+    assert.equal(fresh?.intent, "confirmed");
     assert.equal(fresh?.supersededBy, undefined);
   });
 
@@ -404,28 +423,40 @@ describe("데모 C — 정정", () => {
         }),
       ],
     }).accepted;
-    assert.equal(forgedStanding[0]?.confidence, "ambiguous");
+    assert.equal(forgedStanding[0]?.intent, "ambiguous");
 
     const incoming = runtimeRequirements({ turnId: T2, text: SECOND });
     const a = mergeRequirements({ standing, incoming, relation: "correct", turnId: T2 });
     const b = mergeRequirements({ standing: forgedStanding, incoming, relation: "correct", turnId: T2 });
     assert.deepEqual(
-      a.map((s) => [s.id, s.supersededBy, s.confidence]),
-      b.map((s) => [s.id, s.supersededBy, s.confidence]),
+      a.map((s) => [s.id, s.supersededBy, s.intent]),
+      b.map((s) => [s.id, s.supersededBy, s.intent]),
     );
   });
 
   test("refine 은 유지하며 더하고, question/continue 는 만들지 않는다", () => {
     const s = runtimeRequirements({ turnId: T1, text: "실행하지 말고 보여줘." });
     const i = runtimeRequirements({ turnId: T2, text: "수정도 하지 말아줘." });
+    // Both sides pinned to a literal before the relation is exercised.
+    //
+    // Expressing the expectation as `s.length + i.length` made it a function of
+    // the extractor under test: if extraction ever returned nothing, the check
+    // became `0 === 0` and passed while proving nothing about merging at all.
+    assert.ok(s.length > 0 && i.length > 0, "이 데모는 양쪽에서 요구사항이 나와야 합니다");
+    // Two on the standing side: the prohibition, and the 보여줘 request that
+    // the extractor used to lose to the `말고` clause.
+    assert.equal(s.length, 2, "standing 쪽 추출이 바뀌었습니다");
+    assert.equal(i.length, 1, "incoming 쪽 추출이 바뀌었습니다");
+
     assert.equal(
       mergeRequirements({ standing: s, incoming: i, relation: "refine", turnId: T2 }).length,
-      s.length + i.length,
+      3,
+      "refine 은 기존을 유지하며 더한다",
     );
     for (const relation of ["question", "continue"] as const) {
       assert.equal(
         mergeRequirements({ standing: s, incoming: i, relation, turnId: T2 }).length,
-        s.length,
+        2,
         relation,
       );
     }
@@ -480,7 +511,7 @@ describe("데모 E — 외부 출처", () => {
     const specs = runtimeRequirements({ turnId: T1, text: TEXT });
     const source = specs.find((s) => s.derivedBy === "runtime_source");
     assert.ok(source !== undefined);
-    assert.equal(source.confidence, "confirmed");
+    assert.equal(source.intent, "confirmed");
     assert.ok(source.span !== undefined);
     assert.equal(TEXT.slice(source.span.start, source.span.end).trim(), source.sourceText);
   });
@@ -593,8 +624,11 @@ describe("데모 H — 조건부 요구사항", () => {
     const specs = runtimeRequirements({ turnId: T1, text: TEXT });
     const forbid = specs.find((s) => s.polarity === "forbidden");
     assert.ok(forbid !== undefined, "금지가 추출되지 않았습니다");
-    assert.equal(forbid.confidence, "ambiguous");
     assert.ok(forbid.condition !== undefined);
+    // Intent was never the unclear part — the user said plainly not to change
+    // it. What nobody has settled is whether the condition holds.
+    assert.equal(forbid.intent, "confirmed");
+    assert.equal(executionReadiness(forbid), "blocked");
   });
 
   test("조건은 감사에서 미해결로 보고되고 자동 보완되지 않는다", () => {
@@ -773,7 +807,7 @@ describe("Coverage Closure 의 동작 경계", () => {
       userText: TEXT,
       proposals: [at(TEXT, "main.py 를 실행해서 결과를 보여줘", { text: "main.py 를 실행한다", priority: "must" })],
     }).accepted;
-    assert.equal(ambiguous[0]?.confidence, "ambiguous");
+    assert.equal(ambiguous[0]?.intent, "ambiguous");
     const closed = closeCoverage({ requirements: ambiguous, scenarios: designScenarios(ambiguous) });
     assert.ok(closed.scenarios.every((s) => s.unresolvedAspects.includes("requirement_is_ambiguous")));
   });
@@ -898,7 +932,9 @@ describe("Closure 는 무한히 돌지 않는다", () => {
       priority: "must",
       polarity: "required",
       status: "explicit",
-      confidence: "confirmed",
+      provenance: "verified",
+      intent: "confirmed",
+      binding: "resolved",
       dependencies: [],
       conflicts: [],
       derivedBy: "runtime_prohibition",
@@ -906,5 +942,58 @@ describe("Closure 는 무한히 돌지 않는다", () => {
     const closed = closeCoverage({ requirements: [spec], scenarios: [], maxPasses: 2 });
     assert.ok(closed.passes <= 2, `passes=${closed.passes}`);
     assert.ok(["max_passes", "settled", "no_progress"].includes(closed.stoppedBecause));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The gates can open
+// ---------------------------------------------------------------------------
+
+/**
+ * That a plan can *pass*.
+ *
+ * `dcd9172` narrowed two `assert.equal(closed.audit.ok, true)` checks to
+ * filtered slices and deleted `assert.equal(mayExecutePlan(closed), true)`
+ * outright. After it, every surviving assertion on `audit.ok`, `mayExecute` and
+ * `mayExecutePlan` in the whole repository asserted `false` — so a change making
+ * any of the three return `false` unconditionally would have passed the entire
+ * suite while blocking every plan the engine ever produces.
+ *
+ * A one-directional gate is not a gate. These restore the other direction.
+ */
+describe("완전히 닫힌 계획은 실행 가능하다", () => {
+  const TEXT = "open.hasa.re.kr/models를 기준으로 사용할 수 있는 모델을 확인해줘.";
+
+  test("감사가 통과하고 실행 가능으로 판정된다", () => {
+    const specs = markConflicts(runtimeRequirements({ turnId: T1, text: TEXT }));
+    const closed = closeCoverage({ requirements: specs, scenarios: designScenarios(specs) });
+
+    assert.equal(
+      closed.audit.ok,
+      true,
+      `finding 이 남았습니다: ${JSON.stringify(closed.audit.findings)}`,
+    );
+    assert.equal(mayExecute(closed.audit), true);
+    assert.equal(mayExecutePlan(closed), true);
+    assert.deepEqual(closed.unresolved, []);
+  });
+
+  test("실행 가능한 계획은 질문을 만들지 않는다", async () => {
+    const { previewDesign } = await import("./preview.ts");
+    const { questionsFrom } = await import("./previewReport.ts");
+    const result = await previewDesign({ turns: [TEXT] });
+    assert.equal(result.executable, true);
+    assert.deepEqual(questionsFrom(result), []);
+  });
+
+  test("요구사항이 실제로 추출된 상태에서의 판정이다", () => {
+    // Guards the vacuous reading: the assertions above would also hold for a
+    // plan with nothing in it, which is exactly how an extractor regression
+    // could look like success.
+    const specs = runtimeRequirements({ turnId: T1, text: TEXT });
+    assert.ok(specs.length >= 2, `요구사항이 ${specs.length} 개뿐입니다`);
+    assert.ok(specs.some((s) => s.derivedBy === "runtime_source"));
+    assert.ok(specs.some((s) => s.derivedBy === "runtime_action"));
+    assert.ok(specs.every((s) => executionReadiness(s) === "ready"));
   });
 });

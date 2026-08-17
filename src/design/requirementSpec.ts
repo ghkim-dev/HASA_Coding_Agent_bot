@@ -49,6 +49,29 @@ export type RequirementPolarity = "required" | "forbidden";
 export type RequirementStatus = "explicit" | "inherited" | "system_added";
 export type RequirementConfidence = "confirmed" | "ambiguous";
 
+/**
+ * Four questions the single `confidence` was answering at once.
+ *
+ * Collapsing them cost the product its main claim. Every requirement read from
+ * a verb phrase came out `ambiguous`, which raised `AMBIGUOUS_DECIDED`, which
+ * became "…로 이해했습니다. 맞습니까?" — so "로그인 오류를 수정해줘" was answered
+ * by asking the user whether they had meant to ask for a fix. They had. What
+ * the runtime did not know was *which* login error, and that is a different
+ * question with a different answer.
+ *
+ *     provenance   근거가 사용자의 말 안에 실제로 있는가
+ *     intent       사용자가 그 행동을 요청했는가
+ *     binding      그 행동의 대상이 무엇인지 정해졌는가
+ *
+ * Kept apart because they are established by different evidence and settled by
+ * different means: provenance by a span check, intent by who originated the
+ * requirement, binding by whether the sentence named a target.
+ */
+export type Provenance = "verified" | "invalid";
+export type Intent = "confirmed" | "ambiguous";
+export type Binding = "resolved" | "unresolved";
+export type ExecutionReadiness = "ready" | "blocked";
+
 export type DerivedBy =
   | "runtime_prohibition"
   | "runtime_source"
@@ -70,7 +93,12 @@ export interface RequirementSpec {
   priority: RequirementPriority;
   polarity: RequirementPolarity;
   status: RequirementStatus;
-  confidence: RequirementConfidence;
+  /** Whether the runtime can point at the words this came from. */
+  provenance: Provenance;
+  /** Whether the user asked for this act. Not whether the target is known. */
+  intent: Intent;
+  /** Whether the act has a target. `unresolved` is open, never invented. */
+  binding: Binding;
   /** What the model claimed, kept as information and never as authority. */
   modelClaimedConfidence?: RequirementConfidence;
   /** Set when the span scopes the requirement to a condition nobody settled. */
@@ -90,32 +118,33 @@ export interface RequirementSpec {
 // ---------------------------------------------------------------------------
 
 /**
- * The only place a `confidence` is decided.
+ * The only place an `intent` is decided.
  *
  * Written as one function so there is one thing to point at, and so the
  * mutation that removes it removes a boundary rather than a habit.
+ *
+ * `runtime_action` is `confirmed` here, and that is the correction. The user
+ * wrote the verb; the runtime is not guessing that they asked for it. What the
+ * runtime *is* guessing at — which files, which error, how far — is `binding`,
+ * and conflating the two produced a preview that asked permission to do what it
+ * had just been told to do.
+ *
+ * A condition does not appear here either. "기존 클라이언트가 사용 중이라면
+ * 변경하지 마" states its intent perfectly clearly; what is unsettled is whether
+ * the condition holds, which blocks execution without muddying what was asked.
  */
-export function confidenceFor(input: {
+export function intentFor(input: {
   derivedBy: DerivedBy;
   /** For `carried`: what it was before. */
-  previous?: RequirementConfidence;
+  previous?: Intent;
   /** Whether the user approved it in a later turn, in their own words. */
   userApproved?: boolean;
-  /** Whether the runtime's own checks came back clean. */
-  aligned?: boolean;
-  conditional?: boolean;
-}): RequirementConfidence {
-  if (input.conditional === true) return "ambiguous";
+}): Intent {
   if (input.userApproved === true) return "confirmed";
   switch (input.derivedBy) {
     case "runtime_prohibition":
     case "runtime_source":
-      return input.aligned === false ? "ambiguous" : "confirmed";
     case "runtime_action":
-      // Read from the user's words and still a reading. The runtime saw a verb
-      // and a noun; whether that is the requirement they meant is not
-      // something it can be right about.
-      return "ambiguous";
     case "system_baseline":
       return "confirmed";
     case "carried":
@@ -125,6 +154,23 @@ export function confidenceFor(input: {
       // is no field it can send that changes this.
       return "ambiguous";
   }
+}
+
+/**
+ * Whether a run could start on this requirement alone.
+ *
+ * Derived rather than stored, because three of its four inputs are settled
+ * after the spec is built — `conflicts` is filled in by `markConflicts`, and a
+ * stored copy would go stale exactly when it matters. Everything that blocks is
+ * named, so a caller can say which one it was.
+ */
+export function executionReadiness(spec: RequirementSpec): ExecutionReadiness {
+  if (spec.provenance === "invalid") return "blocked";
+  if (spec.intent === "ambiguous") return "blocked";
+  if (spec.binding === "unresolved") return "blocked";
+  if (spec.condition !== undefined) return "blocked";
+  if (spec.conflicts.length > 0) return "blocked";
+  return "ready";
 }
 
 // ---------------------------------------------------------------------------
@@ -180,10 +226,10 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       priority: "must",
       polarity: "forbidden",
       status: "explicit",
-      confidence: confidenceFor({
-        derivedBy: "runtime_prohibition",
-        ...(condition === null ? {} : { conditional: true }),
-      }),
+      provenance: "verified",
+      intent: intentFor({ derivedBy: "runtime_prohibition" }),
+      // A prohibition's target is the act class itself, which the runtime named.
+      binding: "resolved",
       ...(condition === null ? {} : { condition }),
       dependencies: [],
       conflicts: [],
@@ -209,11 +255,23 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       sourceText,
       span: candidate.span,
       sourceTurnId: input.turnId,
-      kind: candidate.action === "verify" ? "validation" : "functional",
+      // `preserve` is not a functional change — it asks that one not happen.
+      // Filing it as `functional` would let the designer attach a scenario that
+      // proves the opposite of the requirement.
+      kind:
+        candidate.action === "verify"
+          ? "validation"
+          : candidate.action === "preserve"
+            ? "compatibility"
+            : "functional",
       priority: priorityFrom(sourceText, "must"),
       polarity: "required",
       status: "explicit",
-      confidence: "ambiguous",
+      provenance: "verified",
+      intent: intentFor({ derivedBy: "runtime_action" }),
+      // The one place the target can genuinely be open: Korean leaves the
+      // object implicit, and the extractor reports that rather than filling it.
+      binding: candidate.object.length > 0 ? "resolved" : "unresolved",
       ...(condition === null ? {} : { condition }),
       ...(scopeIn(sourceText).length === 0 ? {} : { scope: scopeIn(sourceText) }),
       dependencies: [],
@@ -236,7 +294,9 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       priority: "must",
       polarity: "required",
       status: "explicit",
-      confidence: confidenceFor({ derivedBy: "runtime_source" }),
+      provenance: "verified",
+      intent: intentFor({ derivedBy: "runtime_source" }),
+      binding: "resolved",
       dependencies: [],
       conflicts: [],
       derivedBy: "runtime_source",
@@ -339,11 +399,11 @@ export function acceptProposals(input: {
       priority,
       polarity,
       status: "explicit",
+      // It survived the span and semantics checks, so the words are real.
+      provenance: "verified",
       // Never `confirmed`, whatever the proposal said.
-      confidence: confidenceFor({
-        derivedBy: "model_proposal",
-        ...(condition === null ? {} : { conditional: true }),
-      }),
+      intent: intentFor({ derivedBy: "model_proposal" }),
+      binding: "resolved",
       ...(proposal.confidence === undefined ? {} : { modelClaimedConfidence: proposal.confidence }),
       ...(condition === null ? {} : { condition }),
       ...(scope.length === 0 ? {} : { scope }),
@@ -384,7 +444,9 @@ export function applyUserApproval(input: {
     approved.has(spec.id) && spec.condition === undefined
       ? {
           ...spec,
-          confidence: confidenceFor({ derivedBy: spec.derivedBy, userApproved: true }),
+          intent: intentFor({ derivedBy: spec.derivedBy, userApproved: true }),
+          // Approving the reading settles the target it named, and nothing else.
+          binding: "resolved" as const,
           sourceTurnId: spec.sourceTurnId,
         }
       : spec,
@@ -428,7 +490,7 @@ function carry(specs: readonly RequirementSpec[]): RequirementSpec[] {
           ...spec,
           status: "inherited" as const,
           derivedBy: "carried" as const,
-          confidence: confidenceFor({ derivedBy: "carried", previous: spec.confidence }),
+          intent: intentFor({ derivedBy: "carried", previous: spec.intent }),
         }
       : spec,
   );
@@ -499,7 +561,9 @@ export function systemBaseline(turnId: string): RequirementSpec[] {
     sourceText: "",
     sourceTurnId: turnId,
     status: "system_added" as const,
-    confidence: confidenceFor({ derivedBy: "system_baseline" }),
+    provenance: "verified" as const,
+    intent: intentFor({ derivedBy: "system_baseline" }),
+    binding: "resolved" as const,
     dependencies: [],
     conflicts: [],
     derivedBy: "system_baseline" as const,

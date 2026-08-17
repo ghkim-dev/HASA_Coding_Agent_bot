@@ -13,6 +13,17 @@
     "mustNotInvent": [
       "배포"
     ],
-    "maxQuestions": 2
+    "maxQuestions": 2,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [
+      "t1-act-inspect-3"
+    ],
+    "mustContainText": [
+      "main.py 코드를 살펴본다"
+    ]
   }
 }

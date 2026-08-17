@@ -19,7 +19,31 @@ const FILES = [
   "src/design/scenarioBlueprint.ts",
   "src/design/coverageAudit.ts",
   "src/design/coverageClosure.ts",
+  "src/design/functionalExtract.ts",
+  "src/design/modelProposer.ts",
+  "src/design/modelPermission.ts",
+  "src/design/proposalParse.ts",
+  "src/design/preview.ts",
+  "src/design/previewMetrics.ts",
+  "src/design/previewReport.ts",
 ];
+
+/**
+ * Which suite is run for a mutation.
+ *
+ * `demos.test.ts` alone was the whole harness, so every defence added after it
+ * — the parser's outcomes, the permission gate, the question contract — was
+ * mutated against a suite that never exercised it and dutifully reported "does
+ * not bite". A mutation now runs the tests that own the file it touched.
+ */
+const SUITES = {
+  demos: ["src/design/demos.test.ts"],
+  preview: ["src/design/preview.test.ts"],
+  parse: ["src/design/proposalParse.test.ts", "src/design/preview.test.ts"],
+  permission: ["src/design/modelPermission.test.ts"],
+  extract: ["src/design/functionalExtract.test.ts", "src/design/preview.test.ts"],
+  metrics: ["src/design/preview.test.ts"],
+};
 
 const MUTATIONS = [
   ["M01", "span 범위 검사 제거", "src/design/sourceSpan.ts",
@@ -38,9 +62,12 @@ const MUTATIONS = [
     "if (!permitted.has(model)) {", "if (false) {"],
   ["M08", "Coverage Audit 우회", "src/design/coverageAudit.ts",
     "return audit.ok;", "return true;"],
+  // Re-anchored when `confidence` split into axes. The old search string went
+  // silent rather than failing — the exact class of defect this script exists
+  // to make visible, arriving in the script itself.
   ["M09", "모델의 명시적 confirmed 를 신뢰", "src/design/requirementSpec.ts",
-    "      // Never `confirmed`, whatever the proposal said.\n      confidence: confidenceFor({",
-    "      confidence: proposal.confidence ?? confidenceFor({"],
+    'intent: intentFor({ derivedBy: "model_proposal" }),',
+    'intent: proposal.confidence ?? intentFor({ derivedBy: "model_proposal" }),'],
   ["M10", "system_added 를 explicit 로", "src/design/requirementSpec.ts",
     'status: "system_added" as const,', 'status: "explicit" as const,'],
   ["M11", "derivedBy 위조 거부 제거", "src/design/requirementSpec.ts",
@@ -64,6 +91,39 @@ const MUTATIONS = [
     "if (spec.conflicts.length > 0) {", "if (false) {"],
   ["M20", "부정 절단 검사 제거", "src/design/sourceSpan.ts",
     'if (NEGATION.test(after)) problems.push("negation_truncated");', ""],
+
+  // --- dcd9172 이후 추가된 방어선 -------------------------------------------
+  ["M21", "공개 모델 목록을 권한으로 승격", "src/design/modelPermission.ts",
+    'found === undefined ? "unknown" : found.chat === "pass" ? "permitted" : found.chat === "denied" ? "denied" : "unknown";',
+    '"permitted";', "permission"],
+  ["M22", "권한 unknown 을 허용으로", "src/design/modelPermission.ts",
+    'return catalogue.filter((id) => permissionFor(evidence, id).standing === "permitted");',
+    'return catalogue.filter((id) => permissionFor(evidence, id).standing !== "denied");', "permission"],
+  ["M23", "다른 키의 권한 기록을 수용", "src/design/modelPermission.ts",
+    "if (matrix.keyFingerprint !== input.keyFingerprint) return null;", "", "permission"],
+  ["M24", "malformed 를 empty 로 합침", "src/design/proposalParse.ts",
+    'return items.length === 0 ? "empty_array" : "malformed_item";', 'return "empty_array";', "parse"],
+  ["M25", "빈 응답과 파싱 실패를 합침", "src/design/proposalParse.ts",
+    'if (raw.trim().length === 0) return none("empty_response");',
+    'if (raw.trim().length === 0) return none("no_json_array");', "parse"],
+  ["M26", "직접 명령의 intent 를 전부 ambiguous 로", "src/design/requirementSpec.ts",
+    'case "runtime_action":\n    case "system_baseline":\n      return "confirmed";',
+    'case "system_baseline":\n      return "confirmed";\n    case "runtime_action":\n      return "ambiguous";', "preview"],
+  ["M27", "부정문에서 긍정 action 생성", "src/design/functionalExtract.ts",
+    "if (NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8))) continue;", "", "extract"],
+  ["M28", "절 경계에서 -고 연결을 제거", "src/design/functionalExtract.ts",
+    "|(?<=[가-힣]고\\s)", "", "extract"],
+  // Removing an assertion from a test file cannot make that file fail, so a
+  // mutation that deletes the required-question check would always read as
+  // "does not bite". The check is load-bearing only if a production change it
+  // is watching for does fail, which is what this mutates instead.
+  ["M29", "대상 미결정을 질문하지 않음", "src/design/previewReport.ts",
+    '  "TARGET_UNRESOLVED",\n]);', "]);", "preview"],
+  ["M30", "fullyResolvedRate 를 remediableClosureRate 와 합침", "src/design/previewMetrics.ts",
+    "fullyResolvedRate: ratio(\n      results.filter((r) => r.closure.audit.findings.length === 0).length,\n      results.length,\n    ),",
+    "fullyResolvedRate: ratio(\n      results.filter((r) => r.closure.unresolved.length === r.closure.audit.findings.length).length,\n      results.length,\n    ),", "metrics"],
+  ["M31", "target 미결정 finding 을 제거", "src/design/coverageAudit.ts",
+    'if (spec.intent === "confirmed" && spec.binding === "unresolved") {', "if (false) {", "preview"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
@@ -71,9 +131,9 @@ const EXPECTED_SILENT = new Map([
   ["M17", "종료를 보장하는 것은 attempted 중복 방지이므로 pass 상한을 지워도 동작이 같다"],
 ]);
 
-function suite() {
+function suite(files = SUITES.demos) {
   try {
-    const out = execFileSync("node", ["--test", "src/design/demos.test.ts"], {
+    const out = execFileSync("node", ["--test", ...files], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -94,6 +154,21 @@ function parse(out) {
   return { pass, fail };
 }
 
+// Every target must be a file this script backs up.
+//
+// It was not, once. A mutation aimed at `preview.test.ts` — outside `FILES` —
+// was applied and never restored, because the restore loop only knows about
+// `FILES`. The edit stayed in the working tree, silently emptying the very
+// assertion the mutation was meant to prove was load-bearing, and two later
+// mutations then reported "does not bite" because the check they should have
+// tripped was gone. A harness that can corrupt the thing it measures reports
+// confidence it has not earned, so this is a hard error rather than a warning.
+const unbacked = MUTATIONS.filter(([, , file]) => !FILES.includes(file));
+if (unbacked.length > 0) {
+  const names = unbacked.map(([id, , file]) => `${id} → ${file}`).join(", ");
+  throw new Error(`백업 대상이 아닌 파일을 변이시키려 합니다: ${names}`);
+}
+
 for (const f of FILES) copyFileSync(f, `${f}.bak`);
 const restore = () => {
   for (const f of FILES) copyFileSync(`${f}.bak`, f);
@@ -112,7 +187,7 @@ say("-".repeat(78));
 let notApplied = 0;
 let unexpectedlySilent = 0;
 
-for (const [id, label, file, from, to] of MUTATIONS) {
+for (const [id, label, file, from, to, suiteKey] of MUTATIONS) {
   // Normalised, because the working tree carries CRLF and a multi-line search
   // string written with a bare newline silently matches nothing. That is the
   // exact failure this script exists to make visible, and it caught itself.
@@ -123,7 +198,14 @@ for (const [id, label, file, from, to] of MUTATIONS) {
     continue;
   }
   writeFileSync(file, before.split(from).join(to), "utf8");
-  const result = suite();
+  const after = readFileSync(file, "utf8");
+  if (normalise(after) === before) {
+    say(`${id} ${label.padEnd(34)} !! 파일이 바뀌지 않음 — 변이 미적용`);
+    notApplied += 1;
+    restore();
+    continue;
+  }
+  const result = suite(SUITES[suiteKey ?? "demos"]);
   restore();
 
   const silent = result.fail === 0;

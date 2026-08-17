@@ -10,6 +10,15 @@
     "mustNotInvent": [
       "설치"
     ],
-    "maxQuestions": 2
+    "maxQuestions": 0,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [],
+    "mustContainText": [
+      "모델을 확인한다"
+    ]
   }
 }

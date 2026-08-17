@@ -8,6 +8,17 @@
     "mustNotInvent": [
       "삭제"
     ],
-    "maxQuestions": 2
+    "maxQuestions": 2,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [
+      "t1-act-preserve-1"
+    ],
+    "mustContainText": [
+      "기존 테스트를 그대로 유지한다"
+    ]
   }
 }

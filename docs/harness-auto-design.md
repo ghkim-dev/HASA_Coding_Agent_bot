@@ -165,22 +165,56 @@ INVENTED_REQUIREMENT                  존재하지 않는 요구사항 참조
 
 # 요구사항 신뢰 경계 (2차)
 
-## 확정 권한은 출처가 정한다
+## 하나의 confidence 가 네 가지를 답하고 있었다
 
-`confirmed`는 계획이 묻지 않고 행동해도 되는 표시다. 모델이 자기 제안에 그것을
-붙일 수 있으면 자기 해석을 사실로 승격시킬 수 있다. 그래서 권한을 **출처**로
-고정한다.
+`confidence: "confirmed" | "ambiguous"` 는 서로 다른 네 질문을 한 값에 눌러
+담고 있었다. 그래서 사용자가 직접 쓴 동사에서 읽은 요구사항까지 전부
+`ambiguous` 가 되고, `AMBIGUOUS_DECIDED` → `"…로 이해했습니다. 맞습니까?"` 로
+이어졌다. 즉 "로그인 오류를 수정해줘" 에 대해 **수정을 요청하신 게 맞느냐**고
+되물었다. 그건 맞았다. 모르는 것은 *어느* 로그인 오류인지였고, 그건 다른
+질문이며 답도 다르다.
+
+```
+provenance          verified | invalid     근거가 사용자의 말 안에 있는가
+intent              confirmed | ambiguous  사용자가 그 행동을 요청했는가
+binding             resolved | unresolved  그 행동의 대상이 정해졌는가
+executionReadiness  ready | blocked        (파생) 지금 실행할 수 있는가
+```
+
+`executionReadiness` 만 저장하지 않고 파생시킨다. 입력 중 `conflicts` 는
+`markConflicts` 가 나중에 채우므로, 저장된 사본은 정확히 중요한 순간에 낡는다.
+
+### intent 는 출처가 정한다
+
+모델이 자기 제안에 `confirmed` 를 붙일 수 있으면 자기 해석을 사실로 승격시킬 수
+있다. 그래서 권한을 **출처**로 고정한다.
 
 ```
 runtime_prohibition   confirmed   런타임이 원문에서 읽음
 runtime_source        confirmed   같음
+runtime_action        confirmed   사용자가 그 동사를 직접 썼다
 model_proposal        ambiguous   무엇을 보내든 항상
 carried               이전 값 유지
 system_baseline       confirmed, explicit 불가
 사용자 승인            confirmed   다음 턴에서 사용자가 동의
 ```
 
-`confidenceFor`가 유일한 결정 지점이다. 모델의 `confidence`는
+조건(`condition`)은 여기에 없다. "기존 클라이언트가 사용 중이라면 변경하지 마"
+는 의도가 분명하다. 정해지지 않은 것은 조건의 성립 여부이고, 그것은 의도를
+흐리지 않은 채 실행을 막는다.
+
+### 질문은 열린 축을 가리킨다
+
+```
+AMBIGUOUS_DECIDED     intent 가 열림    "요청하신 내용이 맞습니까?"
+TARGET_UNRESOLVED     binding 이 열림   "어떤 파일이나 대상을 말씀하시는지"
+UNRESOLVED_CONDITION  조건이 열림       "이 조건을 어떻게 확인할까요"
+```
+
+16개 fixture 의 offline 경로에서 `AMBIGUOUS_DECIDED` 질문은 0건이 됐고,
+`TARGET_UNRESOLVED` 는 대상이 실제로 비어 있는 3건에서만 나온다.
+
+`intentFor`가 유일한 결정 지점이다. 모델의 `confidence`는
 `modelClaimedConfidence`에 정보로 남고 아무것도 결정하지 않는다.
 
 제안이 `derivedBy`·`status`·`sourceText`·`id`를 실어 보내면 거부한다. 검사받는
@@ -348,3 +382,52 @@ turn → sourceSpan → requirementId → blueprintId → oracleCoverage
 `login-fix` 의 `mustContainKinds` 가 비어 있는 것은 기록이다. 금지도 출처도 없는
 평범한 기능 요청에서 offline 경로는 요구사항을 만들지 못한다 — 그 자리가 모델
 제안이 필요한 지점이다.
+
+
+# 모델 권한 — 공개 목록은 권한이 아니다
+
+HASA의 `GET /v1/models`는 **공개 endpoint**다. 키 없이도 답한다. 그러므로
+목록에 있다는 사실은 이 자격 증명이 그 모델을 호출할 수 있다는 뜻이 아니다.
+설계 계층은 한동안 목록의 모든 항목에 `permitted: true`를 붙이고 있었고, 같은
+혼동이 과거에 게이트웨이 트랜잭션 로그에 403 다발을 남겼다.
+
+`src/design/modelPermission.ts`는 세 상태를 유지한다.
+
+```
+permitted   이 키로 chat 호출이 성공한 기록이 있다
+denied      이 키에 대해 게이트웨이가 403 을 반환했다
+unknown     아무도 확인한 적이 없다
+```
+
+**`unknown` 은 후보가 되지 않는다.** `poolEligibility` 는 `permitted` 가
+없으면 eligible 로 흘려보내는데, 그건 라우터가 이미 도달하는 모델을 줄 세우는
+함수이기 때문이다. 여기서는 연결을 열지 말지를 정하므로, 근거의 부재를 권한으로
+읽지 않는다.
+
+근거는 `.arena/capability-matrix.json` 의 `CapabilityMatrix` 에서 온다. 이
+파일은 `keyFingerprint` 와 `baseUrl` 로 범위가 묶여 있고, 둘 중 하나라도
+다르면 **다른 자격 증명에 대한 기록**이므로 거부한다. 권한 확인을 위해 공개
+목록 전체를 live 호출하지 않는다.
+
+## 설계 계층은 게이트웨이를 직접 다루지 않는다
+
+`fetch`, `/chat/completions` 조립, `Authorization` 헤더, OpenAI `choices`
+해석은 전부 Provider 계층의 일이다. 설계 계층은 `LlmProvider.chat()` 이
+정규화한 `response.text` 만 본다. 조립은 composition root(`previewCli`)에서
+하고, 아래로는 키가 아니라 이미 만들어진 provider 를 넘긴다.
+
+`src/design/modelPermission.test.ts` 의 architecture test 가 이 규칙을 소스에서
+직접 검사한다. `src/provider/architecture.test.ts` 는 `src/provider` 만 걷기
+때문에, 이 디렉터리의 hand-rolled `fetch` 는 오랫동안 그 검사를 통과했다.
+
+## 모델 선택에서 requirementRecall 을 뺐다
+
+이전에는 Coding Agent sweep 의 `requirementRecall` 로 proposer 모델을 골랐고,
+격리된(quarantined) 데이터셋까지 함께 읽었다. 문제는 두 가지였고 격리는 그중
+하나였다. `requirementRecall` 은 *에이전트 루프 전체*가 긴 작업 동안 요구사항을
+계약에 기록했는지를 잰다. proposer 는 한 번의 호출로 문자 좌표가 든 짧은 JSON
+배열을 낸다. 전자가 후자를 예측한다는 근거가 없으므로, 그 순위는 숫자가 얻지
+못한 권위였다 — 어느 파일에서 왔는지를 따지기 전에 이미 틀린 지표였다.
+
+그래서 지금은 권한이 확인된 모델을 카탈로그 순서대로 쓰고, **측정된 근거가
+없다는 사실을 그대로 말한다.** 이를 바꾸려면 proposer 전용 측정이 필요하다.

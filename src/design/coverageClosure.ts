@@ -145,7 +145,10 @@ function remedy(code: FindingCode, spec: RequirementSpec): ScenarioBlueprint | n
   const base = {
     requirementIds: [spec.id],
     generatedBy: "requirement_rule" as const,
-    unresolvedAspects: spec.confidence === "ambiguous" ? ["requirement_is_ambiguous"] : [],
+    unresolvedAspects: [
+      ...(spec.intent === "ambiguous" ? ["requirement_is_ambiguous"] : []),
+      ...(spec.binding === "unresolved" ? ["requirement_target_unresolved"] : []),
+    ],
   };
 
   switch (code) {

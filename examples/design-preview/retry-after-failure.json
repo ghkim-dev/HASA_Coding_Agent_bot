@@ -8,6 +8,19 @@
     "mustNotInvent": [
       "배포"
     ],
-    "maxQuestions": 2
+    "maxQuestions": 2,
+    "requiredQuestionCodes": [
+      "TARGET_UNRESOLVED"
+    ],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED"
+    ],
+    "exactQuestionSubjects": [
+      "t1-act-execute-2",
+      "t1-act-modify-1"
+    ],
+    "mustContainText": [
+      "원인을 수정한다"
+    ]
   }
 }

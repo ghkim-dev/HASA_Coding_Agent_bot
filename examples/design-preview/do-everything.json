@@ -5,13 +5,18 @@
   "expect": {
     "mustContainKinds": [],
     "forbiddenActions": [],
-    "minQuestions": 0,
     "mustNotInvent": [
       "수정",
       "실행",
       "삭제",
       "배포"
     ],
-    "maxQuestions": 0
+    "maxQuestions": 0,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": []
   }
 }

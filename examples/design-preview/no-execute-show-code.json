@@ -12,6 +12,17 @@
     "mustNotInvent": [
       "수정"
     ],
-    "maxQuestions": 2
+    "maxQuestions": 2,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [
+      "t1-act-inspect-2"
+    ],
+    "mustContainText": [
+      "코드를 살펴본다"
+    ]
   }
 }

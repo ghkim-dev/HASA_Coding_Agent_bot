@@ -5,11 +5,23 @@
   "expect": {
     "mustContainKinds": [],
     "forbiddenActions": [],
-    "minQuestions": 0,
     "mustNotInvent": [
       "삭제",
       "제거"
     ],
-    "maxQuestions": 3
+    "maxQuestions": 3,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [
+      "t1-act-create-2",
+      "t1-act-preserve-1"
+    ],
+    "mustContainText": [
+      "Arena와 Worktree를 그대로 유지한다",
+      "Coding Agent를 추가한다"
+    ]
   }
 }

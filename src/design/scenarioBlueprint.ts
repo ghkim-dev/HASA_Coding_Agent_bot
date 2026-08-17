@@ -118,7 +118,8 @@ export function scenariosFor(spec: RequirementSpec): ScenarioBlueprint[] {
 
   const base = { requirementIds: [spec.id], generatedBy: "requirement_rule" as const };
   const unresolved: string[] = [];
-  if (spec.confidence === "ambiguous") unresolved.push("requirement_is_ambiguous");
+  if (spec.intent === "ambiguous") unresolved.push("requirement_is_ambiguous");
+  if (spec.binding === "unresolved") unresolved.push("requirement_target_unresolved");
   if (spec.condition !== undefined) unresolved.push("condition_unsettled");
   if (spec.conflicts.length > 0) unresolved.push("conflicts_with_another_requirement");
   if (spec.alignment?.verdict === "unknown") unresolved.push("semantic_alignment_unknown");
