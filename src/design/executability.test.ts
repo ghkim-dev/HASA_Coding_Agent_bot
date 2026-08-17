@@ -152,6 +152,24 @@ describe("반대 방향 — 확정된 요구사항은 실행 가능하다", () =
   });
 });
 
+describe("질문은 가장 급한 것부터 하나만", () => {
+  test("한 요구사항에 finding 이 둘이면 더 급한 것을 묻는다", async () => {
+    // "실패하면 테스트해줘" leaves two things open on one requirement: which
+    // target, and whether the condition holds. The audit emits the target finding
+    // first, so without the ranking the plan asks which file to test — a question
+    // that cannot be answered usefully while it is still unknown whether the test
+    // should run at all.
+    const result = await preview("실패하면 테스트해줘.");
+    const codes = result.closure.audit.findings.map((f) => f.code);
+    assert.ok(codes.includes("TARGET_UNRESOLVED"), codes.join(", "));
+    assert.ok(codes.includes("UNRESOLVED_CONDITION"), codes.join(", "));
+
+    const asked = questionsFrom(result);
+    assert.equal(asked.length, 1, "한 요구사항에 두 번 물었습니다");
+    assert.equal(asked[0]?.code, "UNRESOLVED_CONDITION", asked[0]?.about);
+  });
+});
+
 describe("Startable 과 Executable 은 서로 다른 판정이다", () => {
   test("문장은 이해했지만 검증 규칙이 없으면 startable 이고 executable 은 아니다", async () => {
     // Built directly, because every act now has a rule — which is the point of the

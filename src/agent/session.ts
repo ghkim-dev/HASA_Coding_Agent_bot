@@ -35,6 +35,7 @@ import { SourceLedger } from "./sourceFacts.ts";
 import { createSourceFactTool } from "./tools/sourceFactTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
 import { createShellTools, type ShellToolOptions } from "./tools/shellTools.ts";
+import { observeHarnessShadow, type ShadowRecord } from "./harnessShadow.ts";
 import type {
   AgentBudget,
   AgentEvent,
@@ -138,6 +139,9 @@ export interface AgentSessionOptions {
   onContract?: (contract: TurnContract) => void;
 }
 
+/** How many shadow observations a session keeps. Bounded, because it is a cache. */
+const MAX_SHADOW_RECORDS = 50;
+
 export class AgentSession {
   readonly workspaceRoot: string;
   private readonly opts: AgentSessionOptions;
@@ -166,6 +170,10 @@ export class AgentSession {
    * be a guess written into a record the model is later asked to trust.
    */
   private lastDelta: ProviderMessage[] = [];
+  /** The user's own words, per turn, for the offline design shadow. */
+  private readonly userTurns: string[] = [];
+  /** What the design engine made of each turn. Read by reports, never by the loop. */
+  private readonly shadow: ShadowRecord[] = [];
   /** What the last turn said it could not do, when it said so. */
   private lastBlocked: BlockedReport | null = null;
   /**
@@ -438,6 +446,10 @@ export class AgentSession {
     // supplies. Provenance the model can write is provenance it can get wrong.
     this.turnId = `t${this.turnOrdinal++}`;
     this.turnFailures = [];
+    // The user's own words, kept for the offline design shadow below. A
+    // conversation rather than a message: a correction only means something next
+    // to what it corrects.
+    this.userTurns.push(prompt);
 
     // Before the tools are built, so this turn's own URLs are already the
     // user's when the model reaches for one.
@@ -563,7 +575,25 @@ export class AgentSession {
 
     this.log.info("agent turn", { mode: this.mode, approval: this.approvals.currentMode });
     try {
-      return await loop.run(this.messages, signal);
+      const result = await loop.run(this.messages, signal);
+      // Shadow mode, and the ordering is the guarantee: the turn is over, its
+      // answer is decided, and this cannot reach back into any of it. Offline —
+      // no model is asked, so no call is added to the user's account — and
+      // awaited rather than fired off, so a test can assert what it recorded
+      // without waiting on a timer. It never throws; see `harnessShadow.ts`.
+      this.shadow.push(
+        await observeHarnessShadow({
+          turnId: this.turnId,
+          turns: [...this.userTurns],
+          production: {
+            reason: result.reason,
+            changedFileCount: result.changedFiles.length,
+            summarySource: result.summarySource,
+          },
+        }),
+      );
+      if (this.shadow.length > MAX_SHADOW_RECORDS) this.shadow.shift();
+      return result;
     } finally {
       // Taken in `finally` so an aborted or failed turn still records what the
       // model actually read. A turn that timed out mid-tool-call is a turn that
@@ -579,6 +609,17 @@ export class AgentSession {
       // fresh conversation.
       this.approvals.endTurn();
     }
+  }
+
+  /**
+   * What the design engine made of each turn, newest last.
+   *
+   * A record for a report. Nothing in the runtime reads it to decide anything,
+   * which is the property `harnessShadow.test.ts` asserts by running the same
+   * turn with and without the observer and comparing every production decision.
+   */
+  shadowRecords(): readonly ShadowRecord[] {
+    return this.shadow;
   }
 
   /** Restores the workspace to the state it was in before this session wrote. */
