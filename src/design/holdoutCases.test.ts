@@ -33,11 +33,20 @@ import { parseProposals } from "./proposalParse.ts";
  */
 
 /**
- * sha256 of `holdoutCases.ts`.
+ * sha256 of `holdoutCases.ts`, over its content with line endings normalised.
  *
  * Kept here rather than in the data file, because a digest cannot include itself.
+ * Normalised because `.gitattributes` checks out `eol=lf` while a Windows working
+ * tree can hold CRLF: hashing raw bytes pins the answers to one platform and fails
+ * everywhere else, which would make this test a portability bug rather than a
+ * guarantee.
  */
-const HOLDOUT_DIGEST = "24bf6fd5478101dc33ff4a7e6c4261b995a7596934b0fba5f35d8fcb3f49da16";
+const HOLDOUT_DIGEST = "24197c8eb77ddb429b95ad0e77d3e799012f3b3b33d1cae4e570318ec3bb1a6f";
+
+/** The content this digest is over. One definition, used to pin and to verify. */
+function normalise(source: string): string {
+  return source.split("\r\n").join("\n");
+}
 
 let score: GoldScore;
 const previews = new Map<string, PreviewResult>();
@@ -52,7 +61,7 @@ before(async () => {
 describe("Holdout 집합 자체", () => {
   test("정답 파일의 해시가 기록된 값과 같다", async () => {
     const path = new URL("./holdoutCases.ts", import.meta.url);
-    const digest = createHash("sha256").update(await readFile(path)).digest("hex");
+    const digest = createHash("sha256").update(normalise(await readFile(path, "utf8"))).digest("hex");
     assert.equal(
       digest,
       HOLDOUT_DIGEST,
