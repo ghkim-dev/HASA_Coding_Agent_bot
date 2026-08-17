@@ -3,6 +3,7 @@ import { unsupportedClaims } from "./claimGrounding.ts";
 import { isExternalBlocker, classifyFailure } from "./commandSemantics.ts";
 import type { SourceRequirement } from "./sourceProvenance.ts";
 import type { SourceFact } from "./sourceFacts.ts";
+import { composeRuntimeSummary, type QuotedSection, type RuntimeSummary } from "./runtimeSummary.ts";
 
 /**
  * The last thing between the model's answer and the user.
@@ -420,42 +421,70 @@ export function describeViolations(violations: readonly ClaimViolation[]): strin
  * less than they hoped can ask again; a user told the work is done when it is
  * not has been given something they cannot act on and do not know to doubt.
  */
-export function safeFallback(task: TaskState | null, disposition: TaskDisposition, termination?: string): string {
-  const lines = ["답변이 기록과 맞지 않아, 런타임이 확인한 사실만 정리해 드립니다."];
+/**
+ * The answer the runtime writes when the model's cannot be sent.
+ *
+ * Two kinds of sentence, kept apart by type rather than run together into one
+ * string. `verdict` is the runtime speaking; `quoted` is requirement text and
+ * issue detail repeated from the record. The second is arbitrary text written
+ * by the user or the model, and a requirement legitimately called
+ * "완료 여부 확인 및 보고" is a completion word inside data — not a claim, and
+ * unfixable by choosing better words on this side, because these are not this
+ * side's words.
+ *
+ *     "확인됨", not "완료"          fixed a label the runtime chose
+ *     quoted requirement text        cannot be fixed that way at all
+ */
+export function safeFallback(
+  task: TaskState | null,
+  disposition: TaskDisposition,
+  termination?: string,
+): RuntimeSummary {
+  const verdict = ["답변이 기록과 맞지 않아, 런타임이 확인한 사실만 정리해 드립니다."];
+  const quoted: QuotedSection[] = [];
 
   if (task !== null) {
     const by = (status: string): string[] =>
       task.requirements.filter((r) => r.status === status).map((r) => r.description);
-    const section = (label: string, items: readonly string[]): void => {
-      if (items.length > 0) lines.push(`- ${label}: ${items.join(", ")}`);
-    };
-    // "확인됨", not "완료".
-    //
-    // This line is a section label listing which requirements passed, and the
-    // gate reads `- 완료: 코드 실행` as a sentence claiming completion — which,
-    // read alone, is exactly what it looks like. The runtime's own fallback
-    // therefore failed the runtime's own gate, in the same way `defaultSummary`
-    // did and for the same reason: text written about the record, in the
-    // vocabulary of a verdict.
-    //
-    // `describeDisposition` already says "요구사항이 모두 확인되었습니다", so
-    // this is the vocabulary the rest of the file uses for the same idea.
-    section("확인됨", by("passed"));
-    section("실패", by("failed"));
-    section("막힘", by("blocked"));
-    section("아직 실행 안 함", [...by("pending"), ...by("in_progress")]);
-
-    const open = task.issues.filter((i) => i.status === "open");
-    if (open.length > 0) {
-      lines.push(`- 미해결 오류: ${open.map((i) => `${i.summary} — ${i.detail}`).join("; ")}`);
-    }
-    if (task.changedFiles.length > 0) lines.push(`- 변경한 파일: ${task.changedFiles.join(", ")}`);
+    quoted.push(
+      { label: "확인됨", items: by("passed") },
+      { label: "실패", items: by("failed") },
+      { label: "막힘", items: by("blocked") },
+      { label: "아직 실행 안 함", items: [...by("pending"), ...by("in_progress")] },
+      {
+        label: "미해결 오류",
+        items: task.issues
+          .filter((i) => i.status === "open")
+          .map((i) => `${i.summary} — ${i.detail}`),
+      },
+      { label: "변경한 파일", items: task.changedFiles },
+    );
   }
 
   if (termination === "no_progress") {
-    lines.push("같은 시도가 반복되어 이번 실행은 중단했습니다.");
+    verdict.push("같은 시도가 반복되어 이번 실행은 중단했습니다.");
   }
-  lines.push(`${describeDisposition(disposition)}.`);
-  if (disposition !== "completed") lines.push("따라서 전체 작업은 아직 완료되지 않았습니다.");
-  return lines.join("\n");
+  verdict.push(`${describeDisposition(disposition)}.`);
+  if (disposition !== "completed") verdict.push("따라서 전체 작업은 아직 완료되지 않았습니다.");
+
+  return composeRuntimeSummary({ verdict, quoted });
+}
+
+/**
+ * The claim rules, applied to what the runtime actually asserted.
+ *
+ * Reads `verdict` and never `quoted`. That is the whole separation: the same
+ * function that refuses a model's overclaim can be pointed at the runtime's own
+ * words without the quoted requirement text being mistaken for them.
+ *
+ * Nothing calls this on the send path — a `RuntimeSummary` is trusted by
+ * construction and is not re-validated. It exists so the invariant "the
+ * runtime's own assertions pass the runtime's own gate" is a test that can be
+ * written, which is how the two defects in this file were found.
+ */
+export function validateRuntimeSummary(
+  summary: RuntimeSummary,
+  input: Omit<FinalClaimInput, "text">,
+): ClaimValidationResult {
+  return validateFinalClaims({ ...input, text: summary.verdict.join("\n") });
 }

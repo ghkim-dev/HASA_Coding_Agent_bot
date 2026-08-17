@@ -388,6 +388,8 @@ export const DEFAULT_BUDGET: AgentBudget = {
 // Session
 // ---------------------------------------------------------------------------
 
+import type { SummarySource } from "./runtimeSummary.ts";
+
 export interface AgentTurnResult {
   reason: AgentStopReason;
   /** What the agent says it did, in the user's language. */
@@ -410,6 +412,14 @@ export interface AgentTurnResult {
    * to say so. See `finalClaims.safeFallback`.
    */
   safeFallback?: true;
+  /**
+   * Who wrote `summary`.
+   *
+   * Set by the loop from the branch that produced it, never from anything in
+   * the text and never from anything a model supplies. A model and the runtime
+   * can write the same sentence; only this says which one did.
+   */
+  summarySource: SummarySource;
 }
 
 /**

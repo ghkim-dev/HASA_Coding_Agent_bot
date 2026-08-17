@@ -574,6 +574,19 @@ export function unsupportedCompletionIn(
   task: ReturnType<typeof reduceTask>,
 ): boolean {
   if (turn.result?.reason !== "finished") return false;
+  // Provenance, not wording.
+  //
+  // A runtime-authored answer is the record rendered, and judging it as a claim
+  // is judging the record against itself — it produced two false findings that
+  // way, once for a label the runtime chose and once for a requirement whose own
+  // description contained 완료. Neither was a claim and neither was fixable by
+  // reading the sentence more carefully.
+  //
+  // This is not a bypass a model can reach. `summarySource` is set by the loop
+  // from the branch that produced the answer, and a model's text arrives as a
+  // string with no way to acquire it. An identical sentence sent as a model
+  // candidate is validated exactly as before.
+  if (turn.result.summarySource === "runtime") return false;
   const text = turn.result.summary;
   if (text.length === 0) return false;
   return validateFinalClaims({

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { RuntimeSummary, SummarySource } from "./runtimeSummary.ts";
 import { CommandRejected } from "../core/commands.ts";
 import { SandboxViolation } from "../core/sandbox.ts";
 import { nullLogger, type Logger } from "../hasa-client/logger.ts";
@@ -98,7 +99,14 @@ export interface AgentLoopOptions {
    */
   finalClaims?: {
     validate: (text: string) => string | null;
-    fallback: () => string;
+    /**
+     * What gets sent instead when the repair budget runs out.
+     *
+     * Returns a `RuntimeSummary` rather than a string so the loop cannot
+     * mistake a model-authored answer for a runtime-authored one, and so no
+     * caller can promote one by handing over text. See `runtimeSummary.ts`.
+     */
+    fallback: () => RuntimeSummary;
   };
 }
 
@@ -169,6 +177,8 @@ interface RunState {
   claimRepairs: number;
   /** True when the runtime answered instead of the model. */
   safeFallback: boolean;
+  /** Who wrote the final answer. Never derived from the text. */
+  summarySource: SummarySource;
   /** Calls held back before running — denied or deferred. */
   deferred: number;
   /** Calls that actually ran. Distinct from `toolCalls`, which counts proposals. */
@@ -229,6 +239,11 @@ export class AgentLoop {
       protocolRepairs: 0,
       claimRepairs: 0,
       safeFallback: false,
+      // Runtime until a model candidate is accepted. A turn that produces no
+      // answer at all falls through to `defaultSummary`, which the runtime
+      // writes — so the default is the honest one and the model has to earn
+      // the other by getting a candidate past the gate.
+      summarySource: "runtime",
       deferred: 0,
       executed: 0,
       progress: newProgressState(),
@@ -264,7 +279,10 @@ export class AgentLoop {
 
     const changedFiles = [...state.changed].sort();
     if (changedFiles.length > 0) this.emit({ type: "changed", files: changedFiles });
+    // When nothing survived, the runtime writes the answer — so the source is
+    // the runtime's, whatever an earlier candidate might have set it to.
     const summary = state.summary || defaultSummary(reason, changedFiles.length);
+    const summarySource: SummarySource = state.summary.length === 0 ? "runtime" : state.summarySource;
     // Why *this* run hit *this* reason. The reason is a category and the panel
     // has a label for it; the detail is the part a user can act on — which call
     // repeated, which budget ran out — and without it "반복 행동 감지" is a
@@ -283,6 +301,7 @@ export class AgentLoop {
       inputTokens: state.inputTokens,
       outputTokens: state.outputTokens,
       claimRepairs: state.claimRepairs,
+      summarySource,
       ...(state.safeFallback ? { safeFallback: true as const } : {}),
     };
   }
@@ -432,7 +451,9 @@ export class AgentLoop {
             // summary is. Anything else would make "escaped = 0" a statement
             // about how patient the model was.
             state.safeFallback = true;
-            state.summary = this.opts.finalClaims?.fallback() ?? "";
+            const written = this.opts.finalClaims?.fallback();
+            state.summary = written?.text ?? "";
+            state.summarySource = "runtime";
             this.log.warn("final claim repairs exhausted; sending the runtime's summary", {
               repairs: state.claimRepairs,
             });
@@ -443,6 +464,9 @@ export class AgentLoop {
           }
 
           state.summary = completion.text.trim();
+          // The model wrote this one. Recorded here, at the branch that knows,
+          // rather than inferred later from what the text says.
+          state.summarySource = "model";
           // The answer goes into the history like every other assistant turn.
           //
           // It did not, and the consequence was not subtle: `messages` is what

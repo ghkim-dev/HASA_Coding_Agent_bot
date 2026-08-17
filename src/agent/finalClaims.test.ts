@@ -1,6 +1,11 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { safeFallback, taskDisposition, validateFinalClaims } from "./finalClaims.ts";
+import {
+  safeFallback,
+  taskDisposition,
+  validateFinalClaims,
+  validateRuntimeSummary,
+} from "./finalClaims.ts";
 import type { Evidence, RequirementState, TaskState } from "./taskState.ts";
 import { defaultSummary } from "./loop.ts";
 
@@ -500,11 +505,10 @@ describe("the fallback the runtime writes also passes the runtime's gate", () =>
   for (const { name, state, termination } of shapes) {
     test(`${name}`, () => {
       const disposition = taskDisposition(state, termination);
-      const text = safeFallback(state, disposition, termination);
-      const result = validateFinalClaims({
+      const summary = safeFallback(state, disposition, termination);
+      const result = validateRuntimeSummary(summary, {
         task: state,
         disposition,
-        text,
         ...(termination === undefined ? {} : { termination }),
       });
       assert.equal(
@@ -516,8 +520,8 @@ describe("the fallback the runtime writes also passes the runtime's gate", () =>
   }
 
   test("a null task still produces a summary the gate accepts", () => {
-    const text = safeFallback(null, "active");
-    const result = validateFinalClaims({ task: null, disposition: "active", text });
+    const summary = safeFallback(null, "active");
+    const result = validateRuntimeSummary(summary, { task: null, disposition: "active" });
     assert.equal(result.valid, true);
   });
 });
