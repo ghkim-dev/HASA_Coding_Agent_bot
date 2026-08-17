@@ -644,6 +644,16 @@ export class AgentLoop {
       const refusal = `refused: there is no tool called "${call.name}". Available tools: ${available}`;
       this.emit({ type: "tool_start", callId: call.id, name: call.name, risk: "read", summary: `${call.name} — 없는 도구입니다` });
       this.emit({ type: "tool_end", callId: call.id, name: call.name, ok: false, detail: refusal.slice(0, 200) });
+      // Recorded for the same reason as the throw below: a model asking four
+      // times for a tool that does not exist is going nowhere, and a refusal
+      // nobody counted left the streak at zero until the step budget ran out.
+      observeAction(state.progress, {
+        toolName: call.name,
+        args: argumentsOf(call),
+        outcome: "failed",
+        detail: refusal,
+        changedFiles: [],
+      });
       return refusal;
     }
 
@@ -651,6 +661,13 @@ export class AgentLoop {
       const refusal = `refused: the arguments for ${call.name} were not a JSON object. Received: ${call.rawArguments.slice(0, 200)}`;
       this.emit({ type: "tool_start", callId: call.id, name: tool.name, risk: tool.risk, summary: `${tool.name} — 인자를 읽지 못했습니다` });
       this.emit({ type: "tool_end", callId: call.id, name: tool.name, ok: false, detail: refusal.slice(0, 200) });
+      observeAction(state.progress, {
+        toolName: call.name,
+        args: argumentsOf(call),
+        outcome: "failed",
+        detail: refusal,
+        changedFiles: [],
+      });
       return refusal;
     }
 
@@ -681,6 +698,16 @@ export class AgentLoop {
     if (outcome === "blocked") {
       const detail = `refused: ${tool.name} is not permitted.`;
       this.emit({ type: "tool_end", callId: call.id, name: tool.name, ok: false, detail });
+      // `denied` rather than `failed`: the call never ran, exactly like one the
+      // tool gate held back. Without this, a model proposing a tool its mode
+      // forbids got a refusal per step and the run reached `maxSteps`.
+      observeAction(state.progress, {
+        toolName: call.name,
+        args,
+        outcome: "denied",
+        detail,
+        changedFiles: [],
+      });
       return detail;
     }
     if (outcome === "denied") {
@@ -744,6 +771,20 @@ export class AgentLoop {
       const detail = describeToolFailure(err);
       this.log.warn("tool call failed", { tool: tool.name, detail });
       this.emit({ type: "tool_end", callId: call.id, name: tool.name, ok: false, detail });
+      // A tool that threw is a tool that failed. This used to return the message
+      // to the model without recording anything, so a turn whose every call
+      // threw had a progress streak of zero and ran to `maxSteps` — the stall
+      // detector was blind to exactly the environments where nothing works. The
+      // classification is the same one a returned `ok: false` gets: the first
+      // occurrence is worth having, the same error again with nothing changed in
+      // between is not.
+      observeAction(state.progress, {
+        toolName: call.name,
+        args,
+        outcome: "failed",
+        detail,
+        changedFiles: [],
+      });
       return detail;
     }
   }

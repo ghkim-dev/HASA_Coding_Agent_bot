@@ -388,4 +388,228 @@ describe("11/27 — the print loop, in the real loop", () => {
       ["테스트 통과 확인", "성능 측정"],
     );
   });
+
+  /**
+   * A tool that throws, rather than one that returns a failure.
+   *
+   * The two are the same thing to a user and were not the same thing to the
+   * stall detector: `invoke`'s catch handed the message to the model and
+   * recorded nothing, so the streak stayed at zero and the run went to
+   * `maxSteps` — forty actions later, under a message about the request being
+   * too large. The environments where every call throws (a spawn refused by
+   * policy, a locked directory, an interpreter that dies on start) are exactly
+   * the ones where the detector was needed and absent.
+   *
+   * Deterministic on purpose: the runner is injected and throws, so this
+   * reproduces on a machine where `python` works and on one where it does not.
+   */
+  test("a tool that throws every time is a stall, not a step budget", async () => {
+    const fixture = await createRepoFixture({ "a.ts": "export const a = 1;\n" });
+    fixtures.push(fixture);
+
+    let modelCalls = 0;
+    let spawns = 0;
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model: {
+        modelId: "test",
+        async complete() {
+          modelCalls += 1;
+          if (modelCalls === 1) {
+            return completion({
+              toolCalls: [
+                call("record_request", "r1", {
+                  goal: "학습 실행",
+                  relation: "new_task",
+                  intents: "execute",
+                  requirements: "학습 스크립트 실행",
+                }),
+              ],
+            });
+          }
+          return completion({
+            toolCalls: [call("run_command", `x${modelCalls}`, { executable: "python", args: "train.py" })],
+          });
+        },
+      } as AgentModel,
+      approvalPort: allowingApprovalPort,
+      approvalMode: "auto",
+      mode: "code",
+      logger: nullLogger,
+      // Not CommandRejected and not ENOENT, so `shellTools` rethrows it and the
+      // loop's catch is the path under test.
+      runCommand: async () => {
+        spawns += 1;
+        throw new Error("EPERM: operation not permitted");
+      },
+      budget: { maxSteps: 60, maxToolCalls: 60, maxModelCalls: 60, maxRepeatedCalls: 99 },
+    });
+
+    const result = await session.send("학습 돌려줘", new AbortController().signal);
+
+    assert.equal(result.reason, "no_progress", `stopped for ${result.reason} after ${spawns} throwing calls`);
+    assert.ok(modelCalls < 20, `stopped after ${modelCalls} model calls, far short of the budget`);
+    assert.match(JSON.stringify(session.history()), new RegExp(NO_PROGRESS_DETECTED));
+  });
+
+  /**
+   * The other direction, which is the one that costs a working agent.
+   *
+   * Three throws that say three different things are three findings — a missing
+   * package, then another, then a syntax error — and an agent working through
+   * them is doing the job. Counting a thrown error as no progress must not make
+   * investigation look like a loop.
+   */
+  test("throws that say different things are investigation, not a stall", async () => {
+    const fixture = await createRepoFixture({ "a.ts": "export const a = 1;\n" });
+    fixtures.push(fixture);
+
+    const errors = [
+      "ModuleNotFoundError: No module named 'torch'",
+      "ModuleNotFoundError: No module named 'numpy'",
+      "SyntaxError: invalid syntax in train.py",
+    ];
+    let modelCalls = 0;
+    let attempt = 0;
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model: {
+        modelId: "test",
+        async complete() {
+          modelCalls += 1;
+          if (modelCalls === 1) {
+            return completion({
+              toolCalls: [
+                call("record_request", "r1", {
+                  goal: "학습 실행",
+                  relation: "new_task",
+                  intents: "execute",
+                  requirements: "학습 스크립트 실행",
+                }),
+              ],
+            });
+          }
+          if (attempt < errors.length) {
+            return completion({
+              toolCalls: [call("run_command", `x${modelCalls}`, { executable: "python", args: "train.py" })],
+            });
+          }
+          return completion({
+            text:
+              "train.py 를 세 번 실행했고 세 번 다 다른 이유로 멈췄습니다: torch 없음, numpy 없음, " +
+              "그리고 문법 오류. 환경이 준비되지 않아 더 진행하지 못했습니다.",
+          });
+        },
+      } as AgentModel,
+      approvalPort: allowingApprovalPort,
+      approvalMode: "auto",
+      mode: "code",
+      logger: nullLogger,
+      runCommand: async () => {
+        const message = errors[attempt] ?? "unreachable";
+        attempt += 1;
+        throw new Error(message);
+      },
+      budget: { maxSteps: 60, maxToolCalls: 60, maxModelCalls: 60, maxRepeatedCalls: 99 },
+    });
+
+    const result = await session.send("학습 돌려줘", new AbortController().signal);
+
+    assert.notEqual(result.reason, "no_progress", "three different findings are not a stall");
+    assert.equal(attempt, errors.length, "every attempt was allowed to run");
+    assert.doesNotMatch(
+      JSON.stringify(session.history()),
+      new RegExp(NO_PROGRESS_DETECTED),
+      "and the model was never told it was going in circles",
+    );
+  });
+});
+
+describe("a thrown failure is classified like a returned one", () => {
+  /** What `invoke`'s catch now records: an outcome of `failed` and the message. */
+  function threw(command: string, message: string): ActionObservation {
+    return {
+      toolName: "run_command",
+      args: { command },
+      outcome: "failed",
+      detail: `error: ${message}`,
+      changedFiles: [],
+    };
+  }
+
+  test("the first throw is a finding", () => {
+    const { classes, state } = sequence([threw("python train.py", "EPERM: operation not permitted")]);
+    assert.deepEqual(classes, ["weak"]);
+    assert.equal(stallVerdict(state), "ok");
+  });
+
+  test("the same throw over and over is a stall", () => {
+    const { classes, state } = sequence([
+      threw("python train.py", "EPERM: operation not permitted"),
+      threw("python train.py", "EPERM: operation not permitted"),
+      threw("python train.py", "EPERM: operation not permitted"),
+      threw("python train.py", "EPERM: operation not permitted"),
+    ]);
+    assert.deepEqual(classes, ["weak", "none", "none", "none"]);
+    assert.equal(stallVerdict(state), "warn");
+  });
+
+  test("different throws are not", () => {
+    const { classes, state } = sequence([
+      threw("python train.py", "No module named 'torch'"),
+      threw("python train.py", "No module named 'numpy'"),
+      threw("python train.py", "SyntaxError: invalid syntax"),
+      threw("python train.py", "CUDA out of memory"),
+    ]);
+    assert.deepEqual(classes, ["weak", "weak", "weak", "weak"]);
+    assert.equal(stallVerdict(state), "ok");
+  });
+
+  test("a throw, a fix, then the same call again is an ordinary retry", () => {
+    const { classes, state } = sequence([
+      threw("python train.py", "No module named 'torch'"),
+      wrote("requirements.txt", "torch"),
+      threw("python train.py", "No module named 'torch'"),
+    ]);
+    // The third is a repeat of the first and worth nothing on its own — but the
+    // fix in between reset the streak, so nothing is stopped.
+    assert.deepEqual(classes, ["weak", "strong", "none"]);
+    assert.equal(state.streak, 1);
+    assert.equal(stallVerdict(state), "ok");
+  });
+});
+
+describe("refusals that never ran are counted too", () => {
+  test("a tool that does not exist, asked for repeatedly, is a stall", () => {
+    // `get_git_diff` outside a repository, `edit_file` in ask mode: the model
+    // reaches for a tool its mode does not have and reads the same refusal.
+    const missing = (name: string): ActionObservation => ({
+      toolName: name,
+      args: {},
+      outcome: "failed",
+      detail: `refused: there is no tool called "${name}". Available tools: read_file, run_command`,
+      changedFiles: [],
+    });
+    const { classes, state } = sequence([
+      missing("get_git_diff"),
+      missing("get_git_diff"),
+      missing("get_git_diff"),
+      missing("get_git_diff"),
+    ]);
+    assert.deepEqual(classes, ["weak", "none", "none", "none"]);
+    assert.equal(stallVerdict(state), "warn");
+  });
+
+  test("but reaching for two different absent tools is still learning", () => {
+    const missing = (name: string): ActionObservation => ({
+      toolName: name,
+      args: {},
+      outcome: "failed",
+      detail: `refused: there is no tool called "${name}". Available tools: read_file`,
+      changedFiles: [],
+    });
+    const { classes, state } = sequence([missing("get_git_diff"), missing("apply_patch")]);
+    assert.deepEqual(classes, ["weak", "weak"]);
+    assert.equal(stallVerdict(state), "ok");
+  });
 });
