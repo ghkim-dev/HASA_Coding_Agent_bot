@@ -1,0 +1,16 @@
+{
+  "turns": [
+    "알아서 다 해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "minQuestions": 0,
+    "mustNotInvent": [
+      "수정",
+      "실행",
+      "삭제",
+      "배포"
+    ]
+  }
+}

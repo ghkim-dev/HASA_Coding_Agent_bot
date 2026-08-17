@@ -1,0 +1,13 @@
+{
+  "turns": [
+    "기존 API 호환성은 반드시 유지하고, 가능하면 응답 속도도 개선해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "삭제"
+    ]
+  }
+}

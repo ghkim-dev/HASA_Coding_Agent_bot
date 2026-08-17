@@ -1,0 +1,15 @@
+{
+  "turns": [
+    "open.hasa.re.kr/models를 기준으로 사용할 수 있는 모델을 확인해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [
+      "validation"
+    ],
+    "forbiddenActions": [],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "설치"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "turns": [
+    "수정하거나 실행하지 말고 main.py 코드만 분석해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [
+      "constraint"
+    ],
+    "forbiddenActions": [
+      "execute",
+      "modify"
+    ],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "배포"
+    ]
+  }
+}

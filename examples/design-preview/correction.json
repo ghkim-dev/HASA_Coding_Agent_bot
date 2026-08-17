@@ -1,0 +1,18 @@
+{
+  "turns": [
+    "main.py를 실행해줘.",
+    "정정할게. 실행하지 말고 코드만 보여줘."
+  ],
+  "expect": {
+    "mustContainKinds": [
+      "constraint"
+    ],
+    "forbiddenActions": [
+      "execute"
+    ],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "삭제"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "turns": [
+    "적당히 잘 좀 해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "minQuestions": 0,
+    "mustNotInvent": [
+      "수정",
+      "실행",
+      "배포"
+    ]
+  }
+}

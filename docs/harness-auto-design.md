@@ -280,3 +280,71 @@ target_substituted            지목한 대상이 요구사항에 없음 (unknow
 - `dependencies` 자동 도출
 - 규칙 커버리지 자체의 메타 감사 — `NO_DESIGN_RULE`이 누락을 보고하지만
   새 요구사항 유형에 맞는 규칙은 사람이 써야 한다
+
+---
+
+# Harness Design Preview
+
+사용자가 자연어 요청을 넣으면 **아무것도 실행하지 않고** 엔진이 무엇을 이해했는지
+보여준다.
+
+## 사용법
+
+```bash
+pnpm design:preview -- --prompt "로그인 오류를 수정하고 테스트해줘."
+pnpm design:preview -- --turns examples/design-preview/correction.json
+pnpm design:preview -- --prompt "..." --offline
+pnpm design:preview -- --prompt "..." --json
+pnpm design:preview -- --prompt "..." --advanced
+```
+
+`--offline` 은 결정론적 런타임 추출기만 쓰고 HASA 요청을 보내지 않는다. 기본
+경로는 모델에게 요구사항 **후보**를 묻되, 모델 실패는 offline 결과를 대체하지
+않고 그 옆에 보고된다 — offline 절반은 그 자체로 완결이기 때문이다.
+
+## 모델이 줄 수 있는 것과 없는 것
+
+```
+줄 수 있음    span 좌표 (turnId/start/end), kind, priority, polarity, 설명
+줄 수 없음    confirmed, derivedBy, status, sourceText, id,
+              실행 가능 여부, 감사 통과 여부, oracle 성공 여부
+```
+
+금지 필드를 보내면 **무시하지 않고** `forged_provenance` 로 기록한다. 아무도
+보지 못하는 거부는 확인할 수 없는 경계다.
+
+제약: 동적 모델 목록 / 하드코딩 ID 없음 / permitted + chat 만 / Single Model /
+요청당 최대 2회 호출 / timeout / AbortSignal / tool call 없음 / streaming 없음 /
+파일·명령 없음.
+
+## 출력 계층
+
+기본 보고서는 내부 어휘를 쓰지 않는다. `forbidden`, `ambiguous`,
+`MODIFY_WITHOUT_REGRESSION`, `designRuleId` 는 정확한 말이지만, 사용자에게
+내밀면 그들이 이해했는지 확인하기 전에 시스템을 배우라는 뜻이 된다 — 이해했는지
+아는 사람은 그들뿐인데.
+
+`--advanced` 와 `--json` 이 전부 담는다. JSON 은 다음 사슬을 끊지 않는다.
+
+```
+turn → sourceSpan → requirementId → blueprintId → oracleCoverage
+     → audit finding → closure history
+```
+
+## 확인 질문
+
+다섯 finding 이 일반 문장 질문으로 바뀐다: `REQUIREMENT_CONFLICT`,
+`UNRESOLVED_CONDITION`, `SEMANTIC_ALIGNMENT_UNKNOWN`, `NO_DESIGN_RULE`,
+`AMBIGUOUS_DECIDED`.
+
+선택지는 제시하고 **고르지 않는다**. 여기서 하나를 고르면 계획이 사용자를 대신해
+결정하고 그 사실을 숨기는 것이고, 그것이 이 설계 전체가 막으려는 실패다.
+
+## 개인 사용 fixture
+
+`examples/design-preview/` 에 16개. 기대값은 사람이 쓴 최소치만이고 문장 전체
+일치나 출력 스타일은 검사하지 않는다.
+
+`login-fix` 의 `mustContainKinds` 가 비어 있는 것은 기록이다. 금지도 출처도 없는
+평범한 기능 요청에서 offline 경로는 요구사항을 만들지 못한다 — 그 자리가 모델
+제안이 필요한 지점이다.

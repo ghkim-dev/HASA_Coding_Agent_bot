@@ -1,0 +1,17 @@
+{
+  "turns": [
+    "기존 클라이언트가 사용 중이라면 API 형식을 변경하지 마."
+  ],
+  "expect": {
+    "mustContainKinds": [
+      "constraint"
+    ],
+    "forbiddenActions": [
+      "modify"
+    ],
+    "minQuestions": 1,
+    "mustNotInvent": [
+      "배포"
+    ]
+  }
+}

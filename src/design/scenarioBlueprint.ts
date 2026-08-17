@@ -87,6 +87,35 @@ function oracle(over: Partial<ScenarioOracle> = {}): ScenarioOracle {
 export function scenariosFor(spec: RequirementSpec): ScenarioBlueprint[] {
   if (spec.supersededBy !== undefined) return [];
 
+  // The harness's own conditions are enforced by the invariants every other
+  // scenario already carries, so they get one blueprint that says so rather
+  // than a bespoke check per condition.
+  //
+  // They also must never become a *question*. A user cannot answer "how should
+  // the harness verify its own completion gate", and without a rule of their
+  // own these fell through to `generic` and produced exactly that question on
+  // every single request.
+  if (spec.status === "system_added") {
+    return [
+      {
+        requirementIds: [spec.id],
+        generatedBy: "baseline",
+        id: `${spec.id}-invariant`,
+        title: `${spec.text}`,
+        category: "security",
+        preconditions: "모든 시나리오에 공통으로 적용된다.",
+        actions: "어떤 시나리오를 실행하든 함께 검사된다.",
+        expectedEvidence: "하네스 불변식이 모두 유지된다.",
+        forbiddenEffects: "불변식 위반이 사용자에게 도달하는 것",
+        oracle: oracle(),
+        rationale: "하네스 자신의 조건이며 사용자가 정할 수 있는 것이 아니다.",
+        designRuleId: "system.v1",
+        oracleCoverage: ["harness_invariants"],
+        unresolvedAspects: [],
+      },
+    ];
+  }
+
   const base = { requirementIds: [spec.id], generatedBy: "requirement_rule" as const };
   const unresolved: string[] = [];
   if (spec.confidence === "ambiguous") unresolved.push("requirement_is_ambiguous");

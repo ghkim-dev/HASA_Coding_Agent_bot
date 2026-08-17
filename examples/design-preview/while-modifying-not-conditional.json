@@ -1,0 +1,13 @@
+{
+  "turns": [
+    "수정하면서 기존 테스트는 그대로 유지해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "삭제"
+    ]
+  }
+}

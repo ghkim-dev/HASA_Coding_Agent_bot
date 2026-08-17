@@ -1,0 +1,13 @@
+{
+  "turns": [
+    "아까는 실행하지 못했어. 원인을 고치고 이번에는 다시 실행해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "배포"
+    ]
+  }
+}

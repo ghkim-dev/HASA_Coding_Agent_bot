@@ -1,0 +1,14 @@
+{
+  "turns": [
+    "기존 Arena와 Worktree를 유지하면서 HASA Coding Agent를 추가해줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "minQuestions": 0,
+    "mustNotInvent": [
+      "삭제",
+      "제거"
+    ]
+  }
+}

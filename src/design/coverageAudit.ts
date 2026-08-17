@@ -105,7 +105,11 @@ export function auditCoverage(input: {
   for (const spec of live) {
     const scenarios = byRequirement.get(spec.id) ?? [];
 
-    if (spec.polarity === "forbidden") {
+    // The harness's own conditions are covered by `system.v1` and by the
+    // invariants every scenario carries. Running the prohibition rules over
+    // them produced a second, duplicate pair of repairs beside the user's own —
+    // and one of them told the user their request forbade something it did not.
+    if (spec.polarity === "forbidden" && spec.status !== "system_added") {
       // A prohibition is verified by zero side effects, not by an assertion.
       if (!scenarios.some((s) => s.oracle.forbiddenTools.length > 0)) {
         findings.push({

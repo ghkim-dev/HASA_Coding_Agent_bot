@@ -1,0 +1,13 @@
+{
+  "turns": [
+    "API 응답 형식은 그대로 유지하면서 필드 이름을 전부 바꿔줘."
+  ],
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "minQuestions": 0,
+    "mustNotInvent": [
+      "배포"
+    ]
+  }
+}

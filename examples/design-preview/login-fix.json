@@ -1,0 +1,16 @@
+{
+  "turns": [
+    "로그인 오류를 수정하고 테스트해줘."
+  ],
+  "note": "offline 경로는 금지도 출처도 없는 평범한 기능 요청에서 요구사항을 만들지 못한다. mustContainKinds 를 비워 둔 것은 그 사실의 기록이며, 모델 제안이 붙는 지점이다.",
+  "expect": {
+    "mustContainKinds": [],
+    "forbiddenActions": [],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "배포",
+      "성능 개선",
+      "삭제"
+    ]
+  }
+}

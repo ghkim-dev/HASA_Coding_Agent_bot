@@ -1,0 +1,17 @@
+{
+  "turns": [
+    "auth 폴더 안에서만 수정하고 다른 파일은 건드리지 마."
+  ],
+  "expect": {
+    "mustContainKinds": [
+      "constraint"
+    ],
+    "forbiddenActions": [
+      "modify"
+    ],
+    "expectedQuestions": 0,
+    "mustNotInvent": [
+      "삭제"
+    ]
+  }
+}
