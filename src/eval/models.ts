@@ -4,8 +4,9 @@ import { HasaCatalog, canConverse } from "../provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
 import { protocolFor } from "../agent/autoModel.ts";
 import { conversabilityFor, fingerprint } from "../router/conversability.ts";
-import { poolEffectFor } from "../router/modelSemanticCatalog.ts";
+import { inPool } from "../router/poolEligibility.ts";
 import { DEFAULT_POOL } from "../router/semanticProfile.ts";
+import type { Modality } from "../provider/hasa/hasaCatalog.ts";
 import { fakeModel, GOOD, OVERCLAIMER, SLOPPY, STUBBORN } from "./fakeModels.ts";
 import type { ModelUnderTest } from "./sweep.ts";
 
@@ -82,22 +83,24 @@ export async function liveModels(opts: { limit?: number } = {}): Promise<LiveMod
     // It matters more here than in a picker because this module feeds
     // `evidence.ts`: a model scored on the wrong scenarios becomes a wrong
     // ranking rather than merely a wrong row in a table.
-    const converses = await conversability(apiKey, baseUrl);
+    const { converses, modality } = await conversability(apiKey, baseUrl);
     const usable = listing.models
       .filter((m) => {
-        if (converses.get(m.id) === false) return false;
         if (protocolFor(m.capabilities) === null) return false;
-        // Pool, not role.
+        // One rule for every model, curated or not.
         //
-        // The first version of this asked `roleIsWorker`, and `roleIsWorker`
-        // answers true for `ocr_worker` and `vision_worker` — correctly, because
-        // they are workers, in their own pools. The question a coding benchmark
-        // has to ask is whether they are workers *here*, and that is
-        // `poolEffectFor`, which is why the role and the pool were separated in
-        // the first place. Asking the wrong one put `paddleocr-vl` and
-        // `qwen2.5-vl-72b` back on the list of models to score on twenty coding
-        // scenarios.
-        return !poolEffectFor(m.id, DEFAULT_POOL).excluded;
+        // This asked the curated catalogue, which meant an uncurated model was
+        // admitted because there was no profile to exclude it — a safety
+        // classifier and an uncurated vision model both reached the coding
+        // sweep that way. `poolEligibility` decides from the modality and the
+        // gateway's answer first, and only `eligible` is in: `unknown` stays
+        // out without any claim being made about it.
+        return inPool({
+          modelId: m.id,
+          modality: modality.get(m.id) ?? null,
+          ...(converses.has(m.id) ? { converses: converses.get(m.id)! } : {}),
+          pool: DEFAULT_POOL,
+        });
       })
       .slice(0, opts.limit ?? 3);
     if (usable.length === 0) {
@@ -144,13 +147,22 @@ export async function liveModels(opts: { limit?: number } = {}): Promise<LiveMod
  * A failure to reach it yields an empty map — unknown, which keeps a model in
  * rather than letting an outage silently empty the sweep.
  */
-async function conversability(apiKey: string, baseUrl: string): Promise<Map<string, boolean>> {
+async function conversability(
+  apiKey: string,
+  baseUrl: string,
+): Promise<{ converses: Map<string, boolean>; modality: Map<string, Modality> }> {
   const known = new Map<string, boolean>();
+  const modality = new Map<string, Modality>();
   try {
     const catalog = new HasaCatalog(
       createMediaTransport({ origin: baseUrl.replace(/\/v1\/?$/, ""), apiKey }),
     );
     for (const entry of await catalog.all()) {
+      // Carried through rather than collapsed to a boolean here. `canConverse`
+      // answers whether the endpoint takes a conversation; the pool question is
+      // a different one and needs the modality itself to answer it — `safety`
+      // and `vision` converse and are still not coding workers.
+      modality.set(entry.id, entry.modality);
       if (!canConverse(entry.modality) || entry.callable === false) known.set(entry.id, false);
     }
   } catch {
@@ -164,5 +176,5 @@ async function conversability(apiKey: string, baseUrl: string): Promise<Map<stri
   })) {
     known.set(id, value);
   }
-  return known;
+  return { converses: known, modality };
 }

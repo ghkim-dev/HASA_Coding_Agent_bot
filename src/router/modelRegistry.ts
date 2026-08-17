@@ -9,6 +9,8 @@ import {
 import type { CapabilityDemand } from "./taskProfile.ts";
 import { DEFAULT_POOL, roleIsWorker, type WorkerPool } from "./semanticProfile.ts";
 import { poolEffectFor, semanticProfileFor } from "./modelSemanticCatalog.ts";
+import { poolEligibility } from "./poolEligibility.ts";
+import type { Modality } from "../provider/hasa/hasaCatalog.ts";
 
 /**
  * Where a `ModelProfile` comes from.
@@ -51,6 +53,13 @@ export function profileFromCatalogue(
     pool?: WorkerPool;
     /** False when something knows this model does not serve chat. */
     converses?: boolean;
+    /**
+     * What the catalogue publishes for this model.
+     *
+     * Absent means unlisted, which is `unknown` rather than permission — the
+     * distinction `poolEligibility` exists to keep.
+     */
+    modality?: Modality;
   } = {},
 ): ModelProfile {
   const protocol = protocolFor(model.capabilities);
@@ -82,6 +91,23 @@ export function profileFromCatalogue(
   const pool = options.pool ?? DEFAULT_POOL;
   const effect = poolEffectFor(model.id, pool);
 
+  // Pool standing, decided the same way for every model.
+  //
+  // `intendedUse` used to exist only when someone had curated the model, and
+  // the filter can only exclude on `intendedUse` — so an uncurated model was
+  // admitted for want of a profile rather than on any evidence. Three vision
+  // models, two curated and excluded, one bare and admitted.
+  //
+  // This runs from the catalogue's modality and the gateway's answer, so the
+  // exclusion exists whether or not anyone has written the model up. See
+  // `poolEligibility.ts`.
+  const standing = poolEligibility({
+    modelId: model.id,
+    modality: options.modality ?? null,
+    ...(options.converses === undefined ? {} : { converses: options.converses }),
+    pool,
+  });
+
   return {
     modelId: model.id,
     availability: {
@@ -101,26 +127,57 @@ export function profileFromCatalogue(
       maxOutputTokens: model.limits.maxOutputTokens,
       supportsNativeTools: model.capabilities.toolCalling === true,
     },
-    ...(semantic === null
-      ? {}
-      : {
-          intendedUse: {
-            role: semantic.role,
-            workerEligible: roleIsWorker(semantic.role),
-            evidenceStatus: effect.evidence,
-            routingEffect: effect.effect,
-            poolExclusionReason: effect.reason,
-            source: semantic.provenance.source,
-            ...(semantic.provenance.verifiedAt === undefined
-              ? {}
-              : { verifiedAt: semantic.provenance.verifiedAt }),
-            reviewed: semantic.provenance.reviewed,
-          },
-        }),
+    ...intendedUseFor(semantic, effect, standing),
     capabilities,
     efficiency: {},
     semanticDescription: options.semanticDescription ?? describeFromCatalogue(model),
     evidence: { evalSampleCount: 0 },
+  };
+}
+
+/**
+ * What the profile says about what this model is for, and whether it belongs.
+ *
+ * Two sources and a rule about which wins. Curation carries the role and the
+ * provenance — what a person established about the model. The modality carries
+ * the standing, and it carries it for every model rather than only the written-up
+ * ones, which is the half that was missing.
+ *
+ * When the modality excludes, the effect is `hard_exclude` and the evidence is
+ * `provider_documented`: a catalogue publishing a dedicated endpoint is the
+ * provider saying what the thing is, not somebody's opinion of it. An
+ * invocation that refused outranks even that.
+ */
+function intendedUseFor(
+  semantic: ReturnType<typeof semanticProfileFor>["profile"],
+  effect: ReturnType<typeof poolEffectFor>,
+  standing: ReturnType<typeof poolEligibility>,
+): Pick<ModelProfile, "intendedUse"> | Record<string, never> {
+  const excludedByWhatItIs = standing.standing === "excluded" && standing.basis !== "curation";
+  if (semantic === null && !excludedByWhatItIs) return {};
+
+  const role = semantic?.role ?? "unknown";
+  return {
+    intendedUse: {
+      role,
+      workerEligible: roleIsWorker(role),
+      evidenceStatus: excludedByWhatItIs
+        ? standing.basis === "invocation"
+          ? "invocation_verified"
+          : "provider_documented"
+        : effect.evidence,
+      routingEffect: excludedByWhatItIs ? "hard_exclude" : effect.effect,
+      poolExclusionReason: excludedByWhatItIs ? standing.reason : effect.reason,
+      ...(semantic === null
+        ? { source: "catalog_modality", reviewed: false }
+        : {
+            source: semantic.provenance.source,
+            reviewed: semantic.provenance.reviewed,
+            ...(semantic.provenance.verifiedAt === undefined
+              ? {}
+              : { verifiedAt: semantic.provenance.verifiedAt }),
+          }),
+    },
   };
 }
 
@@ -309,6 +366,13 @@ export function buildRegistry(
      * candidate — what must not happen is unknown being read as yes.
      */
     converses?: ReadonlyMap<string, boolean>;
+    /**
+     * What the catalogue publishes per model.
+     *
+     * Absent entries are unlisted rather than permitted — the decision is made
+     * once, in `poolEligibility`, for curated and uncurated models alike.
+     */
+    modality?: ReadonlyMap<string, Modality>;
   } = {},
 ): ModelProfile[] {
   const unavailable = new Set(options.unavailable ?? []);
@@ -326,6 +390,9 @@ export function buildRegistry(
       ...(options.pool === undefined ? {} : { pool: options.pool }),
       ...(options.converses?.has(model.id) === true
         ? { converses: options.converses.get(model.id)! }
+        : {}),
+      ...(options.modality?.has(model.id) === true
+        ? { modality: options.modality.get(model.id)! }
         : {}),
     });
     for (const summary of byModel.get(model.id) ?? []) {

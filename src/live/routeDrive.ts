@@ -2,7 +2,7 @@ import { mkdtemp, rm, readdir, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHasaProvider } from "../provider/hasa/createProvider.ts";
-import { HasaCatalog, canConverse } from "../provider/hasa/hasaCatalog.ts";
+import { HasaCatalog, canConverse, type Modality } from "../provider/hasa/hasaCatalog.ts";
 import { createMediaTransport } from "../provider/hasa/hasaMediaTransport.ts";
 import { conversabilityFor, fingerprint } from "../router/conversability.ts";
 import { createModelFor } from "../agent/hasaModel.ts";
@@ -310,7 +310,12 @@ const catalog = new HasaCatalog(
   createMediaTransport({ origin, apiKey: process.env["HASA_API_KEY"] ?? "" }),
 );
 const converses = new Map<string, boolean>();
+// The modality itself, not just the boolean it implies. `canConverse` answers
+// whether the endpoint takes a conversation; pool membership is a different
+// question and needs the modality to answer it — see `poolEligibility.ts`.
+const modality = new Map<string, Modality>();
 for (const entry of await catalog.all()) {
+  modality.set(entry.id, entry.modality);
   if (!canConverse(entry.modality)) converses.set(entry.id, false);
   else if (entry.callable === false) converses.set(entry.id, false);
 }
@@ -335,13 +340,13 @@ const evidence = await loadEvidence({
   baseUrl: process.env["HASA_BASE_URL"] ?? "",
   now: Date.now(),
 });
-const registry = buildRegistry(listing.models, evidence.summaries, { converses });
+const registry = buildRegistry(listing.models, evidence.summaries, { converses, modality });
 // The observation registry exists only to report what the quarantined dataset
 // *would* have chosen. It is built separately and never handed to `routeTurn`.
 const shadowRegistry =
   evidence.quarantined.length === 0
     ? null
-    : buildRegistry(listing.models, evidence.quarantined, { converses });
+    : buildRegistry(listing.models, evidence.quarantined, { converses, modality });
 out(
   `evidence   : ${
     evidence.unusable ??
