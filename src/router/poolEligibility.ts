@@ -107,6 +107,17 @@ export interface EligibilityInput {
    * thing itself.
    */
   converses?: boolean | null;
+  /**
+   * Whether this credential may call it at all.
+   *
+   * A separate question from whether the model converses, and the T1 probe
+   * found twelve models where the answer differs: the gateway returns 403, so
+   * nothing is known about the model and everything is known about our access
+   * to it. Both keep it out of a pool and they are not the same fact — one is
+   * about the model, the other about the key, and only the second changes when
+   * somebody is granted more.
+   */
+  permitted?: boolean | null;
   pool?: WorkerPool;
 }
 
@@ -119,6 +130,14 @@ export function poolEligibility(input: EligibilityInput): PoolEligibility {
       standing: "excluded",
       basis: "invocation",
       reason: "이 모델은 chat 엔드포인트에 응답하지 않는 것으로 확인됐습니다.",
+    };
+  }
+  if (input.permitted === false) {
+    return {
+      standing: "excluded",
+      basis: "invocation",
+      reason:
+        "이 자격 증명으로는 호출할 수 없습니다. 모델에 대한 판단이 아니라 접근 권한에 대한 사실입니다.",
     };
   }
 

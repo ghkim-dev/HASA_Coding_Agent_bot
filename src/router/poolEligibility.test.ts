@@ -243,3 +243,43 @@ describe("curated profiles are kept and still describe roles", () => {
     assert.equal(uncurated.basis, "modality", "excluded by what it is, not by what was written");
   });
 });
+
+describe("permission is a fact about the key, not about the model", () => {
+  test("a model this credential may not call is out of the pool", () => {
+    // T1 found twelve of these, one of them `chat` modality. Without this it
+    // was eligible: the catalogue says chat, nothing said we cannot call it.
+    const result = poolEligibility({ modelId: "qwen3-32b", modality: "chat", permitted: false });
+    assert.equal(result.standing, "excluded");
+    assert.equal(result.basis, "invocation");
+    assert.match(result.reason, /접근 권한/);
+    assert.equal(inPool({ modelId: "qwen3-32b", modality: "chat", permitted: false }), false);
+  });
+
+  test("the refusal says it is about access rather than the model", () => {
+    const denied = poolEligibility({ modelId: "m", modality: "chat", permitted: false });
+    const cannotChat = poolEligibility({ modelId: "m", modality: "chat", converses: false });
+    assert.notEqual(denied.reason, cannotChat.reason, "two different facts, two different reasons");
+  });
+
+  test("permission unknown is not permission denied", () => {
+    assert.equal(poolEligibility({ modelId: "m", modality: "chat" }).standing, "eligible");
+    assert.equal(
+      poolEligibility({ modelId: "m", modality: "chat", permitted: true }).standing,
+      "eligible",
+    );
+  });
+
+  test("a model that answers chat and is vision is still unknown", () => {
+    // The live probe settles this one: `paddleocr-vl` and `nemotron-omni-30b`
+    // both answered a chat request with 200, so answering is not what tells an
+    // OCR model from a multimodal coder. The measurement available does not
+    // decide it, so it stays undecided rather than being guessed either way.
+    const answered = poolEligibility({
+      modelId: "nemotron-omni-30b",
+      modality: "vision",
+      converses: true,
+      permitted: true,
+    });
+    assert.equal(answered.standing, "unknown");
+  });
+});
