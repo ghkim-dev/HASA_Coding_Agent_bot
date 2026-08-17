@@ -1,7 +1,12 @@
 import type { LlmProvider } from "../provider/types.ts";
 import type { Proposer } from "./preview.ts";
 import { parseProposals } from "./proposalParse.ts";
-import { permittedModels, type PermissionEvidence } from "./modelPermission.ts";
+import {
+  denyObserved,
+  isForbiddenDenial,
+  permittedModels,
+  type PermissionEvidence,
+} from "./modelPermission.ts";
 
 /**
  * Asks a real model for requirement candidates, and lets it decide nothing.
@@ -58,6 +63,22 @@ export interface ProposerOptions {
    * established, which selects nothing — see `modelPermission`.
    */
   permission: PermissionEvidence | null;
+  /**
+   * The clock, from the caller.
+   *
+   * Required rather than defaulted to `Date.now`, because permission evidence
+   * expires and a layer that reads its own clock cannot be tested for what it
+   * does at the boundary. The composition root passes `() => Date.now()`; a
+   * test passes the moment it wants to be.
+   */
+  now: () => number;
+  /**
+   * Told when a model this record called `permitted` answered 403.
+   *
+   * The corrected record is handed over so whoever owns the file can write it
+   * back or re-probe. Optional: the proposer stops using the model either way.
+   */
+  onDenied?: (denial: { modelId: string; permission: PermissionEvidence | null }) => void;
 }
 
 /**
@@ -91,7 +112,7 @@ export async function chooseProposerModel(options: ProposerOptions): Promise<str
 /** Models this credential may call, catalogue order. Exported for its own test. */
 export async function rankByPermission(options: ProposerOptions): Promise<string[]> {
   const listing = await options.provider.listModels();
-  return permittedModels(options.permission, listing.models.map((m) => m.id));
+  return permittedModels(options.permission, listing.models.map((m) => m.id), options.now());
 }
 
 /**
@@ -106,7 +127,22 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
     throw new Error("이 자격 증명으로 호출할 수 있는 대화형 모델이 없습니다.");
   }
 
+  /**
+   * Set when the gateway refuses this model, and never cleared.
+   *
+   * The record said `permitted` and the gateway says otherwise; the gateway is
+   * the one holding the answer. Calling again on the strength of the file is
+   * how the burst of 403s in a provider's transaction log happened, so the
+   * proposer stops rather than retrying against a record that has been proven
+   * wrong.
+   */
+  let revoked: string | null = null;
+  let permission = options.permission;
+
   return async ({ turnId, text, signal }) => {
+    if (revoked !== null) {
+      throw new Error(`${revoked} 은(는) 403 을 받았습니다. 권한을 다시 측정할 때까지 호출하지 않습니다.`);
+    }
     let calls = 0;
     let last = "";
     for (let attempt = 1; attempt <= MAX_CALLS; attempt += 1) {
@@ -115,18 +151,27 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
       // Normalized in, normalized out. `response.text` is the provider's job;
       // reading `choices[0].message.content` here was a second, weaker
       // unwrapping of a wire format this layer must not know exists.
-      const response = await options.provider.chat(
-        {
-          modelId,
-          messages: [
-            { role: "system", content: SYSTEM },
-            { role: "user", content: attempt === 1 ? text : `${text}\n\n(JSON 배열만 출력하십시오.)` },
-          ],
-          temperature: 0,
-          maxOutputTokens: 800,
-        },
-        { timeoutMs: TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) },
-      );
+      let response;
+      try {
+        response = await options.provider.chat(
+          {
+            modelId,
+            messages: [
+              { role: "system", content: SYSTEM },
+              { role: "user", content: attempt === 1 ? text : `${text}\n\n(JSON 배열만 출력하십시오.)` },
+            ],
+            temperature: 0,
+            maxOutputTokens: 800,
+          },
+          { timeoutMs: TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) },
+        );
+      } catch (err) {
+        if (!isForbiddenDenial(err)) throw err;
+        revoked = modelId;
+        permission = denyObserved(permission, modelId, options.now());
+        options.onDenied?.({ modelId, permission });
+        throw err;
+      }
       last = response.text;
       const parse = parseProposals(last, turnId);
       if (parse.proposals.length > 0) return { proposals: parse.proposals, modelId, calls, parse };

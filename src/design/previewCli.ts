@@ -103,6 +103,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
           ...(baseUrl.length === 0 ? {} : { baseUrl }),
         });
         const keyFingerprint = fingerprint(apiKey);
+        // `.arena/capability-matrix.json` is the CLI's store and stays the
+        // CLI's. The VS Code extension keeps its probe results in extension
+        // storage under a different layout, so the path belongs to whoever
+        // owns the disk — the design layer is handed `PermissionEvidence` and
+        // never learns where it came from.
         const matrix = await readCapabilityMatrix({
           path: ".arena/capability-matrix.json",
           keyFingerprint,
@@ -111,7 +116,13 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
         propose = await createModelProposer({
           provider,
-          permission: evidenceFromMatrix({ matrix, keyFingerprint, baseUrl: provider.baseUrl }),
+          now: () => Date.now(),
+          permission: evidenceFromMatrix({
+            matrix,
+            keyFingerprint,
+            baseUrl: provider.baseUrl,
+            now: Date.now(),
+          }),
         });
       } catch (err) {
         setupError = err instanceof Error ? err.message : String(err);
