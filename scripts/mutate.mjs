@@ -50,12 +50,14 @@ const FILES = [
   "src/design/previewMetrics.ts",
   "src/design/previewReport.ts",
   "src/design/scenarioShadow.ts",
+  "src/cli/permissionEvidenceFile.ts",
   // Not design files, and here for the same reason the others are: the stall
   // detector's blindness to a tool that *throws* and the prohibition forms the
   // runtime could not read were both real regressions, and a fix nothing mutates
   // is a fix nobody has checked is load-bearing.
   "src/agent/loop.ts",
   "src/agent/statedProhibitions.ts",
+  "src/agent/harnessShadow.ts",
 ];
 
 /**
@@ -76,7 +78,12 @@ const SUITES = {
   gold: ["src/design/goldRequirements.test.ts"],
   rules: ["src/design/designRules.test.ts"],
   shadow: ["src/design/scenarioShadow.test.ts"],
+  holdout: ["src/design/holdoutCases.test.ts"],
+  executable: ["src/design/executability.test.ts", "src/design/goldRequirements.test.ts"],
+  store: ["src/design/permissionStore.test.ts", "src/design/modelPermission.test.ts"],
+  conflict: ["src/design/goldRequirements.test.ts", "src/design/holdoutCases.test.ts"],
   progress: ["src/agent/progress.test.ts"],
+  observer: ["src/agent/harnessShadow.test.ts"],
 };
 
 const MUTATIONS = [
@@ -207,21 +214,23 @@ const MUTATIONS = [
     `    if (token.grammar) {
       continue;
     }`, "gold"],
-  ["M40", "주제 조사가 붙은 앞말도 목적어로", "src/design/functionalExtract.ts",
-    "    if (kept.length > 0 && /[은는]$/u.test(token.text)) break;", "", "gold"],
   ["M41", "때를 나타내는 말을 목적어로", "src/design/functionalExtract.ts",
-    "|오늘|어제|내일)$/", ")$/", "extract"],
+    "|오늘|어제|내일|왜", "|왜", "extract"],
   ["M42", "금지 축약형(하진) 을 다시 놓침", "src/agent/statedProhibitions.ts",
     'const STEM = "하[지진]";', 'const STEM = "하지";', "gold"],
   ["M43", "'하면 안 돼' 금지를 다시 놓침", "src/agent/statedProhibitions.ts",
     'const MYEON_AN = "(?:면|서는)\\\\s*안\\\\s*(?:돼|되|된|됩)(?![^.!。\\\\n]*[?？])";',
     'const MYEON_AN = "(?!)";', "gold"],
+  // Anchored on the alternation rather than on the whole lookahead: a search
+  // string carrying `\s` has to survive being written, read and compared, and one
+  // lost backslash turns this into a mutation that silently never applies. The
+  // negation's alternatives are unique in this file and contain no escapes, and
+  // emptying them makes the lookahead vacuous — which is exactly the old bug.
   ["M44", "'하면 안 돼' 를 다시 조건으로", "src/design/semanticAlignment.ts",
-    "  /라면|이면(?!서)|하면(?!서)(?!\\s*안\\s*(?:돼|되|된|됩))|경우|한해|일\\s*때|if\\b|when\\b|unless\\b/;",
-    "  /라면|이면(?!서)|하면(?!서)|경우|한해|일\\s*때|if\\b|when\\b|unless\\b/;", "gold"],
+    "(?:돼|되|된|됩)", "(?:x)", "gold"],
   ["M45", "질문 우선순위를 감사 순서로", "src/design/previewReport.ts",
     "    .sort((a, b) => askRank(a.finding.code) - askRank(b.finding.code) || a.index - b.index);",
-    "    .sort((a, b) => a.index - b.index);", "gold"],
+    "    .sort((a, b) => a.index - b.index);", "executable"],
   ["M46", "inspect 설계 규칙 제거", "src/design/scenarioBlueprint.ts",
     '  if (spec.act === "inspect") {', "  if (false) {", "rules"],
   ["M47", "preserve 설계 규칙 제거", "src/design/scenarioBlueprint.ts",
@@ -249,13 +258,84 @@ const MUTATIONS = [
     "shadow"],
   ["M55", "금지된 도구를 첫 행동으로 제안", "src/design/scenarioShadow.ts",
     "          .filter((tool) => !forbiddenTools.has(tool))", "", "shadow"],
-  ["M56", "미해결 중복 제거 제거", "src/design/scenarioShadow.ts",
-    "      unresolved: dedupe(unresolved),", "      unresolved,", "shadow"],
+  // `about` must not go back to counting something other than the array. Written
+  // as a second, unfolded list so the sentence and the data disagree again.
+  ["M56", "미해결 개수를 중복 제거 전 값으로", "src/design/scenarioShadow.ts",
+    "        `설계 규칙 ${sorted(rules).length}개, 미해결 ${unresolved.length}건.`,",
+    "        `설계 규칙 ${sorted(rules).length}개, 미해결 ${unresolved.length + 1}건.`,",
+    "shadow"],
+
+  // --- PHASE A~G: 실행 판정·충돌·403·질문·Shadow·Holdout ----------------------
+  ["M57", "사용자 요구사항 0개인데 실행 허용", "src/design/coverageAudit.ts",
+    '  if (!live.some((spec) => spec.status !== "system_added")) {', "  if (false) {", "executable"],
+  ["M58", "system_added 만으로 mayExecute 허용", "src/design/preview.ts",
+    "    closure.audit.ok && ownRequirements.some((spec) => executionReadiness(spec) === \"ready\");",
+    "    closure.audit.ok;", "executable"],
+  ["M59", "막힌 계획에도 도구 실행 계획을 남김", "src/design/preview.ts",
+    "  const plannedTools = mayExecute", "  const plannedTools = closure.audit.ok || true", "executable"],
+  ["M60", "rename 과 preserve 충돌 무시", "src/design/requirementSpec.ts",
+    "      if (actsCollide(a, b)) {", "      if (false) {", "conflict"],
+  ["M61", "대상이 달라도 충돌로 오판", "src/design/requirementSpec.ts",
+    "  return sameTargetPhrase(a.target, b.target);", "  return true;", "conflict"],
+  ["M62", "머리 명사가 달라도 같은 대상으로 취급", "src/design/requirementSpec.ts",
+    "  if (a.head.length === 0 || a.head !== b.head) return false;", "  if (a.head.length === 0) return false;",
+    "conflict"],
+  ["M63", "403 을 저장소에 기록하지 않음", "src/design/modelProposer.ts",
+    "        if (options.store !== undefined && permission !== null) {", "        if (false) {", "store"],
+  ["M64", "403 기록을 다음 프로세스가 읽지 않음", "src/cli/permissionEvidenceFile.ts",
+    "      for (const fact of mine.models) merged.set(fact.modelId, fact);", "", "store"],
+  ["M65", "403 후 다른 모델로 자동 우회", "src/design/modelProposer.ts",
+    "        revoked = modelId;", "        revoked = null;", "store"],
+  ["M66", "server_forbidden 을 만료로 되돌림", "src/design/modelPermission.ts",
+    '  if (found.chat === "denied" && !("problem" in age && age.problem !== "expired")) {',
+    '  if (found.chat === "denied" && !("problem" in age)) {', "store"],
+  // Hiding the finding behind a rule id is M14 and M15; this is the other
+  // direction — the five act rules removed at once, so every one of those
+  // requirements falls back to `generic` and the audit says so again.
+  ["M67", "act 규칙 다섯 개를 한꺼번에 제거", "src/design/scenarioBlueprint.ts",
+    "  if (actRule !== null) return actRule;", "  if (false) return actRule ?? [];", "rules"],
+  ["M68", "질문을 전부 제거해 precision 을 만듦", "src/design/previewReport.ts",
+    "  for (const { finding } of askable) {", "  for (const { finding } of []) {", "executable"],
+  ["M69", "절 종결 어미를 마지막 음절로 판정", "src/design/functionalExtract.ts",
+    "const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되이]며|는지|은지|을지|인지)$/u;",
+    "const CLAUSE_ENDING = /(?:면|서|며|지)$/u;", "holdout"],
+  ["M70", "관형형 수식어를 다시 버림", "src/design/functionalExtract.ts",
+    '    const bare = out.replace(/[은는만이가]$/u, "");',
+    '    const bare = out;', "conflict"],
+  ["M71", "'가능하면' 을 다시 조건으로", "src/design/semanticAlignment.ts",
+    "/(?<!가능)(?:", "/(?:", "holdout"],
+
+  // --- 제품 경로에 붙은 Shadow Observer --------------------------------------
+  // Reaching back into the production outcome is the one thing this observer must
+  // never do, so the mutation does exactly that: writes the loop's stop reason
+  // from the shadow's own verdict.
+  ["M72", "Shadow 결과를 Production 결정에 반영", "src/agent/harnessShadow.ts",
+    "    const mapped = shadowScenarioFrom({ id: `shadow-${input.turnId}`, preview });",
+    '    input.production.reason = preview.mayExecute ? input.production.reason : "no_progress";\n' +
+      "    const mapped = shadowScenarioFrom({ id: `shadow-${input.turnId}`, preview });",
+    "observer"],
+  ["M73", "Shadow 실패를 사용자 턴으로 전파", "src/agent/harnessShadow.ts",
+    "    return base(empty, [], err instanceof Error",
+    "    if (err !== null) throw err;\n    return base(empty, [], err instanceof Error",
+    "observer"],
+  ["M74", "Production 과의 차이를 기록하지 않음", "src/agent/harnessShadow.ts",
+    '      differences.push("production_changed_files_while_design_withheld_execution");', "",
+    "observer"],
+  ["M75", "관찰 기록에서 요구사항 출처를 제거", "src/agent/harnessShadow.ts",
+    "        requirementSources: mapped.requirementSources,", "        requirementSources: [],",
+    "observer"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
 const EXPECTED_SILENT = new Map([
   ["M17", "종료를 보장하는 것은 attempted 중복 방지이므로 pass 상한을 지워도 동작이 같다"],
+  [
+    "M58",
+    "mayExecute 의 두 번째 조건은 현재 중복이다. audit.ok 가 true 이면 NO_USER_REQUIREMENT·" +
+      "TARGET_UNRESOLVED·UNRESOLVED_CONDITION·REQUIREMENT_CONFLICT 가 모두 없다는 뜻이므로 " +
+      "ready 인 사용자 요구사항이 반드시 하나는 있다. 같은 불변식은 감사 쪽 방어선(M57)이 물어서 " +
+      "확인하며, 이 조건은 감사가 놓칠 때를 위한 두 번째 벨트로 남긴다",
+  ],
 ]);
 
 /** Thrown when a test run produced no readable verdict. Never turned into -1. */
