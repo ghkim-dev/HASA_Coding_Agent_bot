@@ -38,6 +38,7 @@ import { completedTurn, type ConversationCheckpoint } from "../../../src/agent/c
 import { reduceTask } from "../../../src/agent/taskReducer.ts";
 import { describeTask } from "../../../src/agent/taskState.ts";
 import { requirementsView, type RequirementsView } from "../../../src/agent/requirementsView.ts";
+import { progressView, type AgentProgress } from "../../../src/agent/progressView.ts";
 import { interpretRequest, describeBootstrapFailure } from "../../../src/router/bootstrap.ts";
 import { buildRegistry } from "../../../src/router/modelRegistry.ts";
 import {
@@ -1004,6 +1005,27 @@ export class AgentHost {
       session.taskContract,
       this.lastTermination,
     );
+  }
+
+  /**
+   * Where the work stands, for the panel's progress block.
+   *
+   * A fold over the same events `requirements()` reads. There is no progress
+   * record: the projection is derived on demand, so a reload and a live turn
+   * cannot disagree, and `Date.now()` is passed in rather than read inside so a
+   * replayed conversation does not look like a running one.
+   *
+   * Independent of `this.session`, deliberately. The panel used to infer "in
+   * progress" from a session existing, which is true from the moment a
+   * conversation is opened until it is closed.
+   */
+  progress(): AgentProgress | null {
+    return progressView({
+      events: this.recorded,
+      contract: reduceContract([...this.recorded]),
+      now: Date.now(),
+      taskId: this.conversationId ?? "task",
+    });
   }
 
   async send(

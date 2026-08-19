@@ -440,6 +440,7 @@ export class AgentController {
     // the file changes and the termination were never in that array to begin
     // with. The panel folds these through the same reducer it uses live.
     this.panel?.post({ type: "transcript", events: [...this.host.recordedEvents()] });
+    this.panel?.post({ type: "progress", progress: this.host.progress() });
     await this.push();
   }
 
@@ -475,8 +476,13 @@ export class AgentController {
       if (event.type === "contract" || event.type === "tool_end" || event.type === "done") {
         this.panel?.post({ type: "requirements", view: this.host.requirements() });
       }
+      // Every event, not only the three above: the progress block's whole job is
+      // to say what is happening *now*, and a phase that only moved when a tool
+      // finished would be exactly the stale badge this replaces.
+      this.panel?.post({ type: "progress", progress: this.host.progress() });
     }, attachments);
     this.panel?.post({ type: "requirements", view: this.host.requirements() });
+    this.panel?.post({ type: "progress", progress: this.host.progress() });
 
     const attachmentProblem = this.host.takeAttachmentProblem();
     if (attachmentProblem !== null) {

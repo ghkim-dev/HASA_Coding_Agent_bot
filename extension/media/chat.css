@@ -541,3 +541,103 @@ footer { position: relative; }
 }
 
 .reqIssue { color: var(--vscode-testing-iconFailed, #f85149); margin-top: 3px; }
+
+/* ---------------------------------------------------------------------------
+   How far the work got
+   ---------------------------------------------------------------------------
+   Inside the requirements card, under the list: what the user asked for and how
+   far it got are one question. Deliberately plain — a stepper, a line of text
+   and a collapsed list — because the point is that the state is *readable*, not
+   that it is decorated. Nothing here animates: a spinner that keeps moving while
+   a turn is dead is the defect this replaces.
+*/
+.progress {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  font-size: 0.92em;
+}
+
+.progSteps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-bottom: 6px;
+}
+
+.progStep {
+  padding: 1px 6px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  opacity: 0.55;
+}
+
+/* Passed. Stated with a tick rather than a colour alone. */
+.progStep.done {
+  opacity: 1;
+  border-color: var(--vscode-charts-green, #4caf50);
+}
+
+.progStep.done::before {
+  content: "\2713 ";
+}
+
+/* Where the work is now. */
+.progStep.now {
+  opacity: 1;
+  border-color: var(--vscode-focusBorder, #007acc);
+  background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.18));
+  font-weight: 600;
+}
+
+.progNow {
+  margin-bottom: 4px;
+}
+
+.progNow.running {
+  color: var(--vscode-foreground);
+}
+
+/* A finished turn reads as finished. */
+.progNow.settled {
+  color: var(--vscode-descriptionForeground);
+}
+
+.progMeta {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.92em;
+}
+
+.progToggle {
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  font: inherit;
+}
+
+.progList {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.progItem {
+  margin: 2px 0;
+}
+
+/* The three action outcomes that must never look alike. */
+.progItem.action.failed {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.progItem.action.denied,
+.progItem.action.deferred {
+  color: var(--vscode-charts-yellow, #cca700);
+}
+
+.progItem.terminal {
+  color: var(--vscode-foreground);
+}

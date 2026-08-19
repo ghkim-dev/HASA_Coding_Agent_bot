@@ -58,6 +58,7 @@ const FILES = [
   "src/agent/loop.ts",
   "src/agent/statedProhibitions.ts",
   "src/agent/harnessShadow.ts",
+  "src/agent/progressView.ts",
 ];
 
 /**
@@ -84,6 +85,7 @@ const SUITES = {
   conflict: ["src/design/goldRequirements.test.ts", "src/design/holdoutCases.test.ts"],
   progress: ["src/agent/progress.test.ts"],
   observer: ["src/agent/harnessShadow.test.ts"],
+  progressui: ["src/agent/progressView.test.ts"],
 };
 
 const MUTATIONS = [
@@ -324,11 +326,49 @@ const MUTATIONS = [
   ["M75", "관찰 기록에서 요구사항 출처를 제거", "src/agent/harnessShadow.ts",
     "        requirementSources: mapped.requirementSources,", "        requirementSources: [],",
     "observer"],
+
+  // --- UX1: 관측 가능한 진행 상태 ---------------------------------------------
+  // The reported screen, as a mutation: a turn that ended reads as one still
+  // running. This is the defect `progressView` was written for.
+  ["M76", "끝난 turn 을 계속 진행 중으로", "src/agent/progressView.ts",
+    "  if (input.terminalReason !== null) {", "  if (false) {", "progressui"],
+  ["M77", "session 존재만으로 진행 중 표시", "src/agent/progressView.ts",
+    "        return input.terminalReason === \"finished\" ? \"partial\" : \"failed\";",
+    "        return \"executing\";", "progressui"],
+  ["M78", "provider 오류 후에도 진행 중 유지", "src/agent/progressView.ts",
+    '        return "failed";', '        return "executing";', "progressui"],
+  ["M79", "같은 event 를 두 번 렌더", "src/agent/progressView.ts",
+    "    if (seen.has(event.id)) continue;", "    if (false) continue;", "progressui"],
+  ["M80", "보류를 실행 중으로 표시", "src/agent/progressView.ts",
+    '      return "DEFERRED";', '      return "EXECUTING";', "progressui"],
+  ["M81", "정책 거부를 실행 실패로", "src/agent/progressView.ts",
+    '      return "DENIED";', '      return "FAILED";', "progressui"],
+  ["M82", "replay 의 과거 활동을 현재 활동으로", "src/agent/progressView.ts",
+    "  const lastActivityAt = turn.events.reduce((latest, e) => Math.max(latest, e.at), startedAt);",
+    "  const lastActivityAt = input.now;", "progressui"],
+  ["M83", "형제 branch 의 action 까지 수집", "src/agent/progressView.ts",
+    "  const actions = actionsFrom(turn.events);", "  const actions = actionsFrom(input.events);",
+    "progressui"],
+  ["M84", "계획 없음의 이유를 뭉갬", "src/agent/progressView.ts",
+    '  if (hadProtocolProblem(input.turnEvents)) return "protocol_error";', "", "progressui"],
+  ["M85", "내부 protocol 이름을 그대로 노출", "src/agent/progressView.ts",
+    '      return { kind: "interpreted", text: "요청 분석 완료" };',
+    '      return { kind: "interpreted", text: `record_request: ${event.type}` };', "progressui"],
+  ["M87", "시간 경과만으로 turn 을 종료 처리", "src/agent/progressView.ts",
+    "  if (input.idleMs > STALL_DISPLAY_MS) return \"stalled\";", "  if (input.idleMs > 0) return \"failed\";",
+    "progressui"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
 const EXPECTED_SILENT = new Map([
   ["M17", "종료를 보장하는 것은 attempted 중복 방지이므로 pass 상한을 지워도 동작이 같다"],
+  [
+    "M86",
+    "verified 집계의 evidence 조건은 현재 이벤트 모델에서 위반될 수 없다. reduceTask 는 도구 관측이 " +
+      "요구사항을 settle 할 때만 passed 로 올리므로 evidence 가 빈 passed 는 만들어지지 않는다. " +
+      "TaskState 를 직접 주입할 공개 경로가 없어 단위로도 재현할 수 없어, 미래의 reducer 변경에 대비한 " +
+      "방어 조건으로 남긴다 (M86 은 제거됨)",
+  ],
   [
     "M58",
     "mayExecute 의 두 번째 조건은 현재 중복이다. audit.ok 가 true 이면 NO_USER_REQUIREMENT·" +

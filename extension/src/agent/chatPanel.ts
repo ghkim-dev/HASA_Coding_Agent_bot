@@ -3,6 +3,7 @@ import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { MODE_DEFINITIONS } from "../../../src/agent/modes.ts";
 import type { SessionEvent } from "../../../src/agent/sessionEvents.ts";
 import type { RequirementsView } from "../../../src/agent/requirementsView.ts";
+import type { AgentProgress } from "../../../src/agent/progressView.ts";
 
 /**
  * What the panel says about the connection.
@@ -110,6 +111,7 @@ export type HostMessage =
    * would be a second answer. Null clears the section.
    */
   | { type: "requirements"; view: RequirementsView | null }
+  | { type: "progress"; progress: AgentProgress | null }
   /**
    * A file the agent generated, ready to show.
    *
@@ -299,6 +301,18 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <div id="reqGoal" class="reqGoal"></div>
       <ul id="reqList" class="reqList"></ul>
       <div id="reqExtras"></div>
+      <!-- Progress lives inside the requirements card on purpose: what the user
+           asked for and how far it got are one question, and a second card would
+           put two answers to it on screen. -->
+      <div id="progress" class="progress hidden">
+        <div id="progSteps" class="progSteps"></div>
+        <div id="progNow" class="progNow"></div>
+        <div id="progMeta" class="progMeta"></div>
+        <button id="progToggle" class="progToggle" type="button" aria-expanded="false">
+          <span id="progCaret" class="caret">▸</span><span>최근 활동</span>
+        </button>
+        <ul id="progList" class="progList hidden"></ul>
+      </div>
     </div>
   </section>
 

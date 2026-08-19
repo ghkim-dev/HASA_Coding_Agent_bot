@@ -125,6 +125,13 @@ const el = {
   reqGoal: /** @type {HTMLElement} */ (document.getElementById("reqGoal")),
   reqList: /** @type {HTMLElement} */ (document.getElementById("reqList")),
   reqExtras: /** @type {HTMLElement} */ (document.getElementById("reqExtras")),
+  progress: /** @type {HTMLElement} */ (document.getElementById("progress")),
+  progSteps: /** @type {HTMLElement} */ (document.getElementById("progSteps")),
+  progNow: /** @type {HTMLElement} */ (document.getElementById("progNow")),
+  progMeta: /** @type {HTMLElement} */ (document.getElementById("progMeta")),
+  progToggle: /** @type {HTMLButtonElement} */ (document.getElementById("progToggle")),
+  progCaret: /** @type {HTMLElement} */ (document.getElementById("progCaret")),
+  progList: /** @type {HTMLElement} */ (document.getElementById("progList")),
   history: /** @type {HTMLElement} */ (document.getElementById("history")),
   historyList: /** @type {HTMLElement} */ (document.getElementById("historyList")),
   historyClose: /** @type {HTMLButtonElement} */ (document.getElementById("historyClose")),
@@ -782,6 +789,168 @@ function chip(text, className) {
   return node;
 }
 
+// ---------------------------------------------------------------------------
+// How far the work got
+// ---------------------------------------------------------------------------
+
+/**
+ * The phases a user is shown, in order, with the label each carries.
+ *
+ * Eight steps rather than the projection's twelve: the four endings share the
+ * last slot, because "완료" and "중단됨" are the same *position* in the sequence
+ * and differ in outcome, which the label says. Nothing here decides anything —
+ * `progressView.ts` owns the phase and this file owns where it sits.
+ */
+const PHASE_STEPS = [
+  { key: "interpreting", label: "요청 분석" },
+  { key: "contract_ready", label: "요구사항 확인" },
+  { key: "selecting_worker", label: "모델 선택" },
+  { key: "worker_selected", label: "모델 응답" },
+  { key: "planning", label: "계획" },
+  { key: "executing", label: "실행" },
+  { key: "verifying", label: "검증" },
+  { key: "done", label: "마무리" },
+];
+
+/** Which slot a phase sits in. The endings and `stalled` map to the last one. */
+const PHASE_SLOT = {
+  interpreting: 0,
+  contract_ready: 1,
+  selecting_worker: 2,
+  worker_selected: 3,
+  planning: 4,
+  executing: 5,
+  verifying: 6,
+  completed: 7,
+  partial: 7,
+  blocked: 7,
+  failed: 7,
+  stalled: 7,
+};
+
+/** Named apart from the reasoning-phase labels above, which are a different set. */
+const PROGRESS_PHASE_LABEL = {
+  interpreting: "요청 분석 중",
+  contract_ready: "요청 분석 완료",
+  selecting_worker: "모델 선택 중",
+  worker_selected: "모델 응답 대기 중",
+  planning: "계획 수립 중",
+  executing: "작업 실행 중",
+  verifying: "검증 중",
+  completed: "완료",
+  partial: "일부만 완료",
+  blocked: "막힘",
+  failed: "중단됨",
+  stalled: "응답 없음",
+};
+
+const PLAN_ABSENCE_LABEL = {
+  waiting_for_worker: "아직 모델을 선택하는 중입니다",
+  worker_streaming: "모델 응답을 기다리는 중입니다",
+  direct_execution_strategy: "계획 없이 바로 실행하고 있습니다",
+  protocol_error: "모델이 보낸 도구 호출을 읽지 못했습니다",
+  worker_error: "모델 또는 게이트웨이 오류로 계획을 받지 못했습니다",
+  stalled: "응답이 멈춘 상태입니다",
+};
+
+const ACTION_LABEL = {
+  PROPOSED: "제안됨",
+  DEFERRED: "승인 대기",
+  DENIED: "거부됨",
+  EXECUTING: "실행 중",
+  SUCCEEDED: "완료",
+  FAILED: "실패",
+};
+
+/** Phases where nothing is running any more. No spinner, no "진행 중". */
+const TERMINAL_PHASES = new Set(["completed", "partial", "blocked", "failed"]);
+
+/** Kept across renders so a user who opened the activity list keeps it open. */
+let progCollapsed = true;
+
+el.progToggle?.addEventListener("click", () => {
+  progCollapsed = !progCollapsed;
+  el.progList.classList.toggle("hidden", progCollapsed);
+  el.progCaret.textContent = progCollapsed ? "▸" : "▾";
+  el.progToggle.setAttribute("aria-expanded", progCollapsed ? "false" : "true");
+});
+
+function seconds(ms) {
+  if (ms < 1000) return "0초";
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}초`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return s === 0 ? `${m}분` : `${m}분 ${s}초`;
+}
+
+/**
+ * Draws where the work got to.
+ *
+ * Every value comes from `progressView` and none is computed here — a second
+ * opinion about the phase would be a second answer to a question that already
+ * has one. What this file decides is only how it looks.
+ */
+function renderProgress(progress) {
+  if (progress === null || progress === undefined) {
+    el.progress.classList.add("hidden");
+    return;
+  }
+  el.progress.classList.remove("hidden");
+
+  const slot = PHASE_SLOT[progress.phase] ?? 0;
+  const terminal = TERMINAL_PHASES.has(progress.phase);
+
+  el.progSteps.textContent = "";
+  PHASE_STEPS.forEach((step, index) => {
+    const node = document.createElement("span");
+    const state = index < slot || (terminal && index === slot) ? "done" : index === slot ? "now" : "todo";
+    node.className = `progStep ${state}`;
+    node.textContent = step.label;
+    el.progSteps.appendChild(node);
+  });
+
+  // What is happening, and why there is no plan when there is none. An empty
+  // "계획이 아직 없습니다" was the whole complaint.
+  const label = PROGRESS_PHASE_LABEL[progress.phase] ?? progress.phase;
+  const because =
+    progress.planAbsence === null || progress.planAbsence === undefined
+      ? ""
+      : ` · ${PLAN_ABSENCE_LABEL[progress.planAbsence] ?? progress.planAbsence}`;
+  el.progNow.textContent = `${label}${because}`;
+  el.progNow.className = `progNow ${terminal ? "settled" : "running"}`;
+
+  // Requirements and evidence, with their own denominators. No percentage: the
+  // counts are the claim, and a percentage would invent one.
+  const parts = [
+    `요구사항 ${progress.completedRequirementCount}/${progress.totalRequirementCount} 확인됨`,
+    `증거로 검증 ${progress.verifiedRequirementCount}/${progress.totalRequirementCount}`,
+  ];
+  if (progress.workerModelId) parts.push(`모델 ${progress.workerModelId}`);
+  parts.push(terminal ? `소요 ${seconds(progress.elapsedMs)}` : `경과 ${seconds(progress.elapsedMs)}`);
+  // Only said while something is still expected to happen, and only from real
+  // event times: `lastActivityAt` moves when an event does and never otherwise.
+  if (!terminal) parts.push(`최근 활동 ${seconds(progress.idleMs)} 전`);
+  el.progMeta.textContent = parts.join(" · ");
+
+  // The last ten, newest first, one line per event. Older ones are behind the
+  // toggle rather than dropped.
+  el.progList.textContent = "";
+  const recent = progress.timeline.slice(-10).reverse();
+  for (const entry of recent) {
+    const row = document.createElement("li");
+    row.className = `progItem ${entry.kind}`;
+    row.textContent = entry.text;
+    el.progList.appendChild(row);
+  }
+  for (const action of progress.actions.slice(-5).reverse()) {
+    const row = document.createElement("li");
+    row.className = `progItem action ${action.state.toLowerCase()}`;
+    row.textContent = `${ACTION_LABEL[action.state] ?? action.state} — ${action.summary}`;
+    el.progList.appendChild(row);
+  }
+  el.progToggle.classList.toggle("hidden", recent.length === 0);
+}
+
 /**
  * Redraws the panel from the runtime's own view.
  *
@@ -1045,6 +1214,7 @@ window.addEventListener("message", (e) => {
   // nothing was going to catch that until it was named.
   const message = /** @type {HostMessage} */ (e.data);
   if (message.type === "requirements") renderRequirements(message.view);
+  else if (message.type === "progress") renderProgress(message.progress);
   else if (message.type === "state") renderState(message.state);
   else if (message.type === "event") renderEvent(message.event);
   else if (message.type === "notice") notice(message.level, message.text);
