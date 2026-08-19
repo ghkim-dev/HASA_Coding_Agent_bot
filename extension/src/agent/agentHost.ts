@@ -50,6 +50,13 @@ import {
   type WorkerDecision,
 } from "../../../src/router/routing.ts";
 import { emptyContract, reduceContract } from "../../../src/agent/turnContract.ts";
+import {
+  barrenTurnChallenge,
+  bootstrapHistoryFrom,
+  guardRelation,
+  isStatusQuestion,
+  statusAnswerFrom,
+} from "../../../src/agent/continuity.ts";
 import { projectTaskSemanticProfile } from "../../../src/router/semanticProfile.ts";
 import { ShadowRunner } from "../../../src/router/shadowRunner.ts";
 import type { SemanticShadowEvaluation } from "../../../src/router/shadow.ts";
@@ -815,6 +822,21 @@ export class AgentHost {
           ? null
           : describeTask(task);
       },
+      // The same record, at the other end of the turn: what is already settled
+      // and what the last turns actually did, in front of the model *before*
+      // it plans. A worker that can see step 2 passed does not restart at
+      // step 1, and one told the last two turns ran nothing is told to act or
+      // say why — see `barrenTurnChallenge`.
+      turnOpening: () => {
+        const task = reduceTask(this.recorded, this.conversationId ?? "task");
+        const parts: string[] = [];
+        if (task !== null && task.requirements.length + task.issues.length > 0) {
+          parts.push(describeTask(task));
+        }
+        const challenge = barrenTurnChallenge(this.recorded);
+        if (challenge !== null) parts.push(challenge);
+        return parts.length === 0 ? null : parts.join("\n\n");
+      },
       // From the same projection, and asked a different question: not "what
       // happened" but "may this answer be sent". Every candidate, and a
       // runtime-written summary when the repairs run out — see `finalClaims.ts`.
@@ -1074,6 +1096,36 @@ export class AgentHost {
 
     let outcome: AgentTurnResult | null = null;
     try {
+      // A question about where the work stands is answered from the record,
+      // not by running the worker. The transcript this closes had "진행된 게
+      // 없는데 다시 확인해줘" spawn a full worker turn that re-recorded the
+      // request and re-printed the plan — the user asked whether anything had
+      // happened, and the answer was to make more of the nothing they were
+      // asking about. Only unmistakable status shapes take this path (see
+      // `isStatusQuestion`); anything else runs as before.
+      const priorTurns = this.recorded.filter((e) => e.type === "user_message").length;
+      if (priorTurns > 1 && attachments.length === 0 && isStatusQuestion(prompt)) {
+        const task = reduceTask(this.recorded, this.conversationId ?? "task");
+        const summary = statusAnswerFrom(this.recorded, task);
+        forward({ type: "text", delta: summary });
+        forward({ type: "done", reason: "finished", summary });
+        this.lastTermination = "finished";
+        outcome = {
+          reason: "finished",
+          summary,
+          changedFiles: [],
+          checkpointRef: null,
+          steps: 0,
+          modelCalls: 0,
+          toolCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          claimRepairs: 0,
+          summarySource: "runtime",
+        };
+        return outcome;
+      }
+
       this.phase("준비하는 중");
       // Read the request before choosing who answers it. Everything this
       // produces — the contract, the profile, the decision — is recorded, so a
@@ -1088,6 +1140,10 @@ export class AgentHost {
       // honours — two readings of one sentence.
       if (routing.contractEvents.length > 0) {
         session.restoreContract([...this.recorded]);
+        // And is told so, or the mode prompt's "record the request first"
+        // sends it straight back to `record_request` — the duplicate the
+        // user watched happen on every follow-up.
+        session.markNextTurnContractRecorded();
       }
       // Installed every turn, not only when the session is built. A session
       // reused from a previous turn — or reopened from history, which built one
@@ -1193,6 +1249,11 @@ export class AgentHost {
       model: bootstrapModel,
       prompt,
       turnId,
+      // The conversation so far. Without it, "어떻게 이전과 연결되는가"는 보이지
+      // 않는 대상에 대한 질문이었다: the interpreter read "작업 진행해줘" cold
+      // and recorded a fresh task, and `mergeContract` replaced everything the
+      // task had. The option existed; nothing passed it.
+      history: bootstrapHistoryFrom(this.recorded.filter((e) => e.turnId !== turnId)),
       signal,
     });
 
@@ -1217,16 +1278,37 @@ export class AgentHost {
       return { workerModelId: null, contractEvents: [] };
     }
 
+    // The runtime's own reading of the user's words, beside the model's
+    // relation. Only ever a downgrade away from a task reset; the corrected
+    // contract is what gets recorded, so replay folds what the live run folded.
+    const previous = reduceContract([...this.recorded]);
+    const guarded = guardRelation(interpreted.contract, { userText: prompt, priorTask: previous });
+    if (guarded.override !== null) {
+      this.log.appendLine(
+        `[hasa] relation overridden: ${guarded.override.from} → ${guarded.override.to} ` +
+          `(${guarded.override.reason})`,
+      );
+      keep([
+        {
+          type: "notice",
+          ...stamp(),
+          level: "info",
+          text:
+            `이 메시지를 기존 작업의 연속으로 처리합니다 (${guarded.override.to}). ` +
+            "이전에 기록된 요구사항은 그대로 유지됩니다.",
+        },
+      ]);
+    }
+
     const contractEvent: SessionEvent = {
       type: "turn_contract",
       ...stamp(),
-      contract: interpreted.contract,
+      contract: guarded.contract,
     };
 
     const listing = (await this.conversationModels()) ?? (await provider.listModels());
     const profiles = buildRegistry(listing.models);
     this.lastRegistry = profiles;
-    const previous = reduceContract([...this.recorded]);
     const currentWorker = selectedWorkerFor(this.recorded)?.modelId ?? null;
     // Derived from the persisted contract events rather than held in a field.
     // Held in a field it did not survive the process exiting, so the first turn
@@ -1240,7 +1322,7 @@ export class AgentHost {
     let decision: WorkerDecision;
     try {
       decision = await decideWorker({
-        turn: interpreted.contract,
+        turn: guarded.contract,
         previous,
         currentWorker,
         currentWorkerRestored: restored,

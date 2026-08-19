@@ -486,7 +486,7 @@ export function planCoverage(contract: TaskContract, planSteps: readonly string[
  * Getting this wrong in the Korean direction is what let a real requirement —
  * "웹에서 내용 보충" — read as covered by nothing.
  */
-function significantWords(text: string): string[] {
+export function significantWords(text: string): string[] {
   return text
     .toLowerCase()
     .split(/[^\p{L}\p{N}._-]+/u)

@@ -820,3 +820,135 @@ describe("restoring a conversation", () => {
     assert.deepEqual(history, ["두 번째"]);
   });
 });
+
+describe("continuity across turns", () => {
+  test("a host-recorded contract is not re-recorded by the worker", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "이어서 진행합니다." })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    // What the host does after its bootstrap pass interpreted the turn.
+    session.restoreContract([
+      {
+        type: "turn_contract",
+        contract: {
+          turnId: "h1",
+          relation: "new_task",
+          goal: "개와 고양이 분류",
+          intents: ["execute"],
+          requirements: [
+            {
+              id: "h1-r1",
+              description: "CNN 학습",
+              required: true,
+              provenance: { sourceTurnId: "h1", origin: "explicit" },
+              lifecycle: "active",
+            },
+          ],
+          deliverables: [],
+          constraints: [],
+        },
+      },
+    ]);
+    session.markNextTurnContractRecorded();
+
+    await session.send("작업 진행해줘.", never);
+
+    // The *tool result* specifically. The system-prompt note contains similar
+    // words, and a regex over the whole conversation matched it even when the
+    // tool happily re-recorded — which is how a dead refusal passed this test
+    // in the first mutation sweep (M104).
+    const toolResults = model.seen.flatMap((r) =>
+      ((r as { messages: Array<{ role: string; content: unknown }> }).messages ?? [])
+        .filter((m) => m.role === "tool")
+        .map((m) => String(m.content)),
+    );
+    assert.ok(
+      toolResults.some((content) => /런타임이 이미 기록했습니다/.test(content)),
+      `record_request was not refused: ${JSON.stringify(toolResults)}`,
+    );
+    assert.equal(session.taskContract.requirements.length, 1);
+    assert.equal(session.taskContract.requirements[0]?.description, "CNN 학습");
+
+    // And the worker was told so up front, in the system message.
+    const first = model.seen[0] as { messages: Array<{ role: string; content: string }> };
+    assert.match(first.messages[0]?.content ?? "", /이미 기록되어 있습니다/);
+  });
+
+  test("what the runtime knows at turn start reaches the system prompt", async () => {
+    const fixture = await repo();
+    const model = scripted([turn({ text: "확인했습니다." })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+      turnOpening: () => "직전 2개 턴에서 실행된 도구가 없습니다.",
+    });
+
+    await session.send("작업 진행해줘.", never);
+    const first = model.seen[0] as { messages: Array<{ role: string; content: string }> };
+    const system = first.messages[0]?.content ?? "";
+    assert.match(system, /런타임 기록 \(이번 턴 시작 시점\)/);
+    assert.match(system, /직전 2개 턴에서 실행된 도구가 없습니다/);
+  });
+
+  test("the worker's own misread new_task cannot reset the task", async () => {
+    const fixture = await repo();
+    // The scripted prelude records `new_task` with its own paraphrase — the
+    // exact move that erased a task in the transcript. The user's message is a
+    // bare continuation, and the guard reads it too.
+    const model = scripted([turn({ text: "이어서 진행합니다." })]);
+    const session = await AgentSession.open({
+      workspaceRoot: fixture.root,
+      model,
+      approvalPort: allowingApprovalPort,
+      logger: nullLogger,
+    });
+    session.restoreContract([
+      {
+        type: "turn_contract",
+        contract: {
+          turnId: "h1",
+          relation: "new_task",
+          goal: "개와 고양이 분류 프로젝트",
+          intents: ["execute"],
+          requirements: [
+            {
+              id: "h1-r1",
+              description: "CNN 학습",
+              required: true,
+              provenance: { sourceTurnId: "h1", origin: "explicit" },
+              lifecycle: "active",
+            },
+            {
+              id: "h1-r2",
+              description: "성능 비교",
+              required: true,
+              provenance: { sourceTurnId: "h1", origin: "explicit" },
+              lifecycle: "active",
+            },
+          ],
+          deliverables: [],
+          constraints: [],
+        },
+      },
+    ]);
+    // Deliberately *not* marked as pre-recorded: this test is about the guard
+    // on the worker's own record_request path.
+
+    await session.send("작업 진행해줘.", never);
+
+    const contract = session.taskContract;
+    assert.equal(contract.relation, "continue");
+    assert.deepEqual(
+      contract.requirements.map((r) => r.description),
+      ["CNN 학습", "성능 비교"],
+    );
+    assert.equal(contract.goal, "개와 고양이 분류 프로젝트");
+  });
+});

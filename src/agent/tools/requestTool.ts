@@ -25,6 +25,15 @@ export interface RequestToolOptions {
   onContract: (contract: TurnContract) => void;
   /** The turn this call belongs to. Supplied by the session, never the model. */
   turnId: () => string;
+  /**
+   * Whether this turn's contract already exists on the record.
+   *
+   * True when the host's bootstrap pass interpreted the request before the
+   * worker ran. The worker's prompt still says "record the request first" —
+   * that instruction is right for the turns the bootstrap missed — so the tool
+   * is where the duplicate is refused, with a pointer at the work instead.
+   */
+  alreadyRecorded?: () => boolean;
 }
 
 export function createRequestTool(opts: RequestToolOptions): AgentTool {
@@ -109,6 +118,14 @@ export function createRequestTool(opts: RequestToolOptions): AgentTool {
       // got "한 번에 처리할 수 있는 분량을 넘어 중단했습니다" for work that was
       // sitting finished on disk.
       const turn = opts.turnId();
+      if (opts.alreadyRecorded?.() === true) {
+        return {
+          ok: false,
+          content:
+            "이번 턴의 요청은 런타임이 이미 기록했습니다. 다시 기록하지 말고, " +
+            "시스템 메시지의 '지금까지 확인된 요청'에서 남은 작업을 이어서 진행하십시오.",
+        };
+      }
       if (recordedFor === turn) {
         return {
           ok: false,

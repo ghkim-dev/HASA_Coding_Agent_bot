@@ -16,6 +16,7 @@ import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
 import { createRequestTool } from "./tools/requestTool.ts";
 import { ACTION_DENIED_BY_CONSTRAINT, decideAction, describeContract, describeDeferral } from "./actionPolicy.ts";
+import { guardRelation } from "./continuity.ts";
 import {
   classForbidding,
   describeProhibition,
@@ -137,6 +138,17 @@ export interface AgentSessionOptions {
   runCommand?: ShellToolOptions["run"];
   /** Told what the user asked for, once the model has recorded it. */
   onContract?: (contract: TurnContract) => void;
+  /**
+   * What the runtime knows at the moment the turn begins, for the worker to
+   * start from instead of from zero.
+   *
+   * The transcript this exists for had a worker re-planning from step 1 on
+   * every "진행해줘": it could see the conversation but not the record, so
+   * nothing told it which requirements were already settled and which turns
+   * had produced no work at all. Supplied by the host, which holds the
+   * conversation's events; null when there is nothing worth saying.
+   */
+  turnOpening?: () => string | null;
 }
 
 /** How many shadow observations a session keeps. Bounded, because it is a cache. */
@@ -223,6 +235,19 @@ export class AgentSession {
   /** The turn being run, so the request tool can stamp what it records. */
   private turnId = "t0";
   private turnOrdinal = 0;
+  /**
+   * Whether the next turn's contract was already recorded by the host.
+   *
+   * The bootstrap pass interprets the request before the worker runs, and the
+   * worker's mode prompt tells it to record the request first. Without this
+   * flag those two are strangers: the worker re-records what the host already
+   * recorded, and the panel shows every follow-up starting with the same
+   * `record_request` it started with last time. One-shot — consumed by the
+   * next `send`.
+   */
+  private nextTurnContractRecorded = false;
+  /** The turn whose contract arrived pre-recorded, while it runs. */
+  private contractRecordedFor: string | null = null;
 
   /**
    * Puts back the contract a conversation had, from its events.
@@ -242,6 +267,17 @@ export class AgentSession {
   /** What the user has asked for, for a caller that needs to show or check it. */
   get taskContract(): TaskContract {
     return this.contract;
+  }
+
+  /**
+   * Tells the session the upcoming turn's contract is already on the record.
+   *
+   * Called by the host when the bootstrap pass interpreted this turn — distinct
+   * from `restoreContract`, which also runs when a conversation is reopened and
+   * whose most recent contract belongs to a *past* turn.
+   */
+  markNextTurnContractRecorded(): void {
+    this.nextTurnContractRecorded = true;
   }
 
   private constructor(root: string, opts: AgentSessionOptions) {
@@ -414,14 +450,33 @@ export class AgentSession {
       // question misanswered whether or not files are involved.
       createRequestTool({
         turnId: () => this.turnId,
+        // The host's bootstrap already recorded this turn, when it did. The
+        // duplicate the tool refuses here is the visible half of the
+        // transcript's "record_request again, plan from step 1 again" loop.
+        alreadyRecorded: () => this.contractRecordedFor === this.turnId,
         onContract: (contract) => {
+          // The runtime reads the user's words beside the model's relation
+          // before anything merges. A follow-up misread as `new_task` replaces
+          // the whole contract, and that one field is where the model's
+          // mistake is not contained — see `guardRelation`.
+          const guarded = guardRelation(contract, {
+            userText: this.userTurns[this.userTurns.length - 1] ?? "",
+            priorTask: this.contract,
+          });
+          if (guarded.override !== null) {
+            this.log.warn("relation overridden by the runtime", {
+              from: guarded.override.from,
+              to: guarded.override.to,
+              reason: guarded.override.reason,
+            });
+          }
           // Folded in now so the rest of this turn is governed by it, and
           // emitted so the fold can be repeated from the events alone. The two
           // must agree, which they do because they are the same function over
           // the same input — see `reduceContract`.
-          this.contract = mergeContract(this.contract, contract);
-          this.emit({ type: "contract", contract });
-          this.opts.onContract?.(contract);
+          this.contract = mergeContract(this.contract, guarded.contract);
+          this.emit({ type: "contract", contract: guarded.contract });
+          this.opts.onContract?.(guarded.contract);
         },
       }),
     ]);
@@ -446,6 +501,9 @@ export class AgentSession {
     // supplies. Provenance the model can write is provenance it can get wrong.
     this.turnId = `t${this.turnOrdinal++}`;
     this.turnFailures = [];
+    // One-shot: the host marked the *next* turn, and this is it.
+    this.contractRecordedFor = this.nextTurnContractRecorded ? this.turnId : null;
+    this.nextTurnContractRecorded = false;
     // The user's own words, kept for the offline design shadow below. A
     // conversation rather than a message: a correction only means something next
     // to what it corrects.
@@ -467,6 +525,11 @@ export class AgentSession {
     // point of the contract: a requirement recorded three turns ago is in front
     // of the model now, whether or not the current plan mentions it.
     const standing = describeContract(this.contract);
+    // What the record says at this moment — settled requirements, open
+    // failures, turns that produced no work. Handed over *before* the model
+    // plans, for the same reason `taskRecord` is handed over before it answers:
+    // a fact the model has is a restart it never writes.
+    const opening = this.opts.turnOpening?.() ?? null;
 
     const system: ProviderMessage = {
       role: "system",
@@ -477,7 +540,12 @@ export class AgentSession {
           isGitRepo: this.isGitRepo,
           runtimeGaps: this.opts.runtimeGaps,
         }) +
-        (standing === null ? "" : `\n\n지금까지 확인된 요청:\n${standing}\n`),
+        (standing === null ? "" : `\n\n지금까지 확인된 요청:\n${standing}\n`) +
+        (this.contractRecordedFor === null
+          ? ""
+          : "\n이번 턴의 요청은 이미 기록되어 있습니다. record_request를 다시 호출하지 말고, " +
+            "위 요청에서 아직 남아 있는 작업을 이어서 진행하십시오.\n") +
+        (opening === null ? "" : `\n런타임 기록 (이번 턴 시작 시점):\n${opening}\n`),
     };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];
 
