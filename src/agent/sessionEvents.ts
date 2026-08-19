@@ -110,6 +110,8 @@ export type RunTerminationReason =
   | "loop_detected"
   /** The run kept acting without getting anywhere, and stopped saying so. */
   | "no_progress"
+  /** The model's tool calls stayed unreadable and nothing ran. */
+  | "protocol_error"
   | "max_steps"
   | "max_model_calls"
   | "max_tool_calls"

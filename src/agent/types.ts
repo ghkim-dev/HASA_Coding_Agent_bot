@@ -259,6 +259,13 @@ export type AgentStopReason =
    * catching this, forty actions later.
    */
   | "no_progress"
+  /**
+   * The model's tool calls could not be read, the repair budget is spent, and
+   * nothing ran. Distinct from `error`: the runtime is fine — the model and the
+   * protocol never met, and saying "finished" over it is how raw markup became
+   * a user's answer.
+   */
+  | "protocol_error"
   | "error";
 
 /**

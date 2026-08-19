@@ -525,3 +525,105 @@ describe("the fallback the runtime writes also passes the runtime's gate", () =>
     assert.equal(result.valid, true);
   });
 });
+
+describe("claims of ongoing activity", () => {
+  // The transcript C4.9 was written about claimed, across four turns:
+  // downloading done, training in progress, epochs advancing, monitoring
+  // continuing — with not one run_command in the record. Completion claims
+  // were already gated; the *progressive* ones walked straight through.
+  //
+  // A final answer is sent after the last tool returned, so nothing the
+  // runtime started is running while the user reads it. The claim is false by
+  // construction, whatever the record holds.
+
+  test("\"학습이 진행 중\" is refused, record or no record", () => {
+    const result = validateFinalClaims({
+      task: task(),
+      disposition: "active",
+      text: "CNN 학습이 진행 중입니다. 완료되면 결과를 정리하겠습니다.",
+    });
+    assert.ok(kinds(result).includes("FALSE_ACTIVITY"));
+  });
+
+  test("monitoring promises are refused", () => {
+    const result = validateFinalClaims({
+      task: task(),
+      disposition: "active",
+      text: "학습이 완료되면 보고하겠습니다.",
+    });
+    assert.ok(kinds(result).includes("FALSE_ACTIVITY"));
+  });
+
+  test("English progressive claims are refused too", () => {
+    const result = validateFinalClaims({
+      task: task(),
+      disposition: "active",
+      text: "The model is currently training on CIFAR-10.",
+    });
+    assert.ok(kinds(result).includes("FALSE_ACTIVITY"));
+  });
+
+  test("talking about the user's world is not an activity claim", () => {
+    const result = validateFinalClaims({
+      task: task(),
+      disposition: "active",
+      text: "서버가 실행 중인지 확인하려면 systemctl status를 사용하세요.",
+    });
+    assert.ok(!kinds(result).includes("FALSE_ACTIVITY"));
+  });
+
+  test("reporting completed work with evidence is not an activity claim", () => {
+    const state = task({
+      requirements: [requirement({ status: "passed", evidence: ["e1"] })],
+      evidence: [evidence()],
+    });
+    const result = validateFinalClaims({
+      task: state,
+      disposition: "completed",
+      text: "요청하신 수정을 확인했습니다. pytest가 통과했습니다.",
+    });
+    assert.ok(!kinds(result).includes("FALSE_ACTIVITY"));
+  });
+
+  test("training-completed still needs a run on the record", () => {
+    // The neighbouring rule, asserted here as the pair: "진행 중" is always
+    // false at answer time, and "완료" needs the record. Between the two there
+    // is no sentence that smuggles training past the gate.
+    const noRun = validateFinalClaims({
+      task: task(),
+      disposition: "active",
+      text: "모델 학습을 완료했습니다.",
+    });
+    assert.ok(kinds(noRun).includes("UNSUPPORTED_COMPLETION"));
+  });
+});
+
+describe("training claims and run endings, pinned for the tooth tests", () => {
+  test("a scoped training claim still needs a run on the record", () => {
+    // `disposition: completed` and a passed requirement make the generic
+    // completion rule stand down (the sentence names the requirement). The
+    // training rule is then the only thing between "학습을 완료했습니다" and a
+    // record in which nothing was ever executed.
+    const state = task({
+      requirements: [
+        requirement({ id: "r1", description: "모델 학습", status: "passed", evidence: ["e9"] }),
+      ],
+      evidence: [evidence({ id: "e9", kind: "file_change", observation: "train.py written" })],
+    });
+    const result = validateFinalClaims({
+      task: state,
+      disposition: "completed",
+      text: "모델 학습을 완료했습니다.",
+    });
+    assert.ok(kinds(result).includes("UNSUPPORTED_COMPLETION"));
+    assert.match(
+      result.violations[0]?.detail ?? "",
+      /학습을 실행한 기록이 없습니다/,
+    );
+  });
+
+  test("protocol_error is an unfinished run, not a finished one", () => {
+    const state = task({ requirements: [requirement()] });
+    assert.equal(taskDisposition(state, "protocol_error"), "aborted");
+  });
+});

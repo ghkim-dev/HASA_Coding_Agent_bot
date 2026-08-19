@@ -53,7 +53,7 @@ import { composeRuntimeSummary, type QuotedSection, type RuntimeSummary } from "
 export type TaskDisposition = "completed" | "partial" | "blocked" | "aborted" | "active";
 
 /** Run endings that mean the turn stopped rather than finished. */
-const UNFINISHED_RUN = new Set(["no_progress", "max_steps", "max_model_calls", "max_tool_calls", "timeout", "aborted", "loop_detected", "denied", "error"]);
+const UNFINISHED_RUN = new Set(["no_progress", "protocol_error", "max_steps", "max_model_calls", "max_tool_calls", "timeout", "aborted", "loop_detected", "denied", "error"]);
 
 export function taskDisposition(task: TaskState | null, termination?: string): TaskDisposition {
   if (task === null) return "active";
@@ -93,7 +93,8 @@ export type ClaimViolationKind =
   | "UNSUPPORTED_TEST_SUCCESS"
   | "UNVERIFIED_INVOCATION"
   | "UNSUPPORTED_SOURCE_ATTRIBUTION"
-  | "UNSUPPORTED_BLOCKER";
+  | "UNSUPPORTED_BLOCKER"
+  | "FALSE_ACTIVITY";
 
 export interface ClaimViolation {
   kind: ClaimViolationKind;
@@ -173,6 +174,31 @@ const TRAINING_CLAIM = /(?:학습|훈련|training)[^.!?\n]{0,16}(?:완료|끝|�
 
 const INVOCATION_CLAIM =
   /(?:추론|호출|inference|invoke[d]?|invocation)[^.!?\n]{0,20}(?:성공|완료|했습니다|하였습니다|되었습니다|succeeded|successful|worked)/i;
+
+/**
+ * A claim that the agent's own work is running right now.
+ *
+ * False by construction in a final answer. Commands run inside the turn and the
+ * turn is over when this text is sent, so "학습이 진행 중입니다" describes a
+ * process that does not exist — the transcript this was written for repeated it
+ * across four turns, with epochs and monitoring, and there had never been a
+ * single `run_command`. The verbs are the agent's work verbs specifically:
+ * "서버가 실행 중인지 확인하세요" talks about the user's world and must pass,
+ * which is why the pattern demands work-verb + progressive rather than any
+ * sentence containing 중.
+ */
+const ACTIVITY_CLAIM =
+  /(?:학습|훈련|다운로드|설치|변환|생성|작업)[이을를은는]?\s*(?:이|가)?\s*(?:진행\s*중|진행되고\s*있|계속되고\s*있)|(?:학습|훈련|다운로드|설치)(?:하고|되고)\s*있(?:습니다|어요|음)|(?:모니터링|지켜보고)\s*(?:중입니다|하고\s*있)|(?:is|are)\s+(?:currently\s+)?(?:training|downloading|installing|running)\b|training\s+in\s+progress/i;
+
+/**
+ * A promise to keep watching after the answer — which nothing will do.
+ *
+ * "완료되면 보고하겠습니다" reads as a running job with a courier attached. The
+ * turn ends with the sentence; no process, no watcher, no report. It is the
+ * same false activity in the future tense.
+ */
+const MONITORING_PROMISE =
+  /(?:완료되면|끝나면|학습이\s*끝나는\s*대로)[^.!?\n]{0,16}(?:보고|알려|공유)|(?:계속|이어서)\s*모니터링(?:하겠|할게|하며)|(?:i(?:'| wi)ll|will)\s+(?:keep\s+)?(?:monitor|watch|report\s+back)/i;
 
 /** An external cause named as the reason something did not happen. */
 const BLOCKER_CLAIM =
@@ -291,6 +317,29 @@ export function validateFinalClaims(input: FinalClaimInput): ClaimValidationResu
         kind: "UNVERIFIED_INVOCATION",
         sentence,
         detail: "실제로 호출한 기록이 없습니다.",
+      });
+    }
+
+    // No condition on the record, because no record could support it: the
+    // answer is sent after the last tool returned, so nothing the runtime
+    // started is running while the user reads this.
+    if (ACTIVITY_CLAIM.test(sentence)) {
+      violations.push({
+        kind: "FALSE_ACTIVITY",
+        sentence,
+        detail:
+          "이 답변이 전송되는 시점에 런타임이 실행 중인 프로세스는 없습니다. " +
+          "실행 중이라고 쓰지 말고, 실제로 실행했으면 그 결과를, 하지 않았으면 하지 않았다고 적으십시오.",
+      });
+    }
+
+    if (MONITORING_PROMISE.test(sentence)) {
+      violations.push({
+        kind: "FALSE_ACTIVITY",
+        sentence,
+        detail:
+          "턴이 끝나면 아무것도 지켜보지 않습니다. 완료를 지켜보다 보고하겠다는 약속은 " +
+          "지켜질 수 없으므로 쓰지 마십시오. 지금까지 확인된 것만 적으십시오.",
       });
     }
 

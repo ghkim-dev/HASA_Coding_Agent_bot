@@ -370,6 +370,7 @@ const TURN_STATE: Readonly<Record<RunTerminationReason, TurnState>> = {
   timeout: "aborted",
   loop_detected: "aborted",
   no_progress: "aborted",
+  protocol_error: "aborted",
   max_steps: "aborted",
   max_model_calls: "aborted",
   max_tool_calls: "aborted",

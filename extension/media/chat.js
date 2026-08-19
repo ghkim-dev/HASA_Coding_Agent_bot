@@ -360,6 +360,8 @@ const STOP_REASON = {
   // told a user their perfectly specific request was vague, when what had
   // repeated was the agent mistyping a pip command.
   no_progress: "진전이 없어 중단했습니다. 아래에 이유와 어디까지 됐는지 남아 있습니다.",
+  protocol_error:
+    "모델의 도구 호출 형식을 읽지 못해 중단했습니다. 실행된 작업은 없습니다.",
   max_steps: "한 번에 처리할 수 있는 단계 수를 넘어 중단했습니다.",
   max_model_calls: "한 번에 처리할 수 있는 모델 호출 수를 넘어 중단했습니다.",
   max_tool_calls: "한 번에 처리할 수 있는 도구 호출 수를 넘어 중단했습니다.",
@@ -925,6 +927,19 @@ function renderProgress(progress) {
     `요구사항 ${progress.completedRequirementCount}/${progress.totalRequirementCount} 확인됨`,
     `증거로 검증 ${progress.verifiedRequirementCount}/${progress.totalRequirementCount}`,
   ];
+  // Two cursors, two facts. The grounded one is what the record supports; the
+  // model's own `current` is shown only when it runs ahead of the record, and
+  // labelled as its claim rather than as the state.
+  if (progress.plan) {
+    const claim =
+      progress.plan.claimedCurrent > progress.plan.groundedCurrent
+        ? ` (모델 주장 ${progress.plan.claimedCurrent})`
+        : "";
+    parts.push(`계획 ${progress.plan.groundedCurrent}/${progress.plan.steps.length} 확인됨${claim}`);
+  }
+  if (progress.stateContradictionCount > 0) {
+    parts.push(`설명 번복 ${progress.stateContradictionCount}건`);
+  }
   if (progress.workerModelId) parts.push(`모델 ${progress.workerModelId}`);
   parts.push(terminal ? `소요 ${seconds(progress.elapsedMs)}` : `경과 ${seconds(progress.elapsedMs)}`);
   // Only said while something is still expected to happen, and only from real

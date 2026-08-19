@@ -392,6 +392,24 @@ export class AgentLoop {
         // Out of attempts. The prose is what the model actually said to the
         // user; the parser's message is not, and it is not shown.
         this.log.warn("tool call still unreadable after repairs", { problem: completion.protocolProblem });
+
+        // When nothing ran and nothing readable was said, there is no answer to
+        // send — only markup residue. This used to fall through to `finished`,
+        // and a live conversation showed what that costs: the model wrote the
+        // same unreadable call three times, the stripped remainder became the
+        // reply, and the turn read as answered when the model and the protocol
+        // had simply never met. The runtime writes the ending, says what
+        // happened, and the reason names it — a turn that executed real work
+        // before the calls went unreadable still answers below, because it has
+        // something to answer with.
+        if (state.executed === 0 && completion.text.trim().length === 0) {
+          state.summary =
+            "모델의 도구 호출 형식을 읽지 못해 이 턴을 중단합니다. 실행된 작업은 없습니다. " +
+            "다시 요청하면 처음부터 시도합니다.";
+          state.summarySource = "runtime";
+          state.safeFallback = true;
+          return "protocol_error";
+        }
       }
 
       if (completion.toolCalls.length === 0) {
@@ -872,6 +890,8 @@ function terminationDetail(reason: AgentStopReason, state: RunState): string | n
       const reason = stallReason(state.progress);
       return `${describeStallReason(reason)} (${state.progress.streak}개 행동, ${reason})`;
     }
+    case "protocol_error":
+      return `도구 호출을 ${state.protocolRepairs + 1}번 읽지 못했습니다.`;
     case "max_tool_calls":
       return `도구를 ${state.toolCalls}번 호출했습니다.`;
     case "max_model_calls":
@@ -913,6 +933,8 @@ export function defaultSummary(reason: AgentStopReason, changed: number): string
       return "시간이 초과되어 중단했습니다. 작업을 더 작게 나누어 다시 요청해 주세요.";
     case "loop_detected":
       return "같은 시도를 반복하고 있어 중단했습니다. 요청을 조금 더 구체적으로 알려 주세요.";
+    case "protocol_error":
+      return "모델의 도구 호출 형식을 읽지 못해 중단했습니다. 실행된 작업은 없습니다.";
     case "max_steps":
     case "max_model_calls":
     case "max_tool_calls":

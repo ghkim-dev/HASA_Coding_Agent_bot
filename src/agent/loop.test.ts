@@ -881,3 +881,67 @@ describe("refusals that happen before a tool runs", () => {
     assert.equal(starts.length, 1);
   });
 });
+
+describe("protocol failure containment", () => {
+  test("nothing ran and nothing readable was said: the runtime ends the turn", async () => {
+    // Three unreadable calls with no prose around them. This used to fall
+    // through to `finished`, with markup residue as the user's answer.
+    const h = harness({
+      model: scripted([
+        turn({ text: "", protocolProblem: "read_file was opened but never closed" }),
+        turn({ text: "", protocolProblem: "read_file was opened but never closed" }),
+        turn({ text: "", protocolProblem: "read_file was opened but never closed" }),
+      ]),
+    });
+    const result = await h.loop.run(h.messages, never);
+
+    assert.equal(result.reason, "protocol_error");
+    assert.equal(result.summarySource, "runtime");
+    assert.equal(result.safeFallback, true);
+    assert.match(result.summary, /도구 호출 형식을 읽지 못해/);
+    assert.match(result.summary, /실행된 작업은 없습니다/);
+  });
+
+  test("each unreadable call is handed back before the turn is given up", async () => {
+    const model = scripted([
+      turn({ text: "", protocolProblem: "problem" }),
+      turn({ text: "", protocolProblem: "problem" }),
+      turn({ text: "", protocolProblem: "problem" }),
+    ]);
+    const h = harness({ model });
+    await h.loop.run(h.messages, never);
+    // Two repairs, then the containment — the model was asked again twice.
+    assert.equal(model.calls, 3);
+  });
+
+  test("real prose beside the failed call is still the answer", async () => {
+    // The counter-direction: a model that said something readable has answered,
+    // and the runtime must not replace a real explanation with its own.
+    const h = harness({
+      model: scripted([
+        turn({ text: "이 파일은 읽을 수 없었습니다.", protocolProblem: "problem" }),
+        turn({ text: "이 파일은 읽을 수 없었습니다.", protocolProblem: "problem" }),
+        turn({ text: "이 파일은 읽을 수 없었습니다.", protocolProblem: "problem" }),
+      ]),
+    });
+    const result = await h.loop.run(h.messages, never);
+    assert.equal(result.reason, "finished");
+    assert.equal(result.summary, "이 파일은 읽을 수 없었습니다.");
+  });
+
+  test("a turn that executed work before the calls went unreadable is not protocol_error", async () => {
+    const tool = fakeTool({ result: { ok: true, content: "done" } });
+    const h = harness({
+      model: scripted([
+        turn({ toolCalls: [call("do_thing", {})] }),
+        turn({ text: "", protocolProblem: "problem" }),
+        turn({ text: "", protocolProblem: "problem" }),
+        turn({ text: "", protocolProblem: "problem" }),
+      ]),
+      tools: [tool],
+    });
+    const result = await h.loop.run(h.messages, never);
+    assert.notEqual(result.reason, "protocol_error");
+    assert.equal(tool.executions, 1);
+  });
+});

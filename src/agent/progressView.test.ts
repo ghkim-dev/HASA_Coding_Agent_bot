@@ -420,3 +420,75 @@ describe("모든 phase 는 도달 가능하고 문구가 있다", () => {
     assert.equal(progressView({ events: [], contract: emptyContract(), now: T0 }), null);
   });
 });
+
+describe("the plan's two cursors", () => {
+  // `update_plan`'s `current` is the model's narration. The record's cursor is
+  // the first step no tool observation has settled. The transcript this
+  // distinguishes them for showed `current: 2` over a task in which nothing had
+  // ever run.
+
+  test("a claimed cursor with no evidence stays a claim", () => {
+    const events: SessionEvent[] = [
+      userMessage(),
+      contractEvent(),
+      workerEvent("m1"),
+      { type: "plan", ...id(), steps: ["패키지를 설치한다", "테스트를 실행한다"], current: 2 } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 60_000 });
+    assert.ok(view?.plan);
+    assert.equal(view.plan.claimedCurrent, 2);
+    assert.equal(view.plan.groundedCurrent, 1);
+  });
+
+  test("evidence moves the grounded cursor", () => {
+    const events: SessionEvent[] = [
+      userMessage(),
+      contractEvent(),
+      workerEvent("m1"),
+      { type: "plan", ...id(), steps: ["패키지를 설치한다", "테스트를 실행한다"], current: 1 } as SessionEvent,
+      started("c1", "pip install torch"),
+      completed("c1", { status: "success", disposition: "executed_success" }),
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 60_000 });
+    assert.equal(view?.plan?.groundedCurrent, 2);
+  });
+
+  test("no plan, no cursors", () => {
+    const events: SessionEvent[] = [userMessage(), contractEvent()];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 5_000 });
+    assert.equal(view?.plan, null);
+  });
+
+  test("all steps settled: the cursor rests on the last step", () => {
+    const events: SessionEvent[] = [
+      userMessage(),
+      contractEvent(),
+      workerEvent("m1"),
+      { type: "plan", ...id(), steps: ["테스트를 실행한다"], current: 1 } as SessionEvent,
+      started("c1", "pytest -q"),
+      completed("c1", { status: "success", disposition: "executed_success" }),
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 60_000 });
+    assert.equal(view?.plan?.groundedCurrent, 1);
+  });
+});
+
+describe("contradictions surface in the projection", () => {
+  test("a story that flips between turns is counted", () => {
+    const events: SessionEvent[] = [
+      userMessage(),
+      { type: "assistant_text", ...id(), text: "데이터셋 다운로드를 완료했습니다." } as SessionEvent,
+      { type: "run_completed", ...id(), reason: "finished", summary: "" } as SessionEvent,
+      userMessage("진행된 게 없는데?", "t2"),
+      { type: "assistant_text", ...id("t2"), text: "데이터셋 다운로드가 아직 되지 않았습니다." } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 60_000 });
+    assert.equal(view?.stateContradictionCount, 1);
+  });
+
+  test("an honest conversation counts zero", () => {
+    const events: SessionEvent[] = [userMessage(), contractEvent()];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 5_000 });
+    assert.equal(view?.stateContradictionCount, 0);
+  });
+});

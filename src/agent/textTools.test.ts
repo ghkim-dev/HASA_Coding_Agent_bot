@@ -364,3 +364,96 @@ describe("rendering a call back", () => {
     assert.equal((second.call?.arguments as { replace: string }).replace, code);
   });
 });
+
+describe("the <function=…> spelling", () => {
+  // Llama-3-instruct and several fine-tunes write calls this way. The `=`
+  // inside the tag made the whole convention invisible: no call, no problem, no
+  // repair — and the raw markup fell through to the user as the answer. That is
+  // the transcript C4.9 was written about.
+
+  test("a known tool with parameters is a call", () => {
+    const parsed = parseToolCall(
+      "<function=read_file>\n<parameter=path>train.py</parameter>\n</function>",
+      tools,
+    );
+    assert.equal(parsed.call?.name, "read_file");
+    assert.deepEqual(parsed.call?.arguments, { path: "train.py" });
+    assert.equal(parsed.problem, null);
+    assert.equal(parsed.text, "");
+  });
+
+  test("prose around the call survives; the markup does not", () => {
+    const parsed = parseToolCall(
+      "먼저 파일을 확인하겠습니다.\n<function=read_file>\n<parameter=path>a.py</parameter>\n</function>",
+      tools,
+    );
+    assert.equal(parsed.call?.name, "read_file");
+    assert.equal(parsed.text, "먼저 파일을 확인하겠습니다.");
+    assert.ok(!parsed.text.includes("<function"));
+  });
+
+  test("an unknown function name is a problem, and the markup is stripped", () => {
+    const parsed = parseToolCall(
+      "<function=install_package>\n<parameter=name>torch</parameter>\n</function>",
+      tools,
+    );
+    assert.equal(parsed.call, null);
+    assert.match(parsed.problem ?? "", /is not a tool/);
+    assert.ok(!parsed.text.includes("<function"));
+    assert.ok(!parsed.text.includes("<parameter"));
+  });
+
+  test("a call cut off before </function> is still read", () => {
+    const parsed = parseToolCall(
+      "<function=read_file>\n<parameter=path>a.py</parameter>",
+      tools,
+    );
+    assert.equal(parsed.call?.name, "read_file");
+    assert.deepEqual(parsed.call?.arguments, { path: "a.py" });
+  });
+
+  test("missing required parameters are named", () => {
+    const parsed = parseToolCall("<function=read_file>\n</function>", tools);
+    assert.equal(parsed.call, null);
+    assert.match(parsed.problem ?? "", /<path>/);
+  });
+
+  test("numbers are coerced by the schema, like every other spelling", () => {
+    const parsed = parseToolCall(
+      "<function=read_file>\n<parameter=path>a.py</parameter>\n<parameter=startLine>10</parameter>\n</function>",
+      tools,
+    );
+    assert.deepEqual(parsed.call?.arguments, { path: "a.py", startLine: 10 });
+  });
+
+  test("mid-sentence mention of the syntax is not a call", () => {
+    const parsed = parseToolCall(
+      "이 모델은 <function=read_file> 형식을 씁니다.",
+      tools,
+    );
+    assert.equal(parsed.call, null);
+    assert.equal(parsed.problem, null);
+  });
+
+  test("the native spelling still wins when both are present", () => {
+    const parsed = parseToolCall(
+      "<read_file>\n<path>a.py</path>\n</read_file>\n<function=list_files>\n<parameter=path>.</parameter>\n</function>",
+      tools,
+    );
+    assert.equal(parsed.call?.name, "read_file");
+  });
+});
+
+describe("prose survives around leftover markup", () => {
+  test("a closed function block between the call and the conclusion is removed, and only it", () => {
+    // The strip must take the block, not everything after it. An unclosed-tag
+    // rule alone would eat the conclusion too, and the user would get silence
+    // where the model wrote an explanation.
+    const parsed = parseToolCall(
+      "<read_file>\n<path>a.py</path>\n</read_file>\n<function=install_package>\n<parameter=name>torch</parameter>\n</function>\n이후 설명입니다.",
+      tools,
+    );
+    assert.equal(parsed.call?.name, "read_file");
+    assert.equal(parsed.text, "이후 설명입니다.");
+  });
+});

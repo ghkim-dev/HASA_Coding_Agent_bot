@@ -3,6 +3,7 @@ import { activeRequirements, type TaskContract } from "./turnContract.ts";
 import { reduceTask } from "./taskReducer.ts";
 import type { TaskState } from "./taskState.ts";
 import { taskDisposition } from "./finalClaims.ts";
+import { stateContradictions } from "./continuity.ts";
 
 /**
  * Where the work stands, derived from the events that already exist.
@@ -152,6 +153,25 @@ export interface AgentProgress {
   terminalReason: string | null;
   /** Set exactly when there is no plan. */
   planAbsence: PlanAbsence | null;
+  /**
+   * The plan, with two cursors that are two different facts.
+   *
+   * `claimedCurrent` is the model's own account of where it is — `update_plan`
+   * is its narration and stays so. `groundedCurrent` is the first step the
+   * record has not seen settled, counted from requirement statuses, which only
+   * tool observations move. The transcript this distinguishes them for showed
+   * `current: 2` over a task in which nothing had ever run; the claim is still
+   * shown, but as a claim, next to what the record supports.
+   */
+  plan: { steps: string[]; claimedCurrent: number; groundedCurrent: number } | null;
+  /**
+   * Turn-to-turn reversals in the model's own story, with no evidence between.
+   *
+   * Counted, never acted on: prose cannot move state in either direction, so a
+   * contradiction is a fact about the narration worth surfacing, not a state
+   * change to undo. See `stateContradictions`.
+   */
+  stateContradictionCount: number;
   /** Newest last, at most one entry per event. */
   timeline: TimelineEntry[];
   /** Newest last. One entry per proposed action. */
@@ -264,6 +284,8 @@ function terminalText(reason: string): string {
       return "취소했습니다";
     case "timeout":
       return "시간이 초과됐습니다";
+    case "protocol_error":
+      return "도구 호출을 읽지 못해 중단했습니다";
     case "no_progress":
       return "진전이 없어 중단했습니다";
     case "loop_detected":
@@ -380,6 +402,19 @@ export function progressView(input: {
   const verifying =
     (task?.evidence ?? []).some((e) => VERIFYING_EVIDENCE.has(e.kind)) && running === null;
 
+  // Grounded cursor: the first plan step whose requirement the record has not
+  // settled. `reduceTask` maps plan step n to requirement `r{n}`, so the plan
+  // and the statuses share an index. All settled → the cursor sits on the last
+  // step rather than one past it, because a cursor is a place in the plan.
+  const planView =
+    plan === undefined
+      ? null
+      : {
+          steps: [...plan.steps],
+          claimedCurrent: plan.current,
+          groundedCurrent: groundedCursor(plan.steps, task),
+        };
+
   const totalRequirementCount = activeRequirements(input.contract).length;
   const completedRequirementCount = (task?.requirements ?? []).filter(
     (r) => r.status === "passed" || r.status === "skipped",
@@ -427,6 +462,8 @@ export function progressView(input: {
     completedRequirementCount,
     totalRequirementCount,
     verifiedRequirementCount,
+    plan: planView,
+    stateContradictionCount: stateContradictions(input.events).length,
     terminalReason,
     planAbsence:
       plan !== undefined
@@ -441,6 +478,17 @@ export function progressView(input: {
     timeline,
     actions,
   };
+}
+
+/** The first step the record has not seen settled, 1-based. */
+function groundedCursor(steps: readonly string[], task: TaskState | null): number {
+  for (let i = 0; i < steps.length; i += 1) {
+    const requirement = task?.requirements.find((r) => r.id === `r${i + 1}`);
+    const settled =
+      requirement !== undefined && (requirement.status === "passed" || requirement.status === "skipped");
+    if (!settled) return i + 1;
+  }
+  return Math.max(1, steps.length);
 }
 
 function phaseOf(input: {

@@ -252,6 +252,34 @@ export function parseToolCall(text: string, tools: readonly ToolDescriptor[]): P
     };
   }
 
+  // The `<function=name>` spelling, before the "not a tool" branches: a model
+  // using it has written a complete call, and refusing the whole reply over the
+  // spelling would cost the round trip this parser exists to save.
+  const fnEnvelope = chosen === null && envelope === null ? readFunctionEnvelope(text, byName) : null;
+  if (fnEnvelope !== null) {
+    if (fnEnvelope.kind === "problem") {
+      return {
+        call: null,
+        // The markup is removed rather than shown, the same rule as every other
+        // failed attempt: the user asked for work, not for our syntax.
+        text: stripToolBlocks(text.slice(0, fnEnvelope.start), tools),
+        problem: fnEnvelope.problem,
+      };
+    }
+    callCounter += 1;
+    return {
+      call: {
+        id: `text_${callCounter}`,
+        name: fnEnvelope.tool.name,
+        arguments: fnEnvelope.args,
+        rawArguments: JSON.stringify(fnEnvelope.args),
+        argumentsValid: true,
+      },
+      text: strip(text, fnEnvelope, tools),
+      problem: null,
+    };
+  }
+
   if (chosen === null) {
     // A model reaching for a tool that does not exist has still tried to act,
     // and telling it so is more useful than treating the attempt as an answer.
@@ -381,6 +409,11 @@ export function stripToolBlocks(text: string, tools: readonly ToolDescriptor[]):
     // one.
     out = out.replace(new RegExp(`<${name}>[\\s\\S]*$`, "i"), "");
   }
+  // The `<function=…>` spelling, closed, cut off, or left as a stray
+  // `<parameter=…>` fragment. Same rule, different markup: none of it is prose.
+  out = out.replace(/<function\s*=\s*["']?[\w.-]+["']?\s*>[\s\S]*?<\/function>/gi, "");
+  out = out.replace(/<function\s*=\s*["']?[\w.-]+["']?\s*>[\s\S]*$/i, "");
+  out = out.replace(/<\/?parameter(?:\s*=\s*["']?[\w.-]+["']?)?\s*>/gi, "");
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -492,6 +525,80 @@ function readJsonEnvelope(
     return { tool, args, start: block.start, end: block.end };
   }
   return null;
+}
+
+/**
+ * The `<function=name>` spelling, and it is not a mistake by the model either.
+ *
+ * Llama-3-instruct and several fine-tunes trained on its transcripts write a
+ * call as `<function=search_files><parameter=pattern>…</parameter></function>`.
+ * The `=` inside the tag made this convention invisible to every reader above:
+ * `extractBlock` looks for `<toolname>`, the JSON envelope looks for
+ * `<function>`, and both the invented-tool and the unterminated-attempt regexes
+ * require the tag to end straight after its name. So a model writing this
+ * format produced no call, no problem and no repair — the raw markup fell
+ * through to the user as the whole answer, and the turn ended `finished` around
+ * it. Observed live, twice in one conversation.
+ *
+ * Read like the JSON envelope: a known tool is a call, recovered without a
+ * round trip; an unknown one is a problem the model is told about. A block cut
+ * off before `</function>` is still read — that is what running out of output
+ * tokens looks like, and the parameters that did arrive are all there is.
+ */
+function readFunctionEnvelope(
+  text: string,
+  byName: ReadonlyMap<string, ToolDescriptor>,
+):
+  | { kind: "call"; tool: ToolDescriptor; args: Record<string, unknown>; start: number; end: number }
+  | { kind: "problem"; problem: string; start: number }
+  | null {
+  const open = /<function\s*=\s*["']?([\w.-]+)["']?\s*>/i.exec(text);
+  if (open === null || open[1] === undefined) return null;
+  if (!startsLine(text, open.index)) return null;
+
+  const name = open[1];
+  const bodyStart = open.index + open[0].length;
+  const close = text.indexOf("</function>", bodyStart);
+  const body = close === -1 ? text.slice(bodyStart) : text.slice(bodyStart, close);
+  const end = close === -1 ? text.length : close + "</function>".length;
+
+  const tool = byName.get(name);
+  if (tool === undefined) {
+    return {
+      kind: "problem",
+      problem: `"${name}" is not a tool. Available tools: ${[...byName.keys()].join(", ")}. Use the XML format described above.`,
+      start: open.index,
+    };
+  }
+
+  const schema = tool.parameters as {
+    properties?: Record<string, { type?: string }>;
+    required?: string[];
+  };
+  const args: Record<string, unknown> = {};
+  // A parameter's value runs to its closing tag when it has one, and to the
+  // next parameter or the end of the block when it does not — an unclosed
+  // value is how a cut-off call arrives.
+  for (const match of body.matchAll(
+    /<parameter\s*=\s*["']?([\w.-]+)["']?\s*>([\s\S]*?)(?=<\/parameter>|<parameter\s*=|$)/gi,
+  )) {
+    const key = match[1];
+    if (key === undefined || !(key in (schema.properties ?? {}))) continue;
+    const value = coerce(trimValue(match[2] ?? ""), schema.properties?.[key]?.type);
+    if (value !== undefined && !(key in args)) args[key] = value;
+  }
+
+  const missing = (schema.required ?? []).filter((key) => !(key in args));
+  if (missing.length > 0) {
+    return {
+      kind: "problem",
+      problem:
+        `${tool.name} needs ${missing.map((m) => `<${m}>`).join(", ")}, which ` +
+        `${missing.length === 1 ? "was" : "were"} missing or empty.`,
+      start: open.index,
+    };
+  }
+  return { kind: "call", tool, args, start: open.index, end };
 }
 
 /**
