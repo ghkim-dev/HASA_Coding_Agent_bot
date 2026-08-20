@@ -97,6 +97,11 @@ const KNOWN: ReadonlySet<string> = new Set([
   "turn_contract",
   "source_fact",
   "worker_selected",
+  // The runtime answering for itself — the status fast path. Absent from this
+  // list, it was dropped on every reopen, and a turn the runtime had answered
+  // correctly came back reading as a turn that failed before it could
+  // interpret anything.
+  "runtime_answer",
   "run_completed",
 ]);
 

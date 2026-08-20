@@ -49,7 +49,13 @@ import {
   unroutedEvent,
   type WorkerDecision,
 } from "../../../src/router/routing.ts";
-import { emptyContract, reduceContract, resolveResearchConflicts } from "../../../src/agent/turnContract.ts";
+import {
+  adoptResearchDecision,
+  describeResearchDecision,
+  emptyContract,
+  reduceContract,
+} from "../../../src/agent/turnContract.ts";
+import { prohibitionsIn } from "../../../src/agent/statedProhibitions.ts";
 import {
   barrenTurnChallenge,
   bootstrapHistoryFrom,
@@ -1107,6 +1113,20 @@ export class AgentHost {
       if (priorTurns > 1 && attachments.length === 0 && isStatusQuestion(prompt)) {
         const task = reduceTask(this.recorded, this.conversationId ?? "task");
         const summary = statusAnswerFrom(this.recorded, task);
+        // Said in a field, not inferred later. This path *succeeded* — it read
+        // the record and answered — and without the event every projection had
+        // to guess, with the honest guess also matching a turn that failed
+        // before it could interpret anything.
+        keep([
+          {
+            type: "runtime_answer",
+            id: `${turnId}-runtime`,
+            turnId,
+            at: Date.now(),
+            kind: "status",
+            summary: summary.split("\n")[0] ?? summary,
+          },
+        ]);
         forward({ type: "text", delta: summary });
         forward({ type: "done", reason: "finished", summary });
         this.lastTermination = "finished";
@@ -1143,7 +1163,7 @@ export class AgentHost {
         // And is told so, or the mode prompt's "record the request first"
         // sends it straight back to `record_request` — the duplicate the
         // user watched happen on every follow-up.
-        session.markNextTurnContractRecorded();
+        session.markTurnContractRecorded(turnId);
       }
       // Installed every turn, not only when the session is built. A session
       // reused from a previous turn — or reopened from history, which built one
@@ -1304,25 +1324,24 @@ export class AgentHost {
       ]);
     }
 
-    // A constraint the requirements contradict is not enforced and not shown as
-    // the user's words — a live run rendered a hallucinated no_research as
-    // "하지 말라고 하신 것" over a request that explicitly asked for the web.
-    // The bootstrap already had its correction rounds; whatever survives them
-    // is dropped here, out loud.
-    const resolved = resolveResearchConflicts(guarded.contract, prompt);
-    if (resolved.dropped.length > 0) {
-      this.log.appendLine(
-        `[hasa] dropped self-contradicting constraint(s): ${resolved.dropped.map((c) => c.text).join(", ")}`,
-      );
+    // Whether a research ban the model wrote is the user's or the model's own.
+    // Decided against the user's own sentence and nothing else: the first
+    // version of this read the model's goal too, which let a hallucinated goal
+    // erase a prohibition the user had actually typed. Nothing is deleted —
+    // a ban established as the model's is quarantined, so the record still
+    // shows it was invented. See `adoptResearchDecision`.
+    const resolved = adoptResearchDecision(guarded.contract, { userText: prompt });
+    const researchNote = describeResearchDecision(resolved.decision);
+    if (researchNote !== null) {
+      this.log.appendLine(`[hasa] research ${resolved.decision.verdict}: ${researchNote}`);
       keep([
         {
           type: "notice",
           ...stamp(),
-          level: "warning",
-          text:
-            `요청과 모순되는 제약을 적용하지 않았습니다: ${resolved.dropped.map((c) => `"${c.text}"`).join(", ")}. ` +
-            "요구사항이 웹검색·외부 확인을 명시적으로 요구하고 있어, 사용자가 직접 금지하지 않은 " +
-            "제약으로 이를 막지 않습니다.",
+          // A quarantine is information; an unsettled conflict is a warning,
+          // because the user has to do something about it.
+          level: resolved.decision.verdict === "model_only" ? "info" : "warning",
+          text: researchNote,
         },
       ]);
     }
@@ -1575,10 +1594,19 @@ export class AgentHost {
    * same chain by construction rather than by care.
    */
   private adopt(stored: StoredConversation, what: string): void {
-    this.pendingRestore = stored.messages;
-    if (this.session !== null) this.applyPendingRestore(this.session);
+    // Every field of "which conversation is open" moves before anything reads
+    // any of them.
+    //
+    // `applyPendingRestore` used to run first, and it restores *both* halves —
+    // `session.restore(messages)` from the conversation being opened and
+    // `session.restoreContract(this.recorded)` from the one being left, because
+    // `this.recorded` was still the old chain. So a live session could end up
+    // holding conversation B's messages under conversation A's contract, and
+    // A's constraints would govern B's first turn. The doc comment on this
+    // method claimed the two halves always move together; this makes that true.
     this.conversationId = stored.id;
     this.recorded = [...(stored.events ?? [])];
+    this.pendingRestore = stored.messages;
     this.pendingEvents = [];
     this.pendingDelta = [];
     // Counts turns rather than distinct event `turnId`s: a turn can end with no
@@ -1590,6 +1618,8 @@ export class AgentHost {
     // resumed a week later must resolve `src/a.ts` to the file it meant then,
     // not to whichever folder is in front now.
     this.boundRoot = stored.workspace?.boundRoot ?? null;
+    // Last, so both halves come from the chain now in `this.recorded`.
+    if (this.session !== null) this.applyPendingRestore(this.session);
     this.log.appendLine(
       `[hasa] ${what} ${stored.id} on branch ${stored.activeBranchId ?? "main"} ` +
         `(${stored.turns?.length ?? 0} turns, ${this.recorded.length} events, ` +

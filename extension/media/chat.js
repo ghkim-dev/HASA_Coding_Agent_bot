@@ -1039,7 +1039,8 @@ function renderRequirements(view) {
     const row = document.createElement("div");
     row.className = "reqExtra";
     const enforcedRows = view.constraints.filter((c) => c.enforced);
-    const recordedOnly = view.constraints.filter((c) => !c.enforced);
+    const quarantined = view.constraints.filter((c) => c.quarantined);
+    const recordedOnly = view.constraints.filter((c) => !c.enforced && !c.quarantined);
     if (enforcedRows.length > 0) row.appendChild(chip("하지 말라고 하신 것", "label"));
     for (const constraint of enforcedRows) {
       // `enforced` is not decoration: those kinds are refused by the tool gate
@@ -1056,6 +1057,17 @@ function renderRequirements(view) {
       for (const constraint of recordedOnly) {
         const node = chip(constraint.text, "reqChip");
         node.title = "분류되지 않아 기록만 됩니다. 런타임이 막지 않습니다.";
+        row.appendChild(node);
+      }
+    }
+    if (quarantined.length > 0) {
+      // Not the user's words. The runtime established that the model wrote
+      // this while the request asked for the opposite, so it is shown as the
+      // model's and enforces nothing.
+      row.appendChild(chip("모델이 기록했지만 요청에서 확인되지 않음", "label"));
+      for (const constraint of quarantined) {
+        const node = chip(constraint.text, "reqChip");
+        node.title = "사용자 요청에서 확인되지 않아 강제하지 않습니다.";
         row.appendChild(node);
       }
     }
@@ -1081,7 +1093,10 @@ function renderRequirements(view) {
     for (const issue of view.openIssues) {
       const node = document.createElement("div");
       node.className = "reqIssue";
-      node.textContent = `${issue.summary} — ${issue.detail}`;
+      // The same failure three times is one problem, counted. Three identical
+      // lines read as three problems, which is what the panel showed.
+      const times = issue.count > 1 ? ` (×${issue.count})` : "";
+      node.textContent = `${issue.summary} — ${issue.detail}${times}`;
       row.appendChild(node);
     }
     el.reqExtras.appendChild(row);

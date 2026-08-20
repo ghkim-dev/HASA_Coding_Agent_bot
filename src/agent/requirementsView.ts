@@ -1,6 +1,8 @@
 import { assessCompletion, type RequirementStatus, type TaskState } from "./taskState.ts";
 import { activeRequirements, planCoverage, type TaskContract } from "./turnContract.ts";
 import { taskDisposition, type TaskDisposition } from "./finalClaims.ts";
+import { ENFORCEABLE_KINDS } from "./actionPolicy.ts";
+import { describeIssueDetail } from "./issueText.ts";
 
 /**
  * What the user asked for, and where each of those things has got to.
@@ -51,6 +53,8 @@ export interface RequirementRow {
 }
 
 export interface ConstraintRow {
+  /** Established as the model's own invention. Recorded, never enforced. */
+  quarantined?: true;
   kind: string;
   text: string;
   /** True when the runtime enforces this kind rather than only recording it. */
@@ -77,8 +81,14 @@ export interface RequirementsView {
   changedFiles: string[];
 }
 
-/** Constraint kinds the tool gate actually enforces. See `actionPolicy.ts`. */
-const ENFORCED = new Set(["no_execute", "no_modify", "no_research", "present_only", "must_execute"]);
+/**
+ * Constraint kinds the tool gate actually enforces.
+ *
+ * Imported rather than restated. This list used to include `must_execute`,
+ * which `deniesTool` has no branch for — so the panel promised enforcement the
+ * gate never performed.
+ */
+const ENFORCED = ENFORCEABLE_KINDS;
 
 /**
  * Builds the panel's view of the contract.
@@ -139,18 +149,26 @@ export function requirementsView(
     goal: contract.goal,
     disposition: disposition === "completed" && !settled ? "partial" : disposition,
     requirements: rows,
+    // A quarantined constraint enforces nothing — `allowsTool` skips it — so
+    // the panel must not draw it under "하지 말라고 하신 것" as the user's
+    // words. Three layers agreed it was disarmed and this one still called it
+    // enforced.
     constraints: contract.constraints.map((c) => ({
       kind: c.kind,
       text: c.text,
-      enforced: ENFORCED.has(c.kind),
+      enforced: c.quarantined !== true && ENFORCED.has(c.kind),
+      ...(c.quarantined === true ? { quarantined: true as const } : {}),
     })),
     sources: (task?.sources ?? []).map((s) => ({ url: s.url, status: s.status })),
     steps,
     done: active.filter((r) => r.progress === "done").length,
     total: active.length,
+    // Translated once, here, so the panel and anything else reading this view
+    // say the same thing. The raw detail stays in the record and the log for
+    // diagnosis — see `issueText.ts`.
     openIssues: (verdict?.openIssues ?? []).map((i) => ({
       summary: i.summary,
-      detail: i.detail,
+      detail: describeIssueDetail(i.detail),
       ...((i.count ?? 1) > 1 ? { count: i.count } : {}),
     })),
     changedFiles: task?.changedFiles ?? [],

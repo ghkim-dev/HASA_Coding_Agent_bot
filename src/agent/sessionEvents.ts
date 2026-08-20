@@ -350,6 +350,27 @@ export interface WorkerSelectedEvent extends Base {
   routerVersion: string;
 }
 
+/**
+ * The runtime answered, without asking a model.
+ *
+ * A status question — "진행된 게 있어?" — is answered from the event log by
+ * `statusAnswerFrom`, and that path is a success: it read the record and told
+ * the user what it said. Without an event saying so, every projection had to
+ * infer it, and the honest inference ("a turn with assistant text and no
+ * contract") also matches a turn that failed before it could interpret
+ * anything. So the runtime says what it did, in a field, once.
+ *
+ * `kind` rather than a boolean because there will be more of these: a refusal
+ * the runtime writes, a control-plane failure it reports. Each is the runtime
+ * speaking, and none of them is a model turn that went wrong.
+ */
+export interface RuntimeAnswerEvent extends Base {
+  type: "runtime_answer";
+  kind: "status";
+  /** What was answered, in one line, for a transcript to show. */
+  summary: string;
+}
+
 export interface RunCompletedEvent extends Base {
   type: "run_completed";
   reason: RunTerminationReason;
@@ -371,6 +392,7 @@ export type SessionEvent =
   | NoticeEvent
   | TurnContractEvent
   | WorkerSelectedEvent
+  | RuntimeAnswerEvent
   | RunCompletedEvent;
 
 export type SessionEventType = SessionEvent["type"];

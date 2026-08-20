@@ -854,9 +854,11 @@ describe("continuity across turns", () => {
         },
       },
     ]);
-    session.markNextTurnContractRecorded();
+    session.markTurnContractRecorded("h1");
 
-    await session.send("작업 진행해줘.", never);
+    // The same turn id the contract was recorded under. A marker for one turn
+    // must never authorise another — see `contractRecordedForTurn`.
+    await session.send("작업 진행해줘.", never, [], { turnId: "h1" });
 
     // The *tool result* specifically. The system-prompt note contains similar
     // words, and a regex over the whole conversation matched it even when the

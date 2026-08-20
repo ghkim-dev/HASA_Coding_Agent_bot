@@ -4,7 +4,8 @@ import { reduceTask } from "./taskReducer.ts";
 import type { TaskState } from "./taskState.ts";
 import { taskDisposition } from "./finalClaims.ts";
 import { contractCoverageGaps, executionCounts, stateContradictions, substantiveHolds } from "./continuity.ts";
-import { researchConflicts } from "./turnContract.ts";
+import { decideResearch } from "./turnContract.ts";
+import { prohibitionsIn } from "./statedProhibitions.ts";
 
 /**
  * Where the work stands, derived from the events that already exist.
@@ -368,6 +369,8 @@ function timelineText(
       return { kind: "evidence", text: `파일 변경 — ${event.path}` };
     case "notice":
       return { kind: "notice", text: event.text };
+    case "runtime_answer":
+      return { kind: "interpreted", text: "기록에서 진행 상황을 정리했습니다" };
     case "run_completed":
       return { kind: "terminal", text: terminalText(event.reason) };
     default:
@@ -546,13 +549,17 @@ function stepsOf(input: {
     terminal && state === "in_progress" ? "not_started" : state;
 
   const hasContractHere = input.turnEvents.some((e) => e.type === "turn_contract");
+  // The runtime answered this turn itself, from the record, without a model.
+  // A success with no contract and no worker — see `RuntimeAnswerEvent`.
+  const runtimeAnswered = input.turnEvents.some((e) => e.type === "runtime_answer");
   const userText = input.turnEvents.find((e) => e.type === "user_message")?.text ?? "";
   const activeReqs = activeRequirements(input.contract);
 
-  // Requirements are checked, and checked against the user's own message: a
-  // contract that forbids its own requirements or covers one clause of three
-  // is recorded, but it is not a green light.
-  const conflicted = researchConflicts(input.contract).length > 0;
+  // Unsettled, not merely present. A ban the user actually stated is the
+  // contract working, and drawing it as a warning would tell the user their own
+  // instruction was a problem.
+  const researchVerdict = decideResearch(input.contract, { userText }).verdict;
+  const conflicted = researchVerdict === "needs_clarification" || researchVerdict === "unresolved";
   const gapped =
     userText.length > 0 && contractCoverageGaps(input.contract, userText).length > 0;
 
@@ -566,51 +573,98 @@ function stepsOf(input: {
       e.type === "tool_started",
   );
 
-  // Verification is fresh evidence, not any evidence: a passing run recorded
-  // before the last file change describes a tree that no longer exists.
-  const changedAt = input.task?.lastChangeAt ?? 0;
-  const verified = (input.task?.evidence ?? []).some(
+  // Verification is *this turn's* question.
+  //
+  // It used to read `task`, folded from the whole conversation, while every
+  // other work step read this turn — so a passing test from three turns ago
+  // kept drawing 검증 as done over turns that ran nothing. The task's own
+  // verification still belongs on the task card; this row is about now.
+  //
+  // Fresh, too: a passing run recorded before the last file change describes a
+  // tree that no longer exists.
+  const turnTask = reduceTask(input.turnEvents, "turn");
+  const changedAt = turnTask?.lastChangeAt ?? 0;
+  const verified = (turnTask?.evidence ?? []).some(
     (e) => VERIFYING_EVIDENCE.has(e.kind) && e.status === "passed" && e.at >= changedAt,
   );
 
   const disposition = taskDisposition(input.task, input.terminalReason ?? undefined);
 
-  const interpret: StepState = hasContractHere ? "done" : terminal ? "failed" : "in_progress";
+  const interpret: StepState = hasContractHere
+    ? "done"
+    : runtimeAnswered
+      ? "done"
+      : terminal
+        ? "failed"
+        : "in_progress";
 
-  const requirements: StepState =
-    activeReqs.length === 0
-      ? hasContractHere
-        ? "done" // a continue/question legitimately adds nothing
-        : live("in_progress")
-      : conflicted || gapped
-        ? "warning"
-        : "done";
+  // Only this turn's contract can settle this turn's requirements. Carried
+  // requirements belong to the task card, and reading them here put a green
+  // 요구사항 확인 beside a red 요청 분석 in the same row.
+  const requirements: StepState = runtimeAnswered
+    ? "done"
+    : !hasContractHere
+      ? live("in_progress")
+      : activeReqs.length === 0
+        ? "done" // a continue or question legitimately adds nothing
+        : conflicted || gapped
+          ? "warning"
+          : "done";
 
-  const worker: StepState =
-    input.workerModelId !== null
+  const worker: StepState = runtimeAnswered
+    ? "not_started" // no model was asked, and none was needed
+    : input.workerModelId !== null
       ? "done"
       : input.workerSelectedHere !== undefined
         ? "failed" // an event exists and chose nothing
         : live(hasContractHere ? "in_progress" : "not_started");
 
-  const response: StepState = responded ? "done" : live(input.workerModelId !== null ? "in_progress" : "not_started");
+  const response: StepState = runtimeAnswered
+    ? "not_started"
+    : responded
+      ? "done"
+      : live(input.workerModelId !== null ? "in_progress" : "not_started");
 
   const planStep: StepState = input.hasPlan ? "done" : "not_started";
 
-  const execute: StepState = input.running
-    ? "in_progress"
-    : counts.executed > 0
+  // A call still open when the turn ended never returned. That is not "in
+  // progress" — nothing is progressing — and it is not "not started" either.
+  const execute: StepState =
+    counts.executed > 0
       ? counts.failed >= counts.executed
         ? "failed"
         : "done"
-      : held > 0
-        ? "blocked"
-        : "not_started";
+      : input.running
+        ? terminal
+          ? "failed"
+          : "in_progress"
+        : held > 0
+          ? "blocked"
+          : "not_started";
 
   const verify: StepState = verified ? "done" : "not_started";
 
-  const finish: StepState =
-    disposition === "completed" ? "done" : terminal ? "failed" : "not_started";
+  // Every ending says something different, and collapsing four of them into a
+  // red ✕ contradicted the phase line in the same panel: a blocked turn
+  // reported "막힘" above and "여기서 실패했습니다" below.
+  const finish: StepState = !terminal
+    ? "not_started"
+    : runtimeAnswered
+      ? "done"
+      : disposition === "completed"
+        ? "done"
+        : disposition === "partial"
+          ? "warning"
+          : disposition === "blocked"
+            ? "blocked"
+            : disposition === "aborted"
+              ? "failed"
+              // `active` from a terminal run means the turn ended having
+              // settled nothing. That is not the same as aborting, and drawing
+              // it as a hard failure overstates what the record says.
+              : input.terminalReason === "finished"
+                ? "warning"
+                : "failed";
 
   return [
     { key: "interpret", state: interpret },

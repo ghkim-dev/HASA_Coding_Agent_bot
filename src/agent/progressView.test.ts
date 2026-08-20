@@ -594,3 +594,196 @@ describe("the stepper tells the truth per step", () => {
     assert.equal(stepMap(view)["verify"], "not_started", "the run describes a tree that no longer exists");
   });
 });
+
+describe("this turn's progress is not the whole task's state", () => {
+  // Every work step used to be read from a different scope: actions and the
+  // plan from this turn, verification and requirements from the whole
+  // conversation. So a passing test three turns ago kept drawing 검증 as done
+  // over turns that ran nothing, and carried requirements put a green
+  // 요구사항 확인 beside a red 요청 분석 in the same row.
+
+  function stepMap(view: ReturnType<typeof progressView>): Record<string, string> {
+    const map: Record<string, string> = {};
+    for (const step of view?.steps ?? []) map[step.key] = step.state;
+    return map;
+  }
+
+  /** A finished turn that really did run and pass a test. */
+  function verifiedTurn(turnId: string): SessionEvent[] {
+    return [
+      userMessage("테스트를 실행해줘", turnId),
+      contractEvent(turnId),
+      workerEvent("m1", turnId),
+      started("v1", "pytest -q", turnId),
+      completed("v1", { status: "success", disposition: "executed_success" }, turnId),
+      { type: "run_completed", ...id(turnId), reason: "finished", summary: "통과" } as SessionEvent,
+    ];
+  }
+
+  test("a status-only turn cannot inherit verification from the previous turn", () => {
+    const events: SessionEvent[] = [
+      ...verifiedTurn("t1"),
+      userMessage("진행된 게 있어?", "t2"),
+      { type: "runtime_answer", ...id("t2"), kind: "status", summary: "아직 실행된 작업이 없습니다" } as SessionEvent,
+      { type: "run_completed", ...id("t2"), reason: "finished", summary: "정리했습니다" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["verify"], "not_started", "the previous turn's test drew this turn as verified");
+    assert.equal(steps["execute"], "not_started");
+  });
+
+  test("the status fast path is a success, not a failed interpretation", () => {
+    const events: SessionEvent[] = [
+      ...verifiedTurn("t1"),
+      userMessage("어디까지 했어?", "t2"),
+      { type: "runtime_answer", ...id("t2"), kind: "status", summary: "정리" } as SessionEvent,
+      { type: "run_completed", ...id("t2"), reason: "finished", summary: "정리했습니다" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["interpret"], "done", "a runtime answer drew as a failed interpretation");
+    assert.equal(steps["requirements"], "done");
+    // No model was asked, and none was needed.
+    assert.equal(steps["worker"], "not_started");
+    assert.equal(steps["response"], "not_started");
+    assert.equal(steps["finish"], "done");
+  });
+
+  test("requirements carried from earlier turns do not settle this turn's row", () => {
+    // A turn with no contract of its own — a bootstrap failure. The task still
+    // has requirements from before; this row is about now.
+    const events: SessionEvent[] = [
+      ...verifiedTurn("t1"),
+      userMessage("계속해줘", "t2"),
+      workerEvent("m1", "t2"),
+      { type: "run_completed", ...id("t2"), reason: "error", summary: "" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["interpret"], "failed");
+    assert.notEqual(steps["requirements"], "done", "carried requirements settled a turn that had none");
+  });
+
+  test("verification in this turn counts", () => {
+    const events = verifiedTurn("t1");
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["verify"], "done");
+    assert.equal(steps["execute"], "done");
+  });
+
+  test("a file changed after this turn's test undoes its verification", () => {
+    const events: SessionEvent[] = [
+      ...verifiedTurn("t1").slice(0, -1),
+      { type: "file_changed", ...id("t1"), path: "src/a.ts", change: "modified" } as SessionEvent,
+      { type: "run_completed", ...id("t1"), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["verify"], "not_started");
+  });
+
+  test("a blocked ending is blocked, not a generic failure", () => {
+    const events: SessionEvent[] = [
+      userMessage("데이터를 받아줘", "t1"),
+      contractEvent("t1"),
+      workerEvent("m1", "t1"),
+      { type: "run_completed", ...id("t1"), reason: "blocked", summary: "자격 증명이 없습니다" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["finish"], "blocked");
+  });
+
+  test("a partial ending is a warning, not a failure", () => {
+    // One of two requirements settled by a real observation.
+    const events: SessionEvent[] = [
+      userMessage("두 가지를 해줘", "t1"),
+      contractEvent("t1"),
+      workerEvent("m1", "t1"),
+      { type: "plan", ...id("t1"), steps: ["첫 번째를 실행한다", "두 번째를 실행한다"], current: 1 } as SessionEvent,
+      started("p1", "pytest -q", "t1"),
+      completed("p1", { status: "success", disposition: "executed_success" }, "t1"),
+      { type: "run_completed", ...id("t1"), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 });
+    assert.equal(view?.phase, "partial");
+    assert.equal(stepMap(view)["finish"], "warning", "a partial turn drew as a failure");
+  });
+
+  test("a turn cut off mid-command does not stay running forever", () => {
+    const events: SessionEvent[] = [
+      userMessage("오래 걸리는 걸 실행해줘", "t1"),
+      contractEvent("t1"),
+      workerEvent("m1", "t1"),
+      started("c9", "pytest -q", "t1"),
+      // No completion for c9 — the turn was cut off.
+      { type: "run_completed", ...id("t1"), reason: "aborted", summary: "" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["execute"], "failed", "an abandoned call still read as in progress");
+    for (const step of progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 })?.steps ?? []) {
+      assert.notEqual(step.state, "in_progress", `${step.key} is in progress in an ended turn`);
+    }
+  });
+
+  test("a new task does not inherit the previous task's verified step", () => {
+    const events: SessionEvent[] = [
+      ...verifiedTurn("t1"),
+      userMessage("완전히 다른 작업이야. README를 고쳐줘.", "t2"),
+      contractEvent("t2"),
+      workerEvent("m1", "t2"),
+      { type: "run_completed", ...id("t2"), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const steps = stepMap(progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 }));
+    assert.equal(steps["verify"], "not_started");
+    assert.equal(steps["execute"], "not_started");
+  });
+});
+
+describe("continue and refine keep the task's requirements and reset the turn's row", () => {
+  test("a continue turn's stepper reflects only its own events", () => {
+    // The merge rules are the task's business — a continuation adds nothing and
+    // loses nothing. The stepper is this turn's business, and the two must not
+    // borrow from each other.
+    const first: SessionEvent[] = [
+      userMessage("두 가지를 해줘", "t1"),
+      contractEvent("t1"),
+      workerEvent("m1", "t1"),
+      started("a1", "pytest -q", "t1"),
+      completed("a1", { status: "success", disposition: "executed_success" }, "t1"),
+      { type: "run_completed", ...id("t1"), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const resumed: SessionEvent[] = [
+      ...first,
+      userMessage("이어서 해줘", "t2"),
+      contractEvent("t2"),
+      workerEvent("m1", "t2"),
+      { type: "run_completed", ...id("t2"), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const view = progressView({ events: resumed, contract: contractFrom(ASKED), now: T0 + 90_000 });
+    const steps: Record<string, string> = {};
+    for (const s of view?.steps ?? []) steps[s.key] = s.state;
+
+    // The task still carries what turn 1 asked for…
+    assert.ok((view?.totalRequirementCount ?? 0) > 0);
+    // …and turn 2's own rows show turn 2.
+    assert.equal(steps["execute"], "not_started", "turn 1's action settled turn 2's row");
+    assert.equal(steps["verify"], "not_started", "turn 1's test settled turn 2's row");
+  });
+
+  test("a refine turn that does act shows its own action", () => {
+    const events: SessionEvent[] = [
+      userMessage("먼저 준비해줘", "t1"),
+      contractEvent("t1"),
+      workerEvent("m1", "t1"),
+      { type: "run_completed", ...id("t1"), reason: "finished", summary: "" } as SessionEvent,
+      userMessage("현재 디렉토리에서 해줘", "t2"),
+      contractEvent("t2"),
+      workerEvent("m1", "t2"),
+      started("b1", "pytest -q", "t2"),
+      completed("b1", { status: "success", disposition: "executed_success" }, "t2"),
+      { type: "run_completed", ...id("t2"), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 });
+    const steps: Record<string, string> = {};
+    for (const s of view?.steps ?? []) steps[s.key] = s.state;
+    assert.equal(steps["execute"], "done");
+    assert.equal(steps["verify"], "done");
+  });
+});

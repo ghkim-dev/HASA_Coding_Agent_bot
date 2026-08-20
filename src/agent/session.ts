@@ -14,8 +14,14 @@ import { modeCanWrite, modeDefinition, workspaceNote } from "./modes.ts";
 import { createFileTools } from "./tools/fileTools.ts";
 import { createWebTools, type WebToolOptions } from "./tools/webTools.ts";
 import { createPlanTool } from "./tools/planTool.ts";
-import { createRequestTool } from "./tools/requestTool.ts";
-import { ACTION_DENIED_BY_CONSTRAINT, decideAction, describeContract, describeDeferral } from "./actionPolicy.ts";
+import { createRequestTool, type ContractAdoptionResult } from "./tools/requestTool.ts";
+import {
+  ACTION_DENIED_BY_CONSTRAINT,
+  ENFORCEABLE_KINDS,
+  decideAction,
+  describeContract,
+  describeDeferral,
+} from "./actionPolicy.ts";
 import { guardRelation } from "./continuity.ts";
 import {
   classForbidding,
@@ -24,10 +30,15 @@ import {
   type ProhibitedClass,
 } from "./statedProhibitions.ts";
 import {
+  adoptResearchDecision,
+  decideResearch,
+  describeResearchDecision,
   emptyContract,
   mergeContract,
   reduceContract,
-  resolveResearchConflicts,
+  researchAllowed,
+  type Constraint,
+  type ResearchDecision,
   type TaskContract,
   type TurnContract,
 } from "./turnContract.ts";
@@ -152,6 +163,18 @@ export interface AgentSessionOptions {
   turnOpening?: () => string | null;
 }
 
+/**
+ * The runtime failed to keep its own contract state consistent.
+ *
+ * Machine-readable and distinct from anything the model did: raised when the
+ * host says it adopted a contract for this turn and the folded contract
+ * disagrees. Never an environment blocker and never the model's fault.
+ */
+export const CONTROL_PLANE_CONTRACT_STATE_MISMATCH = "CONTROL_PLANE_CONTRACT_STATE_MISMATCH";
+
+/** The tools that leave the machine. Mirrors `statedProhibitions`' research class. */
+const WEB_TOOLS: ReadonlySet<string> = new Set(["web_search", "web_fetch"]);
+
 /** How many shadow observations a session keeps. Bounded, because it is a cache. */
 const MAX_SHADOW_RECORDS = 50;
 
@@ -223,6 +246,15 @@ export class AgentSession {
    */
   private statedProhibitions: ReadonlySet<ProhibitedClass> = new Set();
   /**
+   * How this turn's research question resolved, recomputed whenever the
+   * contract changes.
+   *
+   * Held rather than recomputed at each gate call so that one turn cannot
+   * answer the same question two ways, and so the reason a web tool was
+   * refused is the reason the user is shown. See `decideResearch`.
+   */
+  private researchDecision: ResearchDecision = { verdict: "none", constraints: [] };
+  /**
    * The pages this session has read, so a fact about one can be checked.
    *
    * Session-scoped rather than turn-scoped: "그 페이지에서 뭘 봤는지 정리해줘"
@@ -237,18 +269,25 @@ export class AgentSession {
   private turnId = "t0";
   private turnOrdinal = 0;
   /**
-   * Whether the next turn's contract was already recorded by the host.
+   * The turn whose contract the host recorded before the worker ran.
    *
-   * The bootstrap pass interprets the request before the worker runs, and the
-   * worker's mode prompt tells it to record the request first. Without this
-   * flag those two are strangers: the worker re-records what the host already
-   * recorded, and the panel shows every follow-up starting with the same
-   * `record_request` it started with last time. One-shot — consumed by the
-   * next `send`.
+   * A turn id, never a boolean. As a boolean it was a one-shot consumed by the
+   * next `send` — and a turn that never reached `send` (a setup timeout, the
+   * user pressing stop) left it set, so the *following* turn consumed a marker
+   * meant for a turn that never ran. That turn was then told its request was
+   * already recorded while the contract governing it belonged to the previous
+   * one: no way to record, and the previous turn's constraints deciding this
+   * turn's actions.
+   *
+   *     a marker for t1 must never authorise t2
+   *
+   * Compared against the running turn id rather than consumed, so an abandoned
+   * marker is inert instead of dangerous, and nothing has to remember to clear
+   * it on every failure path.
    */
-  private nextTurnContractRecorded = false;
-  /** The turn whose contract arrived pre-recorded, while it runs. */
-  private contractRecordedFor: string | null = null;
+  private contractRecordedForTurn: string | null = null;
+  /** Whether this turn already raised the control-plane mismatch. Once per turn. */
+  private mismatchReported = false;
 
   /**
    * Puts back the contract a conversation had, from its events.
@@ -260,6 +299,10 @@ export class AgentSession {
    */
   restoreContract(events: readonly { type: string; contract?: unknown }[]): void {
     this.contract = reduceContract(events);
+    // A marker belongs to the conversation it was made in. Moving this session
+    // onto a different chain retires it rather than leaving it to match a turn
+    // id in the new one by coincidence.
+    this.contractRecordedForTurn = null;
     // Continues past the turns that have been recorded, so a new turn's id does
     // not collide with one already in the contract's history.
     this.turnOrdinal = events.filter((e) => e.type === "turn_contract").length;
@@ -277,8 +320,32 @@ export class AgentSession {
    * from `restoreContract`, which also runs when a conversation is reopened and
    * whose most recent contract belongs to a *past* turn.
    */
-  markNextTurnContractRecorded(): void {
-    this.nextTurnContractRecorded = true;
+  markTurnContractRecorded(turnId: string): void {
+    this.contractRecordedForTurn = turnId;
+  }
+
+  /**
+   * What the runtime actually adopted, for the tool that proposed it.
+   *
+   * `record_request` used to describe the contract it *parsed*, and by the time
+   * that sentence reached the model the relation guard and the research
+   * decision had already changed it — so the tool told the model a constraint
+   * was enforced that the session had just quarantined. This is the adopted
+   * truth, built in one place and read by the tool.
+   */
+  private adoptionResult(): ContractAdoptionResult {
+    const all = this.contract.constraints;
+    return {
+      enforced: all.filter((c) => c.quarantined !== true && ENFORCEABLE_KINDS.has(c.kind)),
+      recordedOnly: all.filter((c) => c.quarantined !== true && !ENFORCEABLE_KINDS.has(c.kind)),
+      quarantined: all.filter((c) => c.quarantined === true),
+      researchNote: describeResearchDecision(this.researchDecision),
+      // Both lines, because the gate consults both. Reporting only the contract
+      // decision told the model the web was open on a turn whose raw-text
+      // prohibition the gate was about to refuse it for.
+      webToolsAllowed:
+        researchAllowed(this.researchDecision) && !this.statedProhibitions.has("research"),
+    };
   }
 
   /**
@@ -290,17 +357,23 @@ export class AgentSession {
    * contract existed, the other said it was missing, and the worker could
    * neither record nor act for the whole turn.
    *
-   * `mismatch` is the impossible state made visible: the host says it adopted
-   * a contract for this turn and the folded contract does not carry this
-   * turn's id. It cannot arise while the host passes its turn id into `send`;
-   * if it ever does, the gate still opens — a contract exists — and the
-   * mismatch is logged as a control-plane failure rather than billed to the
-   * model as a missing contract.
+   * The answer comes from the folded contract alone. The host's marker is a
+   * *detector*, not a second way to be recorded: if the host says it adopted a
+   * contract for this turn and the fold does not carry this turn's id, that is
+   * a control-plane failure, and the safe reading is that this turn has no
+   * contract.
+   *
+   * Failing that way round matters. Reporting `recorded` on a mismatch closed
+   * both doors at once — the gate opened on a contract belonging to another
+   * turn while `record_request` was refused as a duplicate, which is the
+   * original deadlock wearing a different label. Reporting `not recorded`
+   * leaves the escape open: the gate holds substantive actions and the worker
+   * can record the request it is actually being asked about.
    */
   private turnContractState(): { recorded: boolean; mismatch: boolean } {
     const byFold = this.contract.lastTurnId.length > 0 && this.contract.lastTurnId === this.turnId;
-    const byHost = this.contractRecordedFor === this.turnId && this.contractRecordedFor !== null;
-    return { recorded: byHost || byFold, mismatch: byHost && !byFold };
+    const byHost = this.contractRecordedForTurn !== null && this.contractRecordedForTurn === this.turnId;
+    return { recorded: byFold, mismatch: byHost && !byFold };
   }
 
   private constructor(root: string, opts: AgentSessionOptions) {
@@ -478,7 +551,7 @@ export class AgentSession {
         // transcript's "record_request again, plan from step 1 again" loop.
         // Reads the same state the action gate reads — the invariant is that
         // a refusal here and a closed gate can never describe the same turn.
-        alreadyRecorded: () => this.contractRecordedFor === this.turnId,
+        alreadyRecorded: () => this.turnContractState().recorded,
         onContract: (contract) => {
           // The runtime reads the user's words beside the model's relation
           // before anything merges. A follow-up misread as `new_task` replaces
@@ -495,24 +568,29 @@ export class AgentSession {
               reason: guarded.override.reason,
             });
           }
-          // A constraint the requirements contradict is dropped before it can
-          // govern anything — same rule as the host path, same function.
-          const resolved = resolveResearchConflicts(
-            guarded.contract,
-            this.userTurns[this.userTurns.length - 1] ?? "",
-          );
-          if (resolved.dropped.length > 0) {
-            this.log.warn("dropped self-contradicting constraint(s)", {
-              texts: resolved.dropped.map((c) => c.text),
+          // Whether a research ban the model wrote is the user's or the
+          // model's own, decided against the user's sentence and nothing else.
+          // Never deletes: a ban established as the model's is quarantined, so
+          // the record still shows it was invented. See `adoptResearchDecision`.
+          const userText = this.userTurns[this.userTurns.length - 1] ?? "";
+          const adopted = adoptResearchDecision(guarded.contract, { userText });
+          if (adopted.decision.verdict !== "none") {
+            this.log.info("research decision", {
+              verdict: adopted.decision.verdict,
+              constraints: adopted.decision.constraints.map((c) => c.text),
             });
           }
           // Folded in now so the rest of this turn is governed by it, and
           // emitted so the fold can be repeated from the events alone. The two
           // must agree, which they do because they are the same function over
           // the same input — see `reduceContract`.
-          this.contract = mergeContract(this.contract, resolved.contract);
-          this.emit({ type: "contract", contract: resolved.contract });
-          this.opts.onContract?.(resolved.contract);
+          this.contract = mergeContract(this.contract, adopted.contract);
+          this.emit({ type: "contract", contract: adopted.contract });
+          this.opts.onContract?.(adopted.contract);
+          // Recomputed from the merged contract, because a refinement can add a
+          // ban to a task that already had none.
+          this.researchDecision = decideResearch(this.contract, { userText });
+          return this.adoptionResult();
         },
       }),
     ]);
@@ -547,9 +625,9 @@ export class AgentSession {
     // actions. One identity, or two truths.
     this.turnId = opts.turnId ?? `t${this.turnOrdinal++}`;
     this.turnFailures = [];
-    // One-shot: the host marked the *next* turn, and this is it.
-    this.contractRecordedFor = this.nextTurnContractRecorded ? this.turnId : null;
-    this.nextTurnContractRecorded = false;
+    // Nothing to consume: the marker names a turn, and `turnContractState`
+    // asks whether it names *this* one.
+    this.mismatchReported = false;
     // The user's own words, kept for the offline design shadow below. A
     // conversation rather than a message: a correction only means something next
     // to what it corrects.
@@ -562,6 +640,9 @@ export class AgentSession {
     // needs and cannot afford to have transcribed for it. Scoped to this turn —
     // a prohibition stated once does not silently govern the next request.
     this.statedProhibitions = prohibitionsIn(prompt);
+    // Decided once per turn from the contract as it stands and the user's own
+    // sentence. Recomputed if the worker records a contract mid-turn.
+    this.researchDecision = decideResearch(this.contract, { userText: prompt });
 
     for (const source of exactSourcesIn(prompt)) {
       if (!this.namedSources.some((s) => s.url === source.url)) this.namedSources.push(source);
@@ -587,10 +668,10 @@ export class AgentSession {
           runtimeGaps: this.opts.runtimeGaps,
         }) +
         (standing === null ? "" : `\n\n지금까지 확인된 요청:\n${standing}\n`) +
-        (this.contractRecordedFor === null
-          ? ""
-          : "\n이번 턴의 요청은 이미 기록되어 있습니다. record_request를 다시 호출하지 말고, " +
-            "위 요청에서 아직 남아 있는 작업을 이어서 진행하십시오.\n") +
+        (this.turnContractState().recorded
+          ? "\n이번 턴의 요청은 이미 기록되어 있습니다. record_request를 다시 호출하지 말고, " +
+            "위 요청에서 아직 남아 있는 작업을 이어서 진행하십시오.\n"
+          : "") +
         (opening === null ? "" : `\n런타임 기록 (이번 턴 시작 시점):\n${opening}\n`),
     };
     this.messages = [system, ...this.messages.filter((m) => m.role !== "system")];
@@ -653,16 +734,26 @@ export class AgentSession {
       // form the model can act on.
       toolGate: (toolName) => {
         const state = this.turnContractState();
-        if (state.mismatch) {
-          // Not the model's fault and not billed as one. See `turnContractState`.
-          this.log.warn("CONTROL_PLANE_CONTRACT_STATE_MISMATCH", {
+        if (state.mismatch && !this.mismatchReported) {
+          // A runtime failure, raised where the user and the record can see it
+          // rather than left in a log nobody opens. Not billed to the model:
+          // it did nothing wrong, and the no-progress detector must not count
+          // this against it.
+          this.mismatchReported = true;
+          this.log.error(CONTROL_PLANE_CONTRACT_STATE_MISMATCH, {
             turnId: this.turnId,
             contractTurnId: this.contract.lastTurnId,
+            markedFor: this.contractRecordedForTurn,
+          });
+          this.emit({
+            type: "error",
+            code: CONTROL_PLANE_CONTRACT_STATE_MISMATCH,
+            message:
+              "현재 요청과 기존 계약 상태가 일치하지 않아 안전하게 중단했습니다. " +
+              "요청을 다시 보내주시면 처음부터 정리합니다.",
           });
         }
-        const decision = decideAction(this.contract, toolName, this.turnId, {
-          recordedThisTurn: state.recorded,
-        });
+        const decision = decideAction(this.contract, toolName, this.turnId);
         if (decision.decision !== "allow") {
           return describeDeferral(decision, toolName, this.contract);
         }
@@ -681,6 +772,25 @@ export class AgentSession {
         // if it says nothing, the contract still governs and behaviour is
         // unchanged. See `statedProhibitions.ts` for why the patterns require
         // the negation to attach to the verb.
+        // The research question, decided from the user's own words. Refused
+        // here rather than left to the constraint list, because two of the five
+        // verdicts mean "nothing settled this, so nothing goes online" — and a
+        // contract with no constraint at all cannot express that.
+        if (!researchAllowed(this.researchDecision) && WEB_TOOLS.has(toolName)) {
+          const why = describeResearchDecision(this.researchDecision);
+          this.log.info("web tool refused by the research decision", {
+            tool: toolName,
+            verdict: this.researchDecision.verdict,
+          });
+          return (
+            `${ACTION_DENIED_BY_CONSTRAINT}
+` +
+            (why ??
+              "사용자가 웹 검색을 하지 말라고 하셨습니다. 저장소 안에서 확인할 수 있는 " +
+              "방법을 쓰거나, 웹이 꼭 필요하면 그 이유를 먼저 말씀해 주십시오.")
+          );
+        }
+
         const stated = classForbidding(this.statedProhibitions, toolName);
         if (stated !== null) {
           // Worth recording as well as refusing. The runtime saw a prohibition

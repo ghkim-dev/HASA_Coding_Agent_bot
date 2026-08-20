@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { requirementsView } from "./requirementsView.ts";
-import { reduceTask } from "./taskReducer.ts";
+import { reduceTask, resolveIssuesBy } from "./taskReducer.ts";
 import { mergeContract, emptyContract, parseTurnContract } from "./turnContract.ts";
 import type { SessionEvent } from "./sessionEvents.ts";
 import type { TaskContract } from "./turnContract.ts";
@@ -240,5 +240,172 @@ describe("noise the panel must not draw as a restriction", () => {
       contract.constraints.map((c) => c.kind),
       ["no_execute"],
     );
+  });
+});
+
+describe("failures are shown in the user's words, and counted", () => {
+  // The panel used to print `TURN_CONTRACT_REQUIRED: …` verbatim, three times
+  // over, so a user watching their request fail was shown the internal name of
+  // the check that failed it — once per repeat.
+
+  function eventsWithRepeatedRefusal(times: number): SessionEvent[] {
+    const events: SessionEvent[] = [
+      { type: "user_message", id: "e0", turnId: "t1", at: 1, text: "웹에서 찾아줘" },
+      { type: "plan", id: "ep", turnId: "t1", at: 2, steps: ["웹에서 찾는다"], current: 1 },
+    ];
+    for (let i = 0; i < times; i += 1) {
+      events.push({
+        type: "tool_started",
+        id: `s${i}`,
+        turnId: "t1",
+        at: 10 + i * 2,
+        callId: `c${i}`,
+        toolName: "web_search",
+        risk: "read",
+        summary: "웹 검색",
+      });
+      events.push({
+        type: "tool_completed",
+        id: `d${i}`,
+        turnId: "t1",
+        at: 11 + i * 2,
+        callId: `c${i}`,
+        toolName: "web_search",
+        status: "failed",
+        disposition: "executed_failure",
+        detail: "TURN_CONTRACT_REQUIRED: 아직 이번 요청을 record_request로 정리하지 않았습니다.",
+      });
+    }
+    return events;
+  }
+
+  test("an internal protocol code never reaches the panel", () => {
+    const events = eventsWithRepeatedRefusal(1);
+    const view = requirementsView(reduceTask(events), contractFrom({ goal: "웹에서 찾기", relation: "new_task", intents: "research", requirements: "웹에서 찾는다" }));
+    assert.ok(view !== null);
+    for (const issue of view.openIssues) {
+      assert.ok(
+        !issue.detail.includes("TURN_CONTRACT_REQUIRED"),
+        `the raw code reached the panel: ${issue.detail}`,
+      );
+    }
+  });
+
+  test("the same refusal three times is one row with a count", () => {
+    const events = eventsWithRepeatedRefusal(3);
+    const view = requirementsView(reduceTask(events), contractFrom({ goal: "웹에서 찾기", relation: "new_task", intents: "research", requirements: "웹에서 찾는다" }));
+    assert.ok(view !== null);
+    assert.equal(view.openIssues.length, 1, "three copies of one problem");
+    assert.equal(view.openIssues[0]?.count, 3);
+  });
+
+  test("a single occurrence carries no count", () => {
+    const events = eventsWithRepeatedRefusal(1);
+    const view = requirementsView(reduceTask(events), contractFrom({ goal: "웹에서 찾기", relation: "new_task", intents: "research", requirements: "웹에서 찾는다" }));
+    assert.equal(view?.openIssues[0]?.count, undefined);
+  });
+
+  test("a tool's own error is left in the tool's words", () => {
+    const events: SessionEvent[] = [
+      { type: "user_message", id: "e0", turnId: "t1", at: 1, text: "테스트를 돌려줘" },
+      { type: "plan", id: "ep", turnId: "t1", at: 2, steps: ["테스트를 실행한다"], current: 1 },
+      {
+        type: "tool_started",
+        id: "s0",
+        turnId: "t1",
+        at: 3,
+        callId: "c0",
+        toolName: "run_command",
+        risk: "execute",
+        summary: "pytest -q",
+      },
+      {
+        type: "tool_completed",
+        id: "d0",
+        turnId: "t1",
+        at: 4,
+        callId: "c0",
+        toolName: "run_command",
+        status: "failed",
+        disposition: "executed_failure",
+        detail: "ModuleNotFoundError: No module named 'torch'",
+      },
+    ];
+    const view = requirementsView(reduceTask(events), contractFrom({ goal: "테스트", relation: "new_task", intents: "verify", requirements: "테스트를 실행한다" }));
+    assert.match(view?.openIssues[0]?.detail ?? "", /ModuleNotFoundError/);
+  });
+});
+
+describe("a resolved failure leaves the outstanding list", () => {
+  test("a failure that a later success answers is not still shown", () => {
+    const events: SessionEvent[] = [
+      { type: "user_message", id: "r0", turnId: "t1", at: 1, text: "테스트를 고쳐줘" },
+      { type: "plan", id: "rp", turnId: "t1", at: 2, steps: ["테스트를 실행한다"], current: 1 },
+      {
+        type: "tool_started", id: "rs1", turnId: "t1", at: 3,
+        callId: "rc1", toolName: "run_command", risk: "execute", summary: "pytest -q",
+      },
+      {
+        type: "tool_completed", id: "rd1", turnId: "t1", at: 4,
+        callId: "rc1", toolName: "run_command", status: "failed",
+        disposition: "executed_failure", detail: "ModuleNotFoundError: torch",
+      },
+    ];
+    const before = requirementsView(
+      reduceTask(events),
+      contractFrom({ goal: "테스트", relation: "new_task", intents: "verify", requirements: "테스트를 실행한다" }),
+    );
+    assert.equal(before?.openIssues.length, 1, "the failure was not recorded");
+
+    // `resolveIssuesBy` is what closes one, and it needs a passing observation
+    // of the same thing — writing another file does not answer it.
+    const task = reduceTask(events);
+    assert.ok(task !== null);
+    const passing = { id: "ev-ok", kind: "test_result" as const, source: "rc2", status: "passed" as const, observation: "pytest exited 0", at: 9 };
+    resolveIssuesBy(task, passing, (issue) => issue.detail.includes("ModuleNotFoundError"));
+
+    const after = requirementsView(
+      task,
+      contractFrom({ goal: "테스트", relation: "new_task", intents: "verify", requirements: "테스트를 실행한다" }),
+    );
+    assert.equal(after?.openIssues.length, 0, "a resolved failure stayed in the outstanding list");
+  });
+});
+
+describe("a quarantined constraint is never shown as the user's rule", () => {
+  test("the panel marks it unenforced", () => {
+    // `allowsTool` skips a quarantined constraint, so the panel calling it
+    // enforced would tell the user the runtime is honouring a rule it is not —
+    // and one the user never stated.
+    const contract = mergeContract(
+      emptyContract(),
+      {
+        turnId: "t0",
+        relation: "new_task",
+        goal: "웹에서 확인",
+        intents: ["research"],
+        requirements: [],
+        deliverables: [],
+        constraints: [
+          { kind: "no_research", text: "no_research", sourceTurnId: "t0", quarantined: true },
+          { kind: "no_modify", text: "수정하지 마", sourceTurnId: "t0" },
+        ],
+      },
+    );
+    const events: SessionEvent[] = [
+      { type: "user_message", id: "q0", turnId: "t0", at: 1, text: "웹검색해서 확인해줘" },
+      { type: "plan", id: "q1", turnId: "t0", at: 2, steps: ["웹에서 확인한다"], current: 1 },
+    ];
+    const view = requirementsView(reduceTask(events), contract);
+    assert.ok(view !== null);
+
+    const banned = view.constraints.find((c) => c.text === "no_research");
+    assert.equal(banned?.enforced, false, "a quarantined constraint was drawn as enforced");
+    assert.equal(banned?.quarantined, true, "the panel cannot tell it apart from an ordinary one");
+
+    // The real one is untouched.
+    const real = view.constraints.find((c) => c.text === "수정하지 마");
+    assert.equal(real?.enforced, true);
+    assert.equal(real?.quarantined, undefined);
   });
 });
