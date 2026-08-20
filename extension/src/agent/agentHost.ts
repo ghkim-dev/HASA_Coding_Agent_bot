@@ -49,7 +49,7 @@ import {
   unroutedEvent,
   type WorkerDecision,
 } from "../../../src/router/routing.ts";
-import { emptyContract, reduceContract } from "../../../src/agent/turnContract.ts";
+import { emptyContract, reduceContract, resolveResearchConflicts } from "../../../src/agent/turnContract.ts";
 import {
   barrenTurnChallenge,
   bootstrapHistoryFrom,
@@ -1160,7 +1160,11 @@ export class AgentHost {
         return null;
       }
       this.phase("생각하는 중");
-      outcome = await session.send(prompt, controller.signal, attachments);
+      // The host's turn id, so the contract the bootstrap recorded under it is
+      // *this turn's* contract everywhere — the gate, the request tool, the
+      // provenance stamps. Two vocabularies here produced a turn that could
+      // neither record nor act; see AgentSession.send.
+      outcome = await session.send(prompt, controller.signal, attachments, { turnId });
       // Kept for the *next* turn's gate. Within this turn the loop already
       // knows how it is ending; what the gate cannot see from the record alone
       // is that a previous run stopped rather than finished.
@@ -1300,10 +1304,46 @@ export class AgentHost {
       ]);
     }
 
+    // A constraint the requirements contradict is not enforced and not shown as
+    // the user's words — a live run rendered a hallucinated no_research as
+    // "하지 말라고 하신 것" over a request that explicitly asked for the web.
+    // The bootstrap already had its correction rounds; whatever survives them
+    // is dropped here, out loud.
+    const resolved = resolveResearchConflicts(guarded.contract, prompt);
+    if (resolved.dropped.length > 0) {
+      this.log.appendLine(
+        `[hasa] dropped self-contradicting constraint(s): ${resolved.dropped.map((c) => c.text).join(", ")}`,
+      );
+      keep([
+        {
+          type: "notice",
+          ...stamp(),
+          level: "warning",
+          text:
+            `요청과 모순되는 제약을 적용하지 않았습니다: ${resolved.dropped.map((c) => `"${c.text}"`).join(", ")}. ` +
+            "요구사항이 웹검색·외부 확인을 명시적으로 요구하고 있어, 사용자가 직접 금지하지 않은 " +
+            "제약으로 이를 막지 않습니다.",
+        },
+      ]);
+    }
+    if (interpreted.coverageGaps !== undefined && interpreted.coverageGaps.length > 0) {
+      keep([
+        {
+          type: "notice",
+          ...stamp(),
+          level: "warning",
+          text:
+            "다음 요청 절이 요구사항으로 기록되지 않았을 수 있습니다: " +
+            `${interpreted.coverageGaps.map((g) => `"${g}"`).join(", ")}. ` +
+            "빠진 것이 있으면 다음 메시지에서 알려 주세요.",
+        },
+      ]);
+    }
+
     const contractEvent: SessionEvent = {
       type: "turn_contract",
       ...stamp(),
-      contract: guarded.contract,
+      contract: resolved.contract,
     };
 
     const listing = (await this.conversationModels()) ?? (await provider.listModels());
@@ -1322,7 +1362,7 @@ export class AgentHost {
     let decision: WorkerDecision;
     try {
       decision = await decideWorker({
-        turn: guarded.contract,
+        turn: resolved.contract,
         previous,
         currentWorker,
         currentWorkerRestored: restored,

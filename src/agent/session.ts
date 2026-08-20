@@ -27,6 +27,7 @@ import {
   emptyContract,
   mergeContract,
   reduceContract,
+  resolveResearchConflicts,
   type TaskContract,
   type TurnContract,
 } from "./turnContract.ts";
@@ -280,6 +281,28 @@ export class AgentSession {
     this.nextTurnContractRecorded = true;
   }
 
+  /**
+   * The one answer to "has this turn's request been recorded".
+   *
+   * Every consumer — the request tool's duplicate refusal, the action gate,
+   * the system prompt note — reads this and nothing else. Two consumers
+   * computing it separately is the defect a live run exposed: one said the
+   * contract existed, the other said it was missing, and the worker could
+   * neither record nor act for the whole turn.
+   *
+   * `mismatch` is the impossible state made visible: the host says it adopted
+   * a contract for this turn and the folded contract does not carry this
+   * turn's id. It cannot arise while the host passes its turn id into `send`;
+   * if it ever does, the gate still opens — a contract exists — and the
+   * mismatch is logged as a control-plane failure rather than billed to the
+   * model as a missing contract.
+   */
+  private turnContractState(): { recorded: boolean; mismatch: boolean } {
+    const byFold = this.contract.lastTurnId.length > 0 && this.contract.lastTurnId === this.turnId;
+    const byHost = this.contractRecordedFor === this.turnId && this.contractRecordedFor !== null;
+    return { recorded: byHost || byFold, mismatch: byHost && !byFold };
+  }
+
   private constructor(root: string, opts: AgentSessionOptions) {
     this.workspaceRoot = root;
     this.opts = opts;
@@ -453,6 +476,8 @@ export class AgentSession {
         // The host's bootstrap already recorded this turn, when it did. The
         // duplicate the tool refuses here is the visible half of the
         // transcript's "record_request again, plan from step 1 again" loop.
+        // Reads the same state the action gate reads — the invariant is that
+        // a refusal here and a closed gate can never describe the same turn.
         alreadyRecorded: () => this.contractRecordedFor === this.turnId,
         onContract: (contract) => {
           // The runtime reads the user's words beside the model's relation
@@ -470,13 +495,24 @@ export class AgentSession {
               reason: guarded.override.reason,
             });
           }
+          // A constraint the requirements contradict is dropped before it can
+          // govern anything — same rule as the host path, same function.
+          const resolved = resolveResearchConflicts(
+            guarded.contract,
+            this.userTurns[this.userTurns.length - 1] ?? "",
+          );
+          if (resolved.dropped.length > 0) {
+            this.log.warn("dropped self-contradicting constraint(s)", {
+              texts: resolved.dropped.map((c) => c.text),
+            });
+          }
           // Folded in now so the rest of this turn is governed by it, and
           // emitted so the fold can be repeated from the events alone. The two
           // must agree, which they do because they are the same function over
           // the same input — see `reduceContract`.
-          this.contract = mergeContract(this.contract, guarded.contract);
-          this.emit({ type: "contract", contract: guarded.contract });
-          this.opts.onContract?.(guarded.contract);
+          this.contract = mergeContract(this.contract, resolved.contract);
+          this.emit({ type: "contract", contract: resolved.contract });
+          this.opts.onContract?.(resolved.contract);
         },
       }),
     ]);
@@ -494,12 +530,22 @@ export class AgentSession {
     prompt: string,
     signal: AbortSignal = new AbortController().signal,
     attachments: readonly Attachment[] = [],
+    opts: { turnId?: string } = {},
   ): Promise<AgentTurnResult> {
     const definition = modeDefinition(this.mode);
     // Named before the tools are built, so `record_request` stamps what it
     // records with the turn it belongs to rather than with whatever the model
     // supplies. Provenance the model can write is provenance it can get wrong.
-    this.turnId = `t${this.turnOrdinal++}`;
+    //
+    // The caller's id when it has one. This is not cosmetic — it is what makes
+    // the host's bootstrap contract *this turn's* contract. The two used to
+    // speak different vocabularies ("conv-3" against "t3"), and the action gate
+    // compares `contract.lastTurnId` with this exact value: a live run showed a
+    // turn in which record_request was refused as already recorded while every
+    // substantive tool was refused for having no contract — the worker could
+    // neither record nor act, and the run ended NO_PROGRESS with zero executed
+    // actions. One identity, or two truths.
+    this.turnId = opts.turnId ?? `t${this.turnOrdinal++}`;
     this.turnFailures = [];
     // One-shot: the host marked the *next* turn, and this is it.
     this.contractRecordedFor = this.nextTurnContractRecorded ? this.turnId : null;
@@ -606,7 +652,17 @@ export class AgentSession {
       // that lets a call through; the other two hold it back and say why in a
       // form the model can act on.
       toolGate: (toolName) => {
-        const decision = decideAction(this.contract, toolName, this.turnId);
+        const state = this.turnContractState();
+        if (state.mismatch) {
+          // Not the model's fault and not billed as one. See `turnContractState`.
+          this.log.warn("CONTROL_PLANE_CONTRACT_STATE_MISMATCH", {
+            turnId: this.turnId,
+            contractTurnId: this.contract.lastTurnId,
+          });
+        }
+        const decision = decideAction(this.contract, toolName, this.turnId, {
+          recordedThisTurn: state.recorded,
+        });
         if (decision.decision !== "allow") {
           return describeDeferral(decision, toolName, this.contract);
         }

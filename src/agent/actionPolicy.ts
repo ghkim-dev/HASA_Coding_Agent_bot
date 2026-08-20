@@ -207,8 +207,18 @@ export function requiresContract(
   contract: TaskContract,
   toolName: string,
   turnId: string,
+  recordedThisTurn?: boolean,
 ): string | null {
   if (!REQUIRES_CONTRACT.has(toolName)) return null;
+  // The caller's own answer wins when it has one. The session holds the one
+  // canonical "has this turn's request been recorded" — fed by both the
+  // host's bootstrap adoption and the worker's own record_request — and this
+  // check must agree with it. It did not, once: the host recorded a contract
+  // under its turn id, the id comparison below spoke the session's vocabulary,
+  // and the same turn was told "already recorded" by the request tool and
+  // "no contract" by this gate. Neither tool could run and the turn died
+  // NO_PROGRESS with zero actions.
+  if (recordedThisTurn === true) return null;
   // The contract has to be *this* turn's. One recorded three turns ago says
   // nothing about the message just received, and treating it as cover is how a
   // correction gets ignored.
@@ -273,6 +283,7 @@ export function decideAction(
   contract: TaskContract,
   toolName: string,
   turnId: string,
+  opts: { recordedThisTurn?: boolean } = {},
 ): ActionDecision {
   const hard = allowsTool(contract.constraints, toolName);
   if (!hard.allowed) {
@@ -283,7 +294,7 @@ export function decideAction(
     };
   }
 
-  const missing = requiresContract(contract, toolName, turnId);
+  const missing = requiresContract(contract, toolName, turnId, opts.recordedThisTurn);
   if (missing !== null) {
     return { decision: "deny", code: TURN_CONTRACT_REQUIRED, reason: missing };
   }
