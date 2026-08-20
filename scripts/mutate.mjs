@@ -72,6 +72,19 @@ const FILES = [
   // C4.10: contract adoption atomicity and progress truth.
   "src/agent/actionPolicy.ts",
   "src/router/bootstrap.ts",
+  // C4.11: the safety invariant — a model-authored anything may not release a
+  // prohibition the user stated in their own words.
+  //
+  // `extension/src/agent/agentHost.ts` is deliberately absent. The conversation
+  // adoption ordering fixed in this pass lives there, and that module imports
+  // `vscode` — nothing in `node --test` can load it, so a mutation of it would
+  // report "does not bite" for want of a suite rather than for want of a
+  // defence. Reported as an uncovered defence instead of dressed up as a
+  // verified one.
+  "src/agent/statedProhibitions.ts",
+  "src/agent/requirementsView.ts",
+  "src/agent/issueText.ts",
+  "src/agent/sessionLog.ts",
 ];
 
 /**
@@ -108,6 +121,9 @@ const SUITES = {
   contract: ["src/agent/turnContract.test.ts", "src/agent/continuity.test.ts"],
   adoption: ["src/agent/contractAdoption.test.ts"],
   adoptionui: ["src/agent/contractAdoption.test.ts", "src/agent/progressView.test.ts"],
+  safety: ["src/agent/contractAdoption.test.ts", "src/agent/statedProhibitions.test.ts"],
+  prohibit: ["src/agent/statedProhibitions.test.ts", "src/agent/contractAdoption.test.ts"],
+  issues: ["src/agent/requirementsView.test.ts"],
 };
 
 const MUTATIONS = [
@@ -448,27 +464,14 @@ const MUTATIONS = [
     '      task.requirements.push({ id, description, status: "passed", required: true, evidence: [] });',
     "contuiplus"],
   // ---- C4.10: contract adoption atomicity & progress truth -----------------
-  ["M110", "gate 가 canonical 기록 상태를 무시", "src/agent/actionPolicy.ts",
-    "  if (recordedThisTurn === true) return null;", "", "adoption"],
-  ["M111", "session gate 가 자기 id 비교만 사용", "src/agent/session.ts",
-    "          recordedThisTurn: state.recorded,", "          recordedThisTurn: undefined,", "adoption"],
-  ["M112", "host 채택 flag 를 gate 가 무시", "src/agent/session.ts",
-    "    return { recorded: byHost || byFold, mismatch: byHost && !byFold };",
-    "    return { recorded: byFold, mismatch: byHost && !byFold };", "adoption"],
+  // M110/M111 lived here and were retired in C4.11: the gate's
+  // `recordedThisTurn` override became provably identical to its own
+  // `contract.lastTurnId === turnId` comparison, so removing it changed
+  // nothing. A defence a mutation cannot distinguish from its absence is not a
+  // defence, and the parameter went with it.
   ["M113", "호출자의 turn id 를 버리고 자체 id 사용", "src/agent/session.ts",
     "    this.turnId = opts.turnId ?? `t${this.turnOrdinal++}`;",
     "    this.turnId = `t${this.turnOrdinal++}`;", "adoption"],
-  ["M114", "research 모순 탐지 제거", "src/agent/turnContract.ts",
-    "  if (demanded.length === 0) return [];",
-    "  return [];", "adoption"],
-  ["M115", "모순된 제약을 그대로 강제", "src/agent/turnContract.ts",
-    "  if (conflicts.length === 0) return { contract, dropped: [] };",
-    "  return { contract, dropped: [] };", "adoption"],
-  ["M116", "모순 탐지가 사용자 원문을 읽지 않음", "src/agent/turnContract.ts",
-    "    userText,", '    "",', "adoption"],
-  ["M117", "부정문 보호 제거 — 진짜 금지도 모순으로", "src/agent/turnContract.ts",
-    "  return RESEARCH_DEMAND.test(text) && !RESEARCH_NEGATED.test(text);",
-    "  return RESEARCH_DEMAND.test(text);", "adoption"],
   ["M118", "요구 절 커버리지 검사 제거", "src/agent/continuity.ts",
     "  if (clauses.length <= 1) return [];",
     "  return [];", "adoptionui"],
@@ -485,9 +488,6 @@ const MUTATIONS = [
   ["M123", "evidence 0 인데 검증 단계 완료", "src/agent/progressView.ts",
     '  const verify: StepState = verified ? "done" : "not_started";',
     '  const verify: StepState = "done";', "progressui"],
-  ["M124", "terminal outcome 없이 마무리 완료", "src/agent/progressView.ts",
-    '    disposition === "completed" ? "done" : terminal ? "failed" : "not_started";',
-    '    "done";', "progressui"],
   ["M125", "요구사항 단계의 warning 억제", "src/agent/progressView.ts",
     '        ? "warning"', '        ? "done"', "progressui"],
   ["M126", "동일 실패를 매번 새 이슈로", "src/agent/taskReducer.ts",
@@ -498,10 +498,83 @@ const MUTATIONS = [
   ["M128", "이전 턴의 제약이 다음 턴으로 누출", "src/agent/turnContract.ts",
     "    constraints: turn.constraints,",
     "    constraints: [...task.constraints, ...turn.constraints],", "adoption"],
+  // ---- C4.11: a model may not release what the user forbade ---------------
+  ["M129", "사용자 원문 research 2차 방어선 제거", "src/agent/statedProhibitions.ts",
+    '  if (RESEARCH_DIRECT.test(text)) out.add("research");', "", "safety"],
+  ["M130", "research 클래스가 웹 도구를 덮지 않음", "src/agent/statedProhibitions.ts",
+    '  research: ["web_search", "web_fetch"],', "  research: [],", "prohibit"],
+  ["M132", "사용자 금지보다 모델 goal 을 우선", "src/agent/turnContract.ts",
+    "  if (forbids) return { verdict: \"user_forbids\", constraints: banning, forbiddenBy };",
+    "  if (demandMatch !== null) return { verdict: \"model_only\", constraints: banning };", "safety"],
+  ["M133", "제약 인용 근거 검사 제거", "src/agent/turnContract.ts",
+    "  const grounded = banning.some((c) => quotesUser(c.text, opts.userText));",
+    "  const grounded = false;", "safety"],
+  ["M135", "미판정 충돌을 허용으로", "src/agent/turnContract.ts",
+    '  return decision.verdict === "none" || decision.verdict === "model_only";',
+    "  return true;", "safety"],
+  ["M136", "격리 대신 삭제로 되돌림", "src/agent/turnContract.ts",
+    "        quarantine.has(c) ? { ...c, quarantined: true as const } : c,",
+    "        c,", "safety"],
+  ["M137", "게이트가 격리를 무시하고 강제", "src/agent/actionPolicy.ts",
+    "    if (constraint.quarantined === true) continue;", "", "safety"],
+  ["M138", "게이트가 research 결정을 무시", "src/agent/session.ts",
+    "        if (!researchAllowed(this.researchDecision) && WEB_TOOLS.has(toolName)) {",
+    "        if (false) {", "safety"],
+  ["M139", "turnId 일치 검사 제거 — 마커가 아무 턴이나 연다", "src/agent/session.ts",
+    "    const byHost = this.contractRecordedForTurn !== null && this.contractRecordedForTurn === this.turnId;",
+    "    const byHost = this.contractRecordedForTurn !== null;", "adoption"],
+  ["M140", "mismatch 에서 게이트를 연다", "src/agent/session.ts",
+    "    return { recorded: byFold, mismatch: byHost && !byFold };",
+    "    return { recorded: byFold || byHost, mismatch: byHost && !byFold };", "adoption"],
+  ["M141", "대화 이동 시 마커가 살아남음", "src/agent/session.ts",
+    "    this.contractRecordedForTurn = null;", "", "adoption"],
+  ["M143", "requestTool 이 제안 계약을 설명", "src/agent/tools/requestTool.ts",
+    "      const adopted = opts.onContract(parsed.contract) ?? null;",
+    "      const adopted = (opts.onContract(parsed.contract), null);", "safety"],
+  ["M144", "검증 단계를 대화 전체 evidence 로 되돌림", "src/agent/progressView.ts",
+    '  const turnTask = reduceTask(input.turnEvents, "turn");', "  const turnTask = input.task;", "progressui"],
+  ["M145", "runtime 응답을 해석 실패로 표시", "src/agent/progressView.ts",
+    '  const runtimeAnswered = input.turnEvents.some((e) => e.type === "runtime_answer");',
+    "  const runtimeAnswered = false;", "progressui"],
+  ["M146", "blocked/partial 종료를 failed 로 합침", "src/agent/progressView.ts",
+    '        : disposition === "partial"', "        : false", "progressui"],
+  ["M147", "이전 턴 요구사항으로 이번 턴을 완료 처리", "src/agent/progressView.ts",
+    "    : !hasContractHere", "    : false", "progressui"],
+  ["M148", "내부 프로토콜 코드를 그대로 노출", "src/agent/issueText.ts",
+    "  const found = CODES.find((entry) => detail.includes(entry.code));",
+    "  const found = undefined;", "issues"],
+  ["M149", "반복 횟수 표시 제거", "src/agent/requirementsView.ts",
+    "      ...((i.count ?? 1) > 1 ? { count: i.count } : {}),", "", "issues"],
+  // ---- C4.11b: what the adversarial review found in C4.11 -----------------
+  ["M150", "정중한 의문형 금지를 무력화 (절 전체 ? 억제)", "src/agent/statedProhibitions.ts",
+    "const ASKING_WHETHER = \"(?!\\\\s*(?:아야|아도|까)?\\\\s*(?:하나요|할까요|되나요|될까요|한가요|하죠|해요)?\\\\s*[?？])\";",
+    "const ASKING_WHETHER = \"(?![^.!。\\n]*[?？])\";", "prohibit"],
+  ["M151", "명사+말고/대신 금지형 제거", "src/agent/statedProhibitions.ts",
+    "    `${WEB}(?:\\\\s*검색|\\\\s*조사)?(?:도|은|는|을|를|만)?\\\\s*(?:말고|말구|대신(?:에)?)`,", "", "safety"],
+  ["M152", "부정 절 구조 가드 제거 — 금지문이 요구로 읽힘", "src/agent/turnContract.ts",
+    "    if (isNegativeClause(clause)) continue;", "", "safety"],
+  ["M154", "금지 형태(shape) 최후 방어선 제거", "src/agent/turnContract.ts",
+    "  const forbids = stated || grounded || shapedAsBan;",
+    "  const forbids = stated || grounded;", "safety"],
+  ["M155", "격리 표시가 fold 를 넘지 못함", "src/agent/turnContract.ts",
+    '      ...(item["quarantined"] === true ? { quarantined: true as const } : {}),', "", "safety"],
+  ["M156", "격리된 제약을 패널이 강제됨으로 표시", "src/agent/requirementsView.ts",
+    "      enforced: c.quarantined !== true && ENFORCED.has(c.kind),",
+    "      enforced: ENFORCED.has(c.kind),", "issues"],
+  ["M157", "runtime_answer 를 replay 에서 폐기", "src/agent/sessionLog.ts",
+    '  "runtime_answer",', "", "issues"],
+  ["M158", "내부 코드 일부만 치환", "src/agent/issueText.ts",
+    "    text = text.split(entry.code).join(\" \");",
+    "    text = text.replace(entry.code, \" \");", "issues"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
 const EXPECTED_SILENT = new Map([
+  [
+    "M146",
+    "partial 은 termination 이 finished 일 때만 도달 가능한데(taskDisposition), 그 경우 아래 " +
+      "finished 분기도 같은 warning 을 돌려주므로 분기를 지워도 결과가 같다",
+  ],
   ["M17", "종료를 보장하는 것은 attempted 중복 방지이므로 pass 상한을 지워도 동작이 같다"],
   [
     "M86",
