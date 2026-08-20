@@ -219,9 +219,18 @@ function settleSources(task: TaskState, evidence: Evidence | null): void {
 }
 
 function raise(task: TaskState, issue: RuntimeIssue): void {
-  // One issue per failing call. A retry of the same thing raises its own, and
-  // the successful one resolves whichever it can.
   if (task.issues.some((i) => i.id === issue.id)) return;
+  // The same failure again is the same issue, counted — not a new line. A
+  // *resolved* issue that fails again is different: something reopened, and
+  // that deserves its own entry with its own timestamp.
+  const same = task.issues.find(
+    (i) => i.status === "open" && i.summary === issue.summary && i.detail === issue.detail,
+  );
+  if (same !== undefined) {
+    same.count = (same.count ?? 1) + 1;
+    same.at = issue.at;
+    return;
+  }
   task.issues.push(issue);
 }
 

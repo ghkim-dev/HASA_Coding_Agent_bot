@@ -86,6 +86,15 @@ export interface RuntimeIssue {
   status: "open" | "resolved" | "superseded" | "skipped";
   /** The evidence that closed it. Present only when `resolved`. */
   resolvedBy?: string;
+  /**
+   * How many times this exact failure arrived.
+   *
+   * One issue, counted, rather than one per event: a worker that proposed the
+   * same refused call three times produced three identical lines in the
+   * panel's 미해결 오류, and three copies of one sentence read as three
+   * problems. Absent means one.
+   */
+  count?: number;
 }
 
 /**
@@ -412,7 +421,9 @@ export function describeTask(task: TaskState): string {
     // something failed; the error is what a next turn can act on, and
     // resuming from an unresolved failure is the whole point of keeping it.
     lines.push(
-      `미해결 오류: ${verdict.openIssues.map((i) => `${i.summary} — ${i.detail}`).join("; ")}`,
+      `미해결 오류: ${verdict.openIssues
+        .map((i) => `${i.summary} — ${i.detail}${(i.count ?? 1) > 1 ? ` (×${i.count})` : ""}`)
+        .join("; ")}`,
     );
   }
   if (task.changedFiles.length > 0) {

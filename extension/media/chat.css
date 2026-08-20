@@ -590,6 +590,32 @@ footer { position: relative; }
   font-weight: 600;
 }
 
+/* Recorded, but something needs the user's eye — a conflict, a coverage gap. */
+.progStep.warn {
+  opacity: 1;
+  border-color: var(--vscode-charts-yellow, #e2b93d);
+}
+
+.progStep.warn::before {
+  content: "\26a0 ";
+}
+
+/* Proposed and held back by the gate. Not started, and not a failure. */
+.progStep.held {
+  opacity: 1;
+  border-color: var(--vscode-charts-orange, #d18616);
+}
+
+/* This is where it stopped. */
+.progStep.bad {
+  opacity: 1;
+  border-color: var(--vscode-charts-red, #f14c4c);
+}
+
+.progStep.bad::before {
+  content: "\2715 ";
+}
+
 .progNow {
   margin-bottom: 4px;
 }

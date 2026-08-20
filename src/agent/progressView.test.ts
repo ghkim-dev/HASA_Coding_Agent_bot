@@ -492,3 +492,105 @@ describe("contradictions surface in the projection", () => {
     assert.equal(view?.stateContradictionCount, 0);
   });
 });
+
+describe("the stepper tells the truth per step", () => {
+  // The attached screen: a turn whose every substantive proposal was held by
+  // the gate, no plan event, nothing executed, ended NO_PROGRESS — rendered
+  // with 실행, 검증 and 마무리 all green because step states were inferred from
+  // the position of the phase pointer. Each step now carries its own
+  // evidence-backed state, and this fixture is that screen.
+
+  const APPLE =
+    "빨간색 사과와 파란색 사과가 같이 있는 경우 각각을 분할하는 과제(segmentation task)를 학습하는 " +
+    "모델과 추론 성능을 비교해줘. 웹검색을 통해서 확인 이후에 진행해줘. 리포트 형태로 정리해줘.";
+
+  function stepMap(view: ReturnType<typeof progressView>): Record<string, string> {
+    const map: Record<string, string> = {};
+    for (const step of view?.steps ?? []) map[step.key] = step.state;
+    return map;
+  }
+
+  test("nothing executed: 실행·검증·마무리 are anything but done", () => {
+    const events: SessionEvent[] = [
+      userMessage(APPLE),
+      contractEvent(),
+      workerEvent("exaone-4.0-32b"),
+      { type: "assistant_text", ...id(), text: "record_request를 호출하여 요청을 기록하겠습니다." } as SessionEvent,
+      // The gate holding back what the worker proposed — deferred, not run.
+      {
+        type: "tool_started", ...id(), callId: "w1", toolName: "web_search", risk: "read", summary: "웹 검색",
+      } as SessionEvent,
+      {
+        type: "tool_completed", ...id(), callId: "w1", toolName: "web_search", status: "failed",
+        disposition: "deferred", detail: "TURN_CONTRACT_REQUIRED: …",
+      } as SessionEvent,
+      { type: "run_completed", ...id(), reason: "no_progress", summary: "" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 });
+    const steps = stepMap(view);
+
+    assert.equal(steps["interpret"], "done", "a contract exists");
+    assert.equal(steps["worker"], "done", "a worker was chosen");
+    assert.equal(steps["plan"], "not_started", "no plan event, no plan step");
+    assert.equal(steps["execute"], "blocked", "held is not executed");
+    assert.equal(steps["verify"], "not_started");
+    assert.equal(steps["finish"], "failed");
+    // The under-extracted contract over a three-clause message is flagged, not
+    // waved through.
+    assert.equal(steps["requirements"], "warning");
+  });
+
+  test("real work drawn as done only when it happened", () => {
+    const events: SessionEvent[] = [
+      userMessage("테스트를 실행해줘"),
+      contractEvent(),
+      workerEvent("m1"),
+      { type: "plan", ...id(), steps: ["테스트를 실행한다"], current: 1 } as SessionEvent,
+      started("c1", "pytest -q"),
+      completed("c1", { status: "success", disposition: "executed_success" }),
+      { type: "run_completed", ...id(), reason: "finished", summary: "통과했습니다" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 });
+    const steps = stepMap(view);
+    assert.equal(steps["plan"], "done");
+    assert.equal(steps["execute"], "done");
+    assert.equal(steps["verify"], "done", "pytest passed and nothing changed after it");
+  });
+
+  test("an ended turn has nothing in progress", () => {
+    const events: SessionEvent[] = [
+      userMessage("아무거나 해줘"),
+      { type: "run_completed", ...id(), reason: "error", summary: "" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: emptyContract(), now: T0 + 90_000 });
+    for (const step of view?.steps ?? []) {
+      assert.notEqual(step.state, "in_progress", `${step.key} is in progress in an ended turn`);
+    }
+  });
+
+  test("every executed action failing is failed, not done", () => {
+    const events: SessionEvent[] = [
+      userMessage("테스트를 실행해줘"),
+      contractEvent(),
+      workerEvent("m1"),
+      started("c1", "pytest -q"),
+      completed("c1", { status: "failed", disposition: "executed_failure" }),
+      { type: "run_completed", ...id(), reason: "finished", summary: "" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 90_000 });
+    assert.equal(stepMap(view)["execute"], "failed");
+  });
+
+  test("verification does not survive a later edit", () => {
+    const events: SessionEvent[] = [
+      userMessage("테스트를 실행해줘"),
+      contractEvent(),
+      workerEvent("m1"),
+      started("c1", "pytest -q"),
+      completed("c1", { status: "success", disposition: "executed_success" }),
+      { type: "file_changed", ...id(), path: "src/a.ts", change: "modified" } as SessionEvent,
+    ];
+    const view = progressView({ events, contract: contractFrom(ASKED), now: T0 + 60_000 });
+    assert.equal(stepMap(view)["verify"], "not_started", "the run describes a tree that no longer exists");
+  });
+});

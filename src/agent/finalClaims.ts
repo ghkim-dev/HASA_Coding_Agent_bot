@@ -504,7 +504,7 @@ export function safeFallback(
         label: "미해결 오류",
         items: task.issues
           .filter((i) => i.status === "open")
-          .map((i) => `${i.summary} — ${i.detail}`),
+          .map((i) => `${i.summary} — ${i.detail}${(i.count ?? 1) > 1 ? ` (×${i.count})` : ""}`),
       },
       { label: "변경한 파일", items: task.changedFiles },
     );

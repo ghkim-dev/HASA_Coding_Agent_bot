@@ -73,7 +73,7 @@ export interface RequirementsView {
   done: number;
   total: number;
   /** Failures the record still has open, in the words the tool reported them. */
-  openIssues: Array<{ summary: string; detail: string }>;
+  openIssues: Array<{ summary: string; detail: string; count?: number }>;
   changedFiles: string[];
 }
 
@@ -148,7 +148,11 @@ export function requirementsView(
     steps,
     done: active.filter((r) => r.progress === "done").length,
     total: active.length,
-    openIssues: (verdict?.openIssues ?? []).map((i) => ({ summary: i.summary, detail: i.detail })),
+    openIssues: (verdict?.openIssues ?? []).map((i) => ({
+      summary: i.summary,
+      detail: i.detail,
+      ...((i.count ?? 1) > 1 ? { count: i.count } : {}),
+    })),
     changedFiles: task?.changedFiles ?? [],
   };
 }

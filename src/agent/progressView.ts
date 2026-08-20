@@ -3,7 +3,8 @@ import { activeRequirements, type TaskContract } from "./turnContract.ts";
 import { reduceTask } from "./taskReducer.ts";
 import type { TaskState } from "./taskState.ts";
 import { taskDisposition } from "./finalClaims.ts";
-import { stateContradictions } from "./continuity.ts";
+import { contractCoverageGaps, executionCounts, stateContradictions, substantiveHolds } from "./continuity.ts";
+import { researchConflicts } from "./turnContract.ts";
 
 /**
  * Where the work stands, derived from the events that already exist.
@@ -165,6 +166,16 @@ export interface AgentProgress {
    */
   plan: { steps: string[]; claimedCurrent: number; groundedCurrent: number } | null;
   /**
+   * Each step of the stepper, with a state the record can defend.
+   *
+   * The panel used to derive these positionally — every step left of the
+   * current phase drew as done — and a live turn that executed nothing ended
+   * with 실행, 검증 and 마무리 all green over "요구사항 0/1, 변경 파일 0,
+   * NO_PROGRESS". A step is done when its own evidence exists, and for no
+   * other reason.
+   */
+  steps: ProgressStepView[];
+  /**
    * Turn-to-turn reversals in the model's own story, with no evidence between.
    *
    * Counted, never acted on: prose cannot move state in either direction, so a
@@ -176,6 +187,24 @@ export interface AgentProgress {
   timeline: TimelineEntry[];
   /** Newest last. One entry per proposed action. */
   actions: ProgressAction[];
+}
+
+/** What one stepper slot can truthfully claim. */
+export type StepState = "not_started" | "in_progress" | "done" | "warning" | "blocked" | "failed";
+
+export type StepKey =
+  | "interpret"
+  | "requirements"
+  | "worker"
+  | "response"
+  | "plan"
+  | "execute"
+  | "verify"
+  | "finish";
+
+export interface ProgressStepView {
+  key: StepKey;
+  state: StepState;
 }
 
 /**
@@ -437,19 +466,32 @@ export function progressView(input: {
     timeline.push({ id: event.id, at: event.at, kind: line.kind, text: line.text });
   }
 
+  const phase = phaseOf({
+    terminalReason,
+    task,
+    hasContract,
+    workerHere: workerHere !== undefined,
+    workerModelId,
+    hasPlan: plan !== undefined,
+    actionCount: actions.length,
+    running: running !== null,
+    verifying,
+    idleMs,
+  });
+
+  const steps = stepsOf({
+    turnEvents: turn.events,
+    contract: input.contract,
+    task,
+    workerModelId,
+    workerSelectedHere: workerHere,
+    hasPlan: plan !== undefined,
+    running: running !== null,
+    terminalReason,
+  });
+
   return {
-    phase: phaseOf({
-      terminalReason,
-      task,
-      hasContract,
-      workerHere: workerHere !== undefined,
-      workerModelId,
-      hasPlan: plan !== undefined,
-      actionCount: actions.length,
-      running: running !== null,
-      verifying,
-      idleMs,
-    }),
+    phase,
     startedAt,
     lastActivityAt,
     elapsedMs: Math.max(0, input.now - startedAt),
@@ -463,6 +505,7 @@ export function progressView(input: {
     totalRequirementCount,
     verifiedRequirementCount,
     plan: planView,
+    steps,
     stateContradictionCount: stateContradictions(input.events).length,
     terminalReason,
     planAbsence:
@@ -478,6 +521,107 @@ export function progressView(input: {
     timeline,
     actions,
   };
+}
+
+/**
+ * One state per stepper slot, each from its own evidence.
+ *
+ * The rules are deliberately boring — every "done" names the event or
+ * observation that makes it true, and a slot with no evidence stays where it
+ * is. `in_progress` exists only while the turn does: an ended turn has nothing
+ * in progress, whatever it failed to reach.
+ */
+function stepsOf(input: {
+  turnEvents: readonly SessionEvent[];
+  contract: TaskContract;
+  task: TaskState | null;
+  workerModelId: string | null;
+  workerSelectedHere: Extract<SessionEvent, { type: "worker_selected" }> | undefined;
+  hasPlan: boolean;
+  running: boolean;
+  terminalReason: string | null;
+}): ProgressStepView[] {
+  const terminal = input.terminalReason !== null;
+  const live = (state: StepState): StepState =>
+    terminal && state === "in_progress" ? "not_started" : state;
+
+  const hasContractHere = input.turnEvents.some((e) => e.type === "turn_contract");
+  const userText = input.turnEvents.find((e) => e.type === "user_message")?.text ?? "";
+  const activeReqs = activeRequirements(input.contract);
+
+  // Requirements are checked, and checked against the user's own message: a
+  // contract that forbids its own requirements or covers one clause of three
+  // is recorded, but it is not a green light.
+  const conflicted = researchConflicts(input.contract).length > 0;
+  const gapped =
+    userText.length > 0 && contractCoverageGaps(input.contract, userText).length > 0;
+
+  const counts = executionCounts(input.turnEvents);
+  const held = substantiveHolds(input.turnEvents);
+  const responded = input.turnEvents.some(
+    (e) =>
+      e.type === "assistant_text" ||
+      e.type === "reasoning" ||
+      e.type === "plan" ||
+      e.type === "tool_started",
+  );
+
+  // Verification is fresh evidence, not any evidence: a passing run recorded
+  // before the last file change describes a tree that no longer exists.
+  const changedAt = input.task?.lastChangeAt ?? 0;
+  const verified = (input.task?.evidence ?? []).some(
+    (e) => VERIFYING_EVIDENCE.has(e.kind) && e.status === "passed" && e.at >= changedAt,
+  );
+
+  const disposition = taskDisposition(input.task, input.terminalReason ?? undefined);
+
+  const interpret: StepState = hasContractHere ? "done" : terminal ? "failed" : "in_progress";
+
+  const requirements: StepState =
+    activeReqs.length === 0
+      ? hasContractHere
+        ? "done" // a continue/question legitimately adds nothing
+        : live("in_progress")
+      : conflicted || gapped
+        ? "warning"
+        : "done";
+
+  const worker: StepState =
+    input.workerModelId !== null
+      ? "done"
+      : input.workerSelectedHere !== undefined
+        ? "failed" // an event exists and chose nothing
+        : live(hasContractHere ? "in_progress" : "not_started");
+
+  const response: StepState = responded ? "done" : live(input.workerModelId !== null ? "in_progress" : "not_started");
+
+  const planStep: StepState = input.hasPlan ? "done" : "not_started";
+
+  const execute: StepState = input.running
+    ? "in_progress"
+    : counts.executed > 0
+      ? counts.failed >= counts.executed
+        ? "failed"
+        : "done"
+      : held > 0
+        ? "blocked"
+        : "not_started";
+
+  const verify: StepState = verified ? "done" : "not_started";
+
+  const finish: StepState =
+    disposition === "completed" ? "done" : terminal ? "failed" : "not_started";
+
+  return [
+    { key: "interpret", state: interpret },
+    { key: "requirements", state: requirements },
+    { key: "worker", state: worker },
+    { key: "response", state: response },
+    { key: "plan", state: planStep },
+    { key: "execute", state: execute },
+    { key: "verify", state: verify },
+    { key: "finish", state: finish },
+  ];
 }
 
 /** The first step the record has not seen settled, 1-based. */

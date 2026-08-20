@@ -803,31 +803,38 @@ function chip(text, className) {
  * and differ in outcome, which the label says. Nothing here decides anything —
  * `progressView.ts` owns the phase and this file owns where it sits.
  */
-const PHASE_STEPS = [
-  { key: "interpreting", label: "요청 분석" },
-  { key: "contract_ready", label: "요구사항 확인" },
-  { key: "selecting_worker", label: "모델 선택" },
-  { key: "worker_selected", label: "모델 응답" },
-  { key: "planning", label: "계획" },
-  { key: "executing", label: "실행" },
-  { key: "verifying", label: "검증" },
-  { key: "done", label: "마무리" },
-];
+// One label per step key the projection reports. The *states* come from the
+// projection too — each step carries its own evidence-backed state, and this
+// file draws exactly that. It used to infer states from position (everything
+// left of the current phase drew as done), and a live turn that executed
+// nothing ended with 실행·검증·마무리 all green over "변경 파일 0".
+const STEP_LABEL = {
+  interpret: "요청 분석",
+  requirements: "요구사항 확인",
+  worker: "모델 선택",
+  response: "모델 응답",
+  plan: "계획",
+  execute: "실행",
+  verify: "검증",
+  finish: "마무리",
+};
 
-/** Which slot a phase sits in. The endings and `stalled` map to the last one. */
-const PHASE_SLOT = {
-  interpreting: 0,
-  contract_ready: 1,
-  selecting_worker: 2,
-  worker_selected: 3,
-  planning: 4,
-  executing: 5,
-  verifying: 6,
-  completed: 7,
-  partial: 7,
-  blocked: 7,
-  failed: 7,
-  stalled: 7,
+const STEP_STATE_CLASS = {
+  not_started: "todo",
+  in_progress: "now",
+  done: "done",
+  warning: "warn",
+  blocked: "held",
+  failed: "bad",
+};
+
+const STEP_STATE_TITLE = {
+  not_started: "아직 시작되지 않았습니다",
+  in_progress: "진행 중입니다",
+  done: "기록으로 확인되었습니다",
+  warning: "기록은 있지만 확인이 필요합니다",
+  blocked: "실행이 보류되었습니다",
+  failed: "여기서 실패했습니다",
 };
 
 /** Named apart from the reasoning-phase labels above, which are a different set. */
@@ -899,17 +906,16 @@ function renderProgress(progress) {
   }
   el.progress.classList.remove("hidden");
 
-  const slot = PHASE_SLOT[progress.phase] ?? 0;
   const terminal = TERMINAL_PHASES.has(progress.phase);
 
   el.progSteps.textContent = "";
-  PHASE_STEPS.forEach((step, index) => {
+  for (const step of progress.steps ?? []) {
     const node = document.createElement("span");
-    const state = index < slot || (terminal && index === slot) ? "done" : index === slot ? "now" : "todo";
-    node.className = `progStep ${state}`;
-    node.textContent = step.label;
+    node.className = `progStep ${STEP_STATE_CLASS[step.state] ?? "todo"}`;
+    node.textContent = STEP_LABEL[step.key] ?? step.key;
+    node.title = STEP_STATE_TITLE[step.state] ?? "";
     el.progSteps.appendChild(node);
-  });
+  }
 
   // What is happening, and why there is no plan when there is none. An empty
   // "계획이 아직 없습니다" was the whole complaint.
@@ -1032,13 +1038,26 @@ function renderRequirements(view) {
   if (view.constraints.length > 0) {
     const row = document.createElement("div");
     row.className = "reqExtra";
-    row.appendChild(chip("하지 말라고 하신 것", "label"));
-    for (const constraint of view.constraints) {
+    const enforcedRows = view.constraints.filter((c) => c.enforced);
+    const recordedOnly = view.constraints.filter((c) => !c.enforced);
+    if (enforcedRows.length > 0) row.appendChild(chip("하지 말라고 하신 것", "label"));
+    for (const constraint of enforcedRows) {
       // `enforced` is not decoration: those kinds are refused by the tool gate
-      // before anything runs, and the rest are recorded only.
-      const node = chip(constraint.text, `reqChip${constraint.enforced ? " enforced" : ""}`);
-      node.title = constraint.enforced ? "런타임이 실행 전에 막습니다" : "기록만 됩니다";
+      // before anything runs. A constraint the gate does not enforce must not
+      // sit under "하지 말라고 하신 것" — a live run rendered a hallucinated,
+      // unenforced no_research there, telling the user they forbade the very
+      // thing they asked for.
+      const node = chip(constraint.text, "reqChip enforced");
+      node.title = "런타임이 실행 전에 막습니다";
       row.appendChild(node);
+    }
+    if (recordedOnly.length > 0) {
+      row.appendChild(chip("기록만 된 제약 (강제되지 않음)", "label"));
+      for (const constraint of recordedOnly) {
+        const node = chip(constraint.text, "reqChip");
+        node.title = "분류되지 않아 기록만 됩니다. 런타임이 막지 않습니다.";
+        row.appendChild(node);
+      }
     }
     el.reqExtras.appendChild(row);
   }
