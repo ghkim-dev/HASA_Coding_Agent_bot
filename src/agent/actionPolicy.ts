@@ -1,4 +1,4 @@
-import type { Constraint, TaskContract, TurnIntent } from "./turnContract.ts";
+import type { Constraint, ConstraintKind, TaskContract, TurnIntent } from "./turnContract.ts";
 
 /**
  * What this turn is allowed to do, given what was asked.
@@ -46,6 +46,22 @@ const RESEARCHING: ReadonlySet<string> = new Set(["web_search", "web_fetch"]);
  */
 const ALWAYS_ALLOWED: ReadonlySet<string> = new Set(["record_request", "update_plan", "report_blocked"]);
 
+/**
+ * Constraint kinds `deniesTool` can actually act on.
+ *
+ * Exported so nothing computes this twice. The panel used to keep its own copy
+ * and the request tool implied a third, which is how a constraint could be
+ * enforced in one place and described as enforced in another while the gate
+ * ignored it. `other` and `must_execute` are absent on purpose — see
+ * `deniesTool`.
+ */
+export const ENFORCEABLE_KINDS: ReadonlySet<ConstraintKind> = new Set<ConstraintKind>([
+  "no_execute",
+  "no_modify",
+  "no_research",
+  "present_only",
+]);
+
 export interface ToolVerdict {
   allowed: boolean;
   /** Shown to the user and given to the model. Quotes what is being honoured. */
@@ -62,6 +78,11 @@ export function allowsTool(constraints: readonly Constraint[], toolName: string)
   if (ALWAYS_ALLOWED.has(toolName)) return { allowed: true };
 
   for (const constraint of constraints) {
+    // A restriction the runtime established was the model's own invention,
+    // recorded for the history and enforcing nothing. Never inferred here —
+    // only `adoptResearchDecision` sets it, and only against the user's own
+    // words. See `Constraint.quarantined`.
+    if (constraint.quarantined === true) continue;
     const denial = deniesTool(constraint, toolName);
     if (denial !== null) {
       return {
@@ -207,21 +228,19 @@ export function requiresContract(
   contract: TaskContract,
   toolName: string,
   turnId: string,
-  recordedThisTurn?: boolean,
 ): string | null {
   if (!REQUIRES_CONTRACT.has(toolName)) return null;
-  // The caller's own answer wins when it has one. The session holds the one
-  // canonical "has this turn's request been recorded" — fed by both the
-  // host's bootstrap adoption and the worker's own record_request — and this
-  // check must agree with it. It did not, once: the host recorded a contract
-  // under its turn id, the id comparison below spoke the session's vocabulary,
-  // and the same turn was told "already recorded" by the request tool and
-  // "no contract" by this gate. Neither tool could run and the turn died
-  // NO_PROGRESS with zero actions.
-  if (recordedThisTurn === true) return null;
   // The contract has to be *this* turn's. One recorded three turns ago says
   // nothing about the message just received, and treating it as cover is how a
   // correction gets ignored.
+  //
+  // This one comparison is the canonical "has this turn's request been
+  // recorded", and every other consumer derives from the same two values — see
+  // `AgentSession.turnContractState`. It briefly had a `recordedThisTurn`
+  // override beside it, so the session could answer for the gate; that was a
+  // second way to compute one predicate, and the two agreeing was luck rather
+  // than structure. The host now passes its turn id into `send`, so there is
+  // one vocabulary and one comparison.
   if (contract.lastTurnId === turnId) return null;
 
   return (
@@ -283,7 +302,6 @@ export function decideAction(
   contract: TaskContract,
   toolName: string,
   turnId: string,
-  opts: { recordedThisTurn?: boolean } = {},
 ): ActionDecision {
   const hard = allowsTool(contract.constraints, toolName);
   if (!hard.allowed) {
@@ -294,7 +312,7 @@ export function decideAction(
     };
   }
 
-  const missing = requiresContract(contract, toolName, turnId, opts.recordedThisTurn);
+  const missing = requiresContract(contract, toolName, turnId);
   if (missing !== null) {
     return { decision: "deny", code: TURN_CONTRACT_REQUIRED, reason: missing };
   }

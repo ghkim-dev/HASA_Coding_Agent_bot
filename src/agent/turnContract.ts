@@ -1,4 +1,5 @@
 import { argText } from "./argValues.ts";
+import { prohibitionsIn } from "./statedProhibitions.ts";
 /**
  * What the user asked for, fixed into something the runtime owns.
  *
@@ -104,6 +105,19 @@ export interface Constraint {
   /** The user's own words, so a refusal can quote what it is honouring. */
   text: string;
   sourceTurnId: string;
+  /**
+   * Recorded, but not enforced and not the user's words.
+   *
+   * Set when the runtime established that the model wrote this restriction on
+   * its own while the user's message asked for the opposite — see
+   * `adoptResearchDecision`. Kept in the record rather than deleted: the fact
+   * that a model invented a prohibition is evidence, and the panel needs to be
+   * able to show it as the model's rather than as the user's.
+   *
+   * Absent means an ordinary constraint. Nothing infers this; only a decision
+   * made against the user's own text sets it.
+   */
+  quarantined?: true;
 }
 
 /** Where a requirement came from, so the runtime can tell one apart from its own. */
@@ -572,6 +586,12 @@ function readConstraints(value: unknown, turnId: string): Constraint[] {
       kind: (CONSTRAINT_KINDS as readonly string[]).includes(kind as string) ? (kind as ConstraintKind) : "other",
       text,
       sourceTurnId: typeof item["sourceTurnId"] === "string" ? item["sourceTurnId"] : turnId,
+      // Carried through the fold, or the quarantine lasts exactly as long as
+      // the object that set it. `reduceContract` re-reads every contract event
+      // from the record, so a flag this reader dropped was gone by the next
+      // `restoreContract` — and the hallucinated ban the runtime had just
+      // disarmed came back enforced, on the host path, every time.
+      ...(item["quarantined"] === true ? { quarantined: true as const } : {}),
     });
   }
   return out;
@@ -618,99 +638,261 @@ export function unverifiedProvenance(
   );
 }
 
+
 // ---------------------------------------------------------------------------
-// A contract that contradicts itself
+// Who is allowed to say the user forbade something
 // ---------------------------------------------------------------------------
 
 /**
- * A constraint that forbids what the requirements demand.
+ * A contract that forbids what the same turn asks for.
  *
- * From a live run: the user asked for models "Huggingface에서 자주쓰는 모델로다가
- * 웹검색을 통해서 확인" — an explicit, positive research request — and the
- * interpreter recorded a `no_research` beside it. Nobody said it. The panel
- * showed the user a prohibition they never stated, over a requirement they did.
+ * The first version of this deleted the constraint, and that was a worse defect
+ * than the one it fixed. The reasoning went: the user asked for the web, a
+ * `no_research` appeared beside it, so the ban must be the model's invention.
+ * But *both halves are the model's transcription*, and the goal is the half a
+ * model writes most freely. So a hallucinated research goal could erase a
+ * prohibition the user had actually typed — the runtime going online for
+ * someone who had written "웹검색하지 마".
  *
- * When the two collide, the requirement wins. Both claim to be the user's
- * words, but the requirement quotes work the user described and the constraint
- * is a classification the model chose — and a runtime that honours the
- * hallucinated half forbids exactly what it was asked to do.
+ *   A model-authored goal, requirement, constraint or internal state may not
+ *   release a prohibition the user stated in their own words.
+ *
+ * The authority is therefore the user's own message and nothing else, read by
+ * the runtime through `statedProhibitions` — the same deny-only second opinion
+ * the execute and modify classes already use. The model's goal is not consulted
+ * here at all. What the model wrote can only ever be *quarantined*, and only
+ * when the user's own sentence positively asks for the web.
+ *
+ * Five verdicts, because the honest answer is not binary:
+ *
+ *   none                 nothing forbids research; nothing to decide
+ *   user_forbids         the user said so, so it stands whatever the goal claims
+ *   model_only           the user asked for the web and forbade nothing, so the
+ *                        ban is the model's alone and is quarantined
+ *   needs_clarification  the user's own message says both, so nothing runs
+ *   unresolved           the user's message says neither, so fail closed
+ *
+ * Only `none` and `model_only` let a web tool run. Every other verdict keeps
+ * them shut, which is the direction a mistake here has to fail in.
  */
-export interface ResearchConflict {
-  constraint: Constraint;
-  /** The requirement/goal texts that demand what the constraint forbids. */
-  demandedBy: string[];
+export type ResearchVerdict =
+  | "none"
+  | "user_forbids"
+  | "model_only"
+  | "needs_clarification"
+  | "unresolved";
+
+export interface ResearchDecision {
+  verdict: ResearchVerdict;
+  /** The research-banning constraints this decision is about. */
+  constraints: Constraint[];
+  /** Why the runtime believes the user forbade it, when it does. */
+  forbiddenBy?: string;
+  /** The user's own words that ask for the web, when they do. */
+  demandedBy?: string;
 }
 
-/** Words that ask for the web, with the negations that un-ask it. */
+/** Whether a web tool may run under this decision. Deny-biased by construction. */
+export function researchAllowed(decision: ResearchDecision): boolean {
+  return decision.verdict === "none" || decision.verdict === "model_only";
+}
+
+/**
+ * Words that ask for the web.
+ *
+ * Read from the **user's** message only. It used to be read from the model's
+ * goal and requirements as well, which is precisely how a hallucinated goal
+ * came to outrank a real prohibition.
+ */
 const RESEARCH_DEMAND =
-  /웹\s*검색|웹서치|웹에서|인터넷\s*검색|검색을\s*통해|검색해서|검색\s*이후|검색으로\s*확인|hugging\s*face|허깅\s*페이스|web\s*search|온라인에서\s*(?:찾|확인)|조사해/i;
-const RESEARCH_NEGATED = /(?:검색|조사|웹|인터넷|research)[^.!?\n]{0,10}(?:하지\s*마|말고|말\s*것|없이|금지)/i;
+  /웹\s*검색|웹서치|인터넷\s*(?:검색|조사)|(?:웹|인터넷|온라인)에서[^.!?\n]{0,24}?(?:찾|검색|확인|조사|알아)|검색을\s*통해|검색해서\s*확인|검색\s*이후|검색으로\s*확인|hugging\s*face|허깅\s*페이스|web\s*search|search\s+the\s+web|research\s+(?:this\s+)?online|browse\s+the\s+web|look\s+(?:it\s+)?up\s+online/i;
 
-function demandsResearch(text: string): boolean {
-  return RESEARCH_DEMAND.test(text) && !RESEARCH_NEGATED.test(text);
+/**
+ * The user's message, split where a prohibition stops and an instruction starts.
+ *
+ * Sentence ends, and the `-말고` connective that is how Korean joins "do not do
+ * X" to "do Y instead". Without the second split, "웹검색하지 말고 저장소에서
+ * 찾아줘" is one string in which a *demand* pattern matches the word 웹검색
+ * inside the prohibition — which is exactly how a ban came to read as a
+ * request for the thing it banned.
+ */
+function clausesOf(text: string): string[] {
+  return text
+    .split(/(?<=말고)|(?<=[.!?。])\s+|\n+/)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0);
 }
 
-/** A constraint shaped like a research ban — enforced kind or unclassified text. */
+/**
+ * The user's own words asking for the web, if any clause does.
+ *
+ * Per clause, and a clause that forbids research is never also a demand. The
+ * whole-text version of this read "웹검색하지 마" as a request for web search,
+ * because the demand pattern matched the noun inside the prohibition.
+ */
+function demandIn(text: string): string | null {
+  for (const clause of clausesOf(text)) {
+    if (isNegativeClause(clause)) continue;
+    const match = RESEARCH_DEMAND.exec(clause);
+    if (match !== null) return match[0];
+  }
+  return null;
+}
+
+/**
+ * A clause that says *not* to do something, by shape rather than by class.
+ *
+ * The structural half of the guard, and the one that makes a pattern miss safe
+ * again. `demandIn` used to skip a clause only when `prohibitionsIn` recognised
+ * a research ban in it — so any phrasing the patterns missed was not merely
+ * unrecognised, it was read as a *demand for the thing it forbade*: the web
+ * noun sits inside the prohibition, `RESEARCH_DEMAND` matched it, and the
+ * user's own ban became the evidence for quarantining itself.
+ *
+ * These endings are how Korean closes a negative clause, whatever the verb is
+ * and whatever class it belongs to. A clause carrying one is never a request.
+ */
+const NEGATIVE_CLAUSE =
+  /(?:지\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\s*[.!?。]*\s*$|(?:면|서는)\s*안\s*(?:돼|되|된|됩)|(?:without|avoid|instead\s+of|do\s+not|don'?t|never)/i;
+
+function isNegativeClause(clause: string): boolean {
+  return NEGATIVE_CLAUSE.test(clause.trim());
+}
+
+/** Any mention of leaving the machine, for the coarse ban-shape check. */
+const MENTIONS_WEB = /웹|인터넷|온라인|허깅\s*페이스|hugging\s*face|web|internet|online/i;
+
+/** A constraint shaped like a research ban — the enforced kind, or bare text. */
 const RESEARCH_BAN_TEXT = /^no[_\s-]*research$|검색\s*금지|웹\s*금지|조사\s*금지|research\s*금지/i;
 
-function forbidsResearch(constraint: Constraint): boolean {
+export function forbidsResearch(constraint: Constraint): boolean {
   if (constraint.kind === "no_research") return true;
   return constraint.kind === "other" && RESEARCH_BAN_TEXT.test(constraint.text.trim());
 }
 
 /**
- * Where this contract forbids its own requirements.
+ * Whether the user's own message contains this constraint's text.
  *
- * Deterministic on both sides: the demand is read from the goal and the active
- * requirements, the ban from the constraint's kind or its bare text. A demand
- * whose own clause carries a negation — "웹검색 없이 로컬로" — is not a demand,
- * which is what keeps a *real* no_research safe from this check.
+ * The weak check `unverifiedProvenance` already uses for requirements, weak for
+ * the same reason: a model that paraphrases is unhelpful rather than dishonest.
+ * Used only to *raise* confidence that a ban is the user's — never to lower it,
+ * because a paraphrased prohibition is still a prohibition.
  */
-export function researchConflicts(
-  contract: {
-    goal: string;
-    requirements: readonly Requirement[];
-    constraints: readonly Constraint[];
-  },
-  userText = "",
-): ResearchConflict[] {
-  // The user's own message is read too, and it is not redundant: in the live
-  // case the research clause had already been dropped from the requirements —
-  // the goal and the surviving requirement said nothing about the web — so a
-  // contract-only check would have found the hallucinated ban consistent with
-  // the very extraction failure that accompanied it.
-  const demanded = [
-    contract.goal,
-    ...contract.requirements.filter((r) => r.lifecycle === "active").map((r) => r.description),
-    userText,
-  ].filter((text) => text.length > 0 && demandsResearch(text));
-  if (demanded.length === 0) return [];
-
-  return contract.constraints
-    .filter((constraint) => forbidsResearch(constraint))
-    .map((constraint) => ({ constraint, demandedBy: demanded }));
+function quotesUser(constraintText: string, userText: string): boolean {
+  const needle = constraintText.trim().toLowerCase();
+  if (needle.length < 4) return false;
+  return userText.toLowerCase().includes(needle);
 }
 
 /**
- * Removes the constraints the requirements contradict, and says which.
+ * Which way this turn's research question resolves.
  *
- * Never silent: the caller records what was dropped where the user can see it.
- * Dropping is the honest resolution — an unenforced `other` shaped like a ban
- * still *renders* as one, and a rendered prohibition the user never stated is
- * the same lie at a different layer.
+ * `userForbids` is supplied by the caller rather than computed here, so this
+ * module does not depend on `statedProhibitions` and the two cannot drift into
+ * two readings of one sentence. Callers pass
+ * `prohibitionsIn(userText).has("research")`.
  */
-export function resolveResearchConflicts(
+export function decideResearch(
+  contract: { constraints: readonly Constraint[] },
+  opts: { userText: string },
+): ResearchDecision {
+  const banning = contract.constraints.filter((c) => forbidsResearch(c));
+  if (banning.length === 0) return { verdict: "none", constraints: [] };
+
+  // Three independent signals that the ban is the user's, any of which is
+  // enough. A missed pattern must never downgrade a real prohibition, and this
+  // is where that principle was broken: the forbid side read the whole text
+  // while the demand side read clause by clause, so one polite `?` could kill
+  // the forbid signal, leave the demand signal standing, and turn a refusal
+  // into an allow that also filed the user's ban as the model's invention.
+  //
+  // Read per clause, the same way the demand is, so the two cannot disagree
+  // about one sentence.
+  // Whole text, not per clause. The clause-level scan that briefly sat beside
+  // this was provably redundant — `RESEARCH_DIRECT` is unanchored, so a match in
+  // any clause is a match in the whole string — and a defence a mutation cannot
+  // tell from its absence is not a defence. What per-clause reading is actually
+  // for is the *demand* side, where a negative clause must never be read as a
+  // request; that lives in `demandIn`.
+  const stated = prohibitionsIn(opts.userText).has("research");
+  const grounded = banning.some((c) => quotesUser(c.text, opts.userText));
+  // The last resort: the user's message contains a negative clause that names
+  // the web at all. Deliberately coarse — it only ever adds to `forbids`, and
+  // the cost of being wrong is a turn that asks instead of searching.
+  const shapedAsBan = clausesOf(opts.userText).some(
+    (clause) => isNegativeClause(clause) && MENTIONS_WEB.test(clause),
+  );
+  const forbids = stated || grounded || shapedAsBan;
+  const demandMatch = demandIn(opts.userText);
+  const forbiddenBy = stated ? "사용자 원문의 금지 표현" : (banning[0]?.text ?? "");
+
+  if (forbids && demandMatch !== null) {
+    return {
+      verdict: "needs_clarification",
+      constraints: banning,
+      forbiddenBy,
+      demandedBy: demandMatch,
+    };
+  }
+  if (forbids) return { verdict: "user_forbids", constraints: banning, forbiddenBy };
+  if (demandMatch !== null) {
+    return { verdict: "model_only", constraints: banning, demandedBy: demandMatch };
+  }
+  // Neither. The model's contract disagrees with itself and the user's message
+  // cannot settle it, so nothing is deleted and nothing goes online.
+  return { verdict: "unresolved", constraints: banning };
+}
+
+/**
+ * Applies the decision to the contract, without ever deleting a constraint.
+ *
+ * A quarantined constraint stays in the record with `quarantined: true`, so the
+ * tool gate stops enforcing it and the panel stops presenting it as the user's
+ * words — while the history still shows what the model wrote and what became of
+ * it. Deleting it would destroy the evidence that the model invented it, which
+ * is exactly what someone auditing this later needs to see.
+ */
+export function adoptResearchDecision(
   contract: TurnContract,
-  userText = "",
-): {
-  contract: TurnContract;
-  dropped: Constraint[];
-} {
-  const conflicts = researchConflicts(contract, userText);
-  if (conflicts.length === 0) return { contract, dropped: [] };
-  const bad = new Set(conflicts.map((c) => c.constraint));
+  opts: { userText: string },
+): { contract: TurnContract; decision: ResearchDecision } {
+  const decision = decideResearch(contract, opts);
+  if (decision.verdict !== "model_only") return { contract, decision };
+
+  const quarantine = new Set(decision.constraints);
   return {
-    contract: { ...contract, constraints: contract.constraints.filter((c) => !bad.has(c)) },
-    dropped: [...bad],
+    contract: {
+      ...contract,
+      constraints: contract.constraints.map((c) =>
+        quarantine.has(c) ? { ...c, quarantined: true as const } : c,
+      ),
+    },
+    decision,
   };
+}
+
+/** What to tell the user about a research decision. Null when there is nothing to say. */
+export function describeResearchDecision(decision: ResearchDecision): string | null {
+  switch (decision.verdict) {
+    case "none":
+    case "user_forbids":
+      return null;
+    case "model_only":
+      return (
+        `모델이 기록한 제약(${decision.constraints.map((c) => c.text).join(", ")})은 ` +
+        "사용자 원문에서 확인되지 않아 강제하지 않습니다. " +
+        `요청에 "${decision.demandedBy}"이(가) 있어 웹 도구는 사용할 수 있습니다.`
+      );
+    case "needs_clarification":
+      return (
+        "요청 안에서 웹 사용에 대한 지시가 서로 어긋납니다 — " +
+        `금지: ${decision.forbiddenBy}, 요구: "${decision.demandedBy}". ` +
+        "어느 쪽인지 알려주실 때까지 웹 도구를 쓰지 않습니다."
+      );
+    case "unresolved":
+      return (
+        `모델이 기록한 제약(${decision.constraints.map((c) => c.text).join(", ")})이 ` +
+        "요청 내용과 어긋나지만 사용자 원문으로 판정할 수 없어, 안전하게 웹 도구를 쓰지 않습니다."
+      );
+  }
 }

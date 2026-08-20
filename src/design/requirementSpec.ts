@@ -205,11 +205,13 @@ export function executionReadiness(spec: RequirementSpec): ExecutionReadiness {
 const PROHIBITION_SENTENCE: Readonly<Record<ProhibitedClass, RegExp>> = {
   execute: /실행|돌리|구동|run|execute/i,
   modify: /수정|고치|바꾸|변경|건드리|손대|modify|edit|change/i,
+  research: /웹|인터넷|온라인|검색|조사|web|internet|online|search|browse|research/i,
 };
 
 const PROHIBITION_TEXT: Readonly<Record<ProhibitedClass, string>> = {
   execute: "이번 요청에서 명령을 실행하지 않는다",
   modify: "이번 요청에서 파일을 수정하지 않는다",
+  research: "이번 요청에서 웹을 검색하지 않는다",
 };
 
 /** The span of the first sentence matching a pattern, as coordinates. */

@@ -1,5 +1,11 @@
 import type { AgentTool, ToolResult } from "../types.ts";
-import { TURN_INTENTS, TURN_RELATIONS, parseTurnContract, type TurnContract } from "../turnContract.ts";
+import {
+  TURN_INTENTS,
+  TURN_RELATIONS,
+  parseTurnContract,
+  type Constraint,
+  type TurnContract,
+} from "../turnContract.ts";
 
 /**
  * Where the model's reading of the request becomes something binding.
@@ -21,8 +27,30 @@ import { TURN_INTENTS, TURN_RELATIONS, parseTurnContract, type TurnContract } fr
  * `read` risk. It records what was asked; it changes nothing.
  */
 
+/**
+ * What the runtime actually adopted, as opposed to what was proposed.
+ *
+ * The tool used to describe the contract it had just *parsed*, and by the time
+ * that sentence reached the model the relation guard and the research decision
+ * had already changed it — so the model was told "이 제약은 런타임이
+ * 강제합니다" about a constraint the session had quarantined a microsecond
+ * earlier. Adoption returns what it did, and the tool reports that.
+ */
+export interface ContractAdoptionResult {
+  /** Constraints the tool gate will actually refuse calls for. */
+  enforced: Constraint[];
+  /** Recorded and shown, enforcing nothing — `other`, `must_execute`. */
+  recordedOnly: Constraint[];
+  /** Established as the model's own invention. Recorded, never enforced. */
+  quarantined: Constraint[];
+  /** What to say about the research question, when there is anything to say. */
+  researchNote: string | null;
+  /** Whether `web_search`/`web_fetch` may run this turn. */
+  webToolsAllowed: boolean;
+}
+
 export interface RequestToolOptions {
-  onContract: (contract: TurnContract) => void;
+  onContract: (contract: TurnContract) => ContractAdoptionResult | void;
   /** The turn this call belongs to. Supplied by the session, never the model. */
   turnId: () => string;
   /**
@@ -144,26 +172,53 @@ export function createRequestTool(opts: RequestToolOptions): AgentTool {
       }
 
       recordedFor = turn;
-      opts.onContract(parsed.contract);
+      const adopted = opts.onContract(parsed.contract) ?? null;
       const { contract } = parsed;
 
-      // The result names what was recorded and points at the work. An
-      // acknowledgement alone is somewhere a model can stop, which is the
-      // failure `update_plan` was already shaped to avoid.
-      return {
-        ok: true,
-        content: [
-          `기록했습니다. ${contract.requirements.length}개 요구사항, ` +
-            `intent=${contract.intents.join("+")}, relation=${contract.relation}.`,
-          contract.constraints.length === 0
-            ? ""
-            : `제약: ${contract.constraints.map((c) => `${c.kind}(${c.text})`).join(", ")}. ` +
-              "이 제약은 런타임이 강제합니다.",
-          "이제 이 요구사항을 만족시키기 위한 작업을 시작하십시오. 이 호출은 아무것도 바꾸지 않았습니다.",
-        ]
-          .filter((line) => line.length > 0)
-          .join(" "),
-      };
+      // Everything below describes what was *adopted*. When a caller supplies
+      // no adoption result — a test, an embedder — the parsed contract is the
+      // best available account and is reported as proposed rather than as
+      // enforced.
+      const lines = [
+        `기록했습니다. ${contract.requirements.length}개 요구사항, ` +
+          `intent=${contract.intents.join("+")}, relation=${contract.relation}.`,
+      ];
+      if (adopted === null) {
+        if (contract.constraints.length > 0) {
+          lines.push(
+            `기록된 제약: ${contract.constraints.map((c) => `${c.kind}(${c.text})`).join(", ")}.`,
+          );
+        }
+      } else {
+        if (adopted.enforced.length > 0) {
+          lines.push(
+            `런타임이 강제하는 제약: ${adopted.enforced.map((c) => `${c.kind}(${c.text})`).join(", ")}.`,
+          );
+        }
+        if (adopted.recordedOnly.length > 0) {
+          lines.push(
+            `기록만 된 제약(강제되지 않음): ${adopted.recordedOnly.map((c) => c.text).join(", ")}.`,
+          );
+        }
+        if (adopted.quarantined.length > 0) {
+          lines.push(
+            `사용자 원문에서 확인되지 않아 격리된 제약: ${adopted.quarantined
+              .map((c) => c.text)
+              .join(", ")}. 이 제약은 강제되지 않습니다.`,
+          );
+        }
+        if (adopted.researchNote !== null) lines.push(adopted.researchNote);
+        if (!adopted.webToolsAllowed) {
+          lines.push("이번 턴에는 web_search와 web_fetch를 쓸 수 없습니다.");
+        }
+      }
+      // The result points at the work. An acknowledgement alone is somewhere a
+      // model can stop, which is the failure `update_plan` was already shaped
+      // to avoid.
+      lines.push(
+        "이제 이 요구사항을 만족시키기 위한 작업을 시작하십시오. 이 호출은 아무것도 바꾸지 않았습니다.",
+      );
+      return { ok: true, content: lines.join(" ") };
     },
   };
 }

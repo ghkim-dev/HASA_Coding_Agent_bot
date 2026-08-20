@@ -1,4 +1,5 @@
-import { parseTurnContract, researchConflicts, type TurnContract } from "../agent/turnContract.ts";
+import { decideResearch, parseTurnContract, type Constraint, type TurnContract } from "../agent/turnContract.ts";
+import { prohibitionsIn } from "../agent/statedProhibitions.ts";
 import { contractCoverageGaps } from "../agent/continuity.ts";
 import type { AgentModel } from "../agent/types.ts";
 import type { ProviderTool } from "../provider/types.ts";
@@ -316,11 +317,18 @@ export async function interpretRequest(opts: BootstrapOptions): Promise<Bootstra
       // them over one at a time lets the second survive the repair aimed at
       // the first.
       const unclassified = parsed.contract.constraints.filter((c) => c.kind === "other");
-      const conflicts = researchConflicts(parsed.contract, opts.prompt);
+      // Only a ban the *user's* message contradicts is worth a correction
+      // round. A ban the user actually stated is not a mistake, and asking the
+      // model to remove it would be the runtime arguing with the user.
+      const research = decideResearch(parsed.contract, { userText: opts.prompt });
+      const conflicts: Constraint[] =
+        research.verdict === "model_only" || research.verdict === "unresolved"
+          ? research.constraints
+          : [];
       const gaps = contractCoverageGaps(parsed.contract, opts.prompt);
       // A ban the conflict check already condemned is not also "unclassified" —
       // the conflict message says what to do with it.
-      const condemned = new Set(conflicts.map((c) => c.constraint));
+      const condemned = new Set(conflicts);
       const stillUnclassified = unclassified.filter((c) => !condemned.has(c));
 
       const clean = stillUnclassified.length === 0 && conflicts.length === 0 && gaps.length === 0;
@@ -339,13 +347,13 @@ export async function interpretRequest(opts: BootstrapOptions): Promise<Bootstra
             : { unclassified: stillUnclassified.map((c) => c.text) }),
           ...(conflicts.length === 0
             ? {}
-            : { conflicts: conflicts.map((c) => c.constraint.text) }),
+            : { conflicts: conflicts.map((c) => c.text) }),
           ...(gaps.length === 0 ? {} : { coverageGaps: gaps.map((g) => g.clause) }),
         };
       }
 
       const corrections: string[] = [];
-      if (conflicts.length > 0) corrections.push(conflictMessage(conflicts.map((c) => c.constraint.text)));
+      if (conflicts.length > 0) corrections.push(conflictMessage(conflicts.map((c) => c.text)));
       if (gaps.length > 0) corrections.push(coverageMessage(gaps.map((g) => g.clause)));
       if (stillUnclassified.length > 0) {
         corrections.push(unclassifiedMessage(stillUnclassified.map((c) => c.text)));

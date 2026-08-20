@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { classForbidding, prohibitionsIn } from "./statedProhibitions.ts";
+import { classForbidding, describeProhibition, prohibitionsIn } from "./statedProhibitions.ts";
 
 /**
  * The second opinion on what the user forbade.
@@ -132,5 +132,76 @@ describe("조사가 낀 금지도 읽는다", () => {
     assert.deepEqual(forbids("실행을 해서 결과를 보여줘."), []);
     assert.deepEqual(forbids("수정을 해서 버그를 고쳐줘."), []);
     assert.deepEqual(forbids("실행은 했는데 결과가 이상해."), []);
+  });
+});
+
+describe("going to the web, as the user forbids it", () => {
+  // The corpus this class was written against. Every line here is a sentence a
+  // user actually types, and the class only ever denies — a miss leaves the
+  // contract in charge, a false positive refuses work that was asked for.
+  const has = (text: string): boolean => prohibitionsIn(text).has("research");
+
+  const FORBIDS = [
+    "웹검색하지 마.",
+    "웹 검색하지 말아 주세요.",
+    "웹검색은 하지 말고 로컬 코드만 분석해줘.",
+    "인터넷 조사는 하지 마세요.",
+    "웹을 사용하지 말아줘.",
+    "웹 검색 없이 저장소 파일만 확인해줘.",
+    "Hugging Face 관련 내용도 웹에서 찾지 말아줘.",
+    "웹검색하면 안 돼.",
+    "인터넷 검색은 빼줘.",
+    "Do not use web search.",
+    "Don't browse the web.",
+    "Never research this online.",
+    "Without web search, inspect the local files only.",
+    "Avoid web_search and web_fetch.",
+  ];
+
+  const ASKS = [
+    "웹검색해서 최신 모델을 확인해줘.",
+    "인터넷에서 관련 자료를 조사해줘.",
+    "Hugging Face에서 현재 사용할 수 있는 모델을 찾아줘.",
+    "Search the web for the latest documentation.",
+    "Research this online and cite the sources.",
+  ];
+
+  // Reports, questions and history. None of these instructs anything.
+  const NEITHER = [
+    "웹검색하지 못했습니다.",
+    "이전 에이전트가 웹검색을 사용하지 않았습니다.",
+    "웹검색을 하지 말아야 하나요?",
+    "웹검색 결과가 없었습니다.",
+    "The previous run did not use web search.",
+    "Why didn't the agent browse the web?",
+  ];
+
+  for (const text of FORBIDS) {
+    test(`forbids: ${text}`, () => {
+      assert.equal(has(text), true);
+    });
+  }
+  for (const text of ASKS) {
+    test(`asks for it: ${text}`, () => {
+      assert.equal(has(text), false, "a request for the web read as a prohibition");
+    });
+  }
+  for (const text of NEITHER) {
+    test(`instructs nothing: ${text}`, () => {
+      assert.equal(has(text), false, "a report or question read as a prohibition");
+    });
+  }
+
+  test("only the web tools, so a local search stays available", () => {
+    const found = prohibitionsIn("웹검색하지 말고 저장소 안에서 search_files로 찾아줘.");
+    assert.equal(classForbidding(found, "web_search"), "research");
+    assert.equal(classForbidding(found, "web_fetch"), "research");
+    assert.equal(classForbidding(found, "search_files"), null);
+    assert.equal(classForbidding(found, "read_file"), null);
+    assert.equal(classForbidding(found, "run_command"), null);
+  });
+
+  test("the refusal names what it is honouring", () => {
+    assert.match(describeProhibition("research", "web_search"), /웹 검색/);
   });
 });
