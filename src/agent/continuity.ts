@@ -537,3 +537,80 @@ export function stateContradictions(events: readonly SessionEvent[]): StateContr
   }
   return found;
 }
+
+// ---------------------------------------------------------------------------
+// What the message asked for, clause by clause
+// ---------------------------------------------------------------------------
+
+/**
+ * The request clauses of a message — each imperative the user actually wrote.
+ *
+ * The live run this serves recorded *one* requirement out of a message that
+ * ended three separate clauses with 해줘: segmentation training, web-checked
+ * model selection, and a final report. The runtime cannot read Korean well
+ * enough to write the requirements itself — that stays the interpreter's job —
+ * but it can count where the user said "do this", and three do-this clauses
+ * against one recorded requirement is a gap worth challenging.
+ */
+const IMPERATIVE_CLAUSE =
+  /[^.!?\n]*?(?:해\s*줘|해\s*주세요|해주세요|하십시오|해\s*봐|해라|해\s*달라|해\s*다오|부탁해|부탁드립니다|바랍니다|주세요)[.!?]?/gu;
+
+export function requestClauses(text: string): string[] {
+  const clauses: string[] = [];
+  for (const match of text.matchAll(IMPERATIVE_CLAUSE)) {
+    const clause = match[0].trim().replace(/[.!?]+$/u, "");
+    if (clause.length >= 6) clauses.push(clause);
+  }
+  return clauses;
+}
+
+/** A request clause no recorded requirement appears to answer. */
+export interface CoverageGap {
+  clause: string;
+}
+
+/**
+ * Clauses the contract does not cover.
+ *
+ * Matching is the same loose word-overlap `planCoverage` uses, and errs the
+ * same way on purpose: a false gap costs one correction round in which the
+ * model re-affirms what it recorded; a false "covered" is a requirement lost
+ * without anyone being asked. Two shared stems are required rather than one,
+ * because one Korean stem in common — 학습 — is how "리포트로 정리해줘" read as
+ * covered by a training requirement.
+ */
+export function contractCoverageGaps(
+  contract: { requirements: readonly { description: string; lifecycle: string }[] },
+  userText: string,
+): CoverageGap[] {
+  const clauses = requestClauses(userText);
+  if (clauses.length <= 1) return [];
+
+  const requirementWords = contract.requirements
+    .filter((r) => r.lifecycle === "active")
+    .map((r) => significantWords(r.description));
+
+  const gaps: CoverageGap[] = [];
+  for (const clause of clauses) {
+    const words = significantWords(clause);
+    if (words.length === 0) continue;
+    const covered = requirementWords.some((set) => {
+      const hits = words.filter((word) =>
+        set.some((w) => w === word || w.startsWith(word) || word.startsWith(w)),
+      ).length;
+      return hits >= 2;
+    });
+    if (!covered) gaps.push({ clause });
+  }
+  return gaps;
+}
+
+/** Proposed actions the gate held back this turn — deferred or denied, substantive only. */
+export function substantiveHolds(events: readonly SessionEvent[]): number {
+  let held = 0;
+  for (const event of events) {
+    if (event.type !== "tool_completed" || DECLARATIVE_TOOLS.has(event.toolName)) continue;
+    if (event.disposition === "deferred" || event.disposition === "denied") held += 1;
+  }
+  return held;
+}

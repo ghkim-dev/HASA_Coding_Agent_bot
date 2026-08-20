@@ -617,3 +617,100 @@ export function unverifiedProvenance(
       !haystack.includes(r.provenance.sourceText.toLowerCase().trim()),
   );
 }
+
+// ---------------------------------------------------------------------------
+// A contract that contradicts itself
+// ---------------------------------------------------------------------------
+
+/**
+ * A constraint that forbids what the requirements demand.
+ *
+ * From a live run: the user asked for models "Huggingface에서 자주쓰는 모델로다가
+ * 웹검색을 통해서 확인" — an explicit, positive research request — and the
+ * interpreter recorded a `no_research` beside it. Nobody said it. The panel
+ * showed the user a prohibition they never stated, over a requirement they did.
+ *
+ * When the two collide, the requirement wins. Both claim to be the user's
+ * words, but the requirement quotes work the user described and the constraint
+ * is a classification the model chose — and a runtime that honours the
+ * hallucinated half forbids exactly what it was asked to do.
+ */
+export interface ResearchConflict {
+  constraint: Constraint;
+  /** The requirement/goal texts that demand what the constraint forbids. */
+  demandedBy: string[];
+}
+
+/** Words that ask for the web, with the negations that un-ask it. */
+const RESEARCH_DEMAND =
+  /웹\s*검색|웹서치|웹에서|인터넷\s*검색|검색을\s*통해|검색해서|검색\s*이후|검색으로\s*확인|hugging\s*face|허깅\s*페이스|web\s*search|온라인에서\s*(?:찾|확인)|조사해/i;
+const RESEARCH_NEGATED = /(?:검색|조사|웹|인터넷|research)[^.!?\n]{0,10}(?:하지\s*마|말고|말\s*것|없이|금지)/i;
+
+function demandsResearch(text: string): boolean {
+  return RESEARCH_DEMAND.test(text) && !RESEARCH_NEGATED.test(text);
+}
+
+/** A constraint shaped like a research ban — enforced kind or unclassified text. */
+const RESEARCH_BAN_TEXT = /^no[_\s-]*research$|검색\s*금지|웹\s*금지|조사\s*금지|research\s*금지/i;
+
+function forbidsResearch(constraint: Constraint): boolean {
+  if (constraint.kind === "no_research") return true;
+  return constraint.kind === "other" && RESEARCH_BAN_TEXT.test(constraint.text.trim());
+}
+
+/**
+ * Where this contract forbids its own requirements.
+ *
+ * Deterministic on both sides: the demand is read from the goal and the active
+ * requirements, the ban from the constraint's kind or its bare text. A demand
+ * whose own clause carries a negation — "웹검색 없이 로컬로" — is not a demand,
+ * which is what keeps a *real* no_research safe from this check.
+ */
+export function researchConflicts(
+  contract: {
+    goal: string;
+    requirements: readonly Requirement[];
+    constraints: readonly Constraint[];
+  },
+  userText = "",
+): ResearchConflict[] {
+  // The user's own message is read too, and it is not redundant: in the live
+  // case the research clause had already been dropped from the requirements —
+  // the goal and the surviving requirement said nothing about the web — so a
+  // contract-only check would have found the hallucinated ban consistent with
+  // the very extraction failure that accompanied it.
+  const demanded = [
+    contract.goal,
+    ...contract.requirements.filter((r) => r.lifecycle === "active").map((r) => r.description),
+    userText,
+  ].filter((text) => text.length > 0 && demandsResearch(text));
+  if (demanded.length === 0) return [];
+
+  return contract.constraints
+    .filter((constraint) => forbidsResearch(constraint))
+    .map((constraint) => ({ constraint, demandedBy: demanded }));
+}
+
+/**
+ * Removes the constraints the requirements contradict, and says which.
+ *
+ * Never silent: the caller records what was dropped where the user can see it.
+ * Dropping is the honest resolution — an unenforced `other` shaped like a ban
+ * still *renders* as one, and a rendered prohibition the user never stated is
+ * the same lie at a different layer.
+ */
+export function resolveResearchConflicts(
+  contract: TurnContract,
+  userText = "",
+): {
+  contract: TurnContract;
+  dropped: Constraint[];
+} {
+  const conflicts = researchConflicts(contract, userText);
+  if (conflicts.length === 0) return { contract, dropped: [] };
+  const bad = new Set(conflicts.map((c) => c.constraint));
+  return {
+    contract: { ...contract, constraints: contract.constraints.filter((c) => !bad.has(c)) },
+    dropped: [...bad],
+  };
+}

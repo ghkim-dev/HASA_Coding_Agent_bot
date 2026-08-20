@@ -1,4 +1,5 @@
-import { parseTurnContract, type TurnContract } from "../agent/turnContract.ts";
+import { parseTurnContract, researchConflicts, type TurnContract } from "../agent/turnContract.ts";
+import { contractCoverageGaps } from "../agent/continuity.ts";
 import type { AgentModel } from "../agent/types.ts";
 import type { ProviderTool } from "../provider/types.ts";
 
@@ -76,6 +77,34 @@ export interface BootstrapSuccess {
   constraintCoverage: ConstraintCoverage;
   /** The restrictions still classified `other`, for the caller to report. */
   unclassified?: string[];
+  /**
+   * Constraints that forbid what the requirements demand, still present after
+   * correction. The caller resolves them — see `resolveResearchConflicts` —
+   * and says so where the user can see it. Never silently enforced.
+   */
+  conflicts?: string[];
+  /** Request clauses no requirement covers, still open after correction. */
+  coverageGaps?: string[];
+}
+
+/** What the interpreter is told when its contract contradicts itself. */
+function conflictMessage(conflicts: readonly string[]): string {
+  return [
+    `CONTRACT_CONFLICT_WEB_RESEARCH: 요구사항·목표는 웹검색/외부 확인을 명시적으로 요구하는데,`,
+    `이를 금지하는 제약을 함께 기록했습니다: ${conflicts.map((t) => `"${t}"`).join(", ")}.`,
+    "사용자가 실제로 금지한 문장이 없으면 그 제약을 빼고 record_request를 다시 보내십시오.",
+    "실제로 금지했다면 사용자의 그 문장을 제약 text에 그대로 인용하십시오.",
+  ].join(" ");
+}
+
+/** What the interpreter is told when it recorded fewer asks than the user made. */
+function coverageMessage(gaps: readonly string[]): string {
+  return [
+    `REQUIREMENT_COVERAGE_GAP: 사용자의 메시지에는 다음 요구 절이 있는데, requirements에`,
+    `대응하는 항목이 보이지 않습니다: ${gaps.map((g) => `"${g}"`).join(", ")}.`,
+    "각 절이 요구하는 것을 requirements에 한 줄씩 추가해 record_request를 다시 보내십시오.",
+    "이미 기록한 항목이 그 절을 담고 있다면 같은 내용을 그대로 다시 보내도 됩니다.",
+  ].join(" ");
 }
 
 /** What the interpreter is told when it left a restriction unclassified. */
@@ -279,29 +308,49 @@ export async function interpretRequest(opts: BootstrapOptions): Promise<Bootstra
     // The user's turn id, not the interpreter's. See the header.
     const parsed = parseTurnContract(args, opts.turnId);
     if (parsed.ok) {
+      // Three ways a *valid* contract can still be wrong, each found live:
+      // a restriction left unclassified enforces nothing; a constraint that
+      // forbids what the requirements demand was hallucinated by somebody; and
+      // a message with three 해줘-clauses recorded as one requirement has
+      // quietly dropped two of them. All are named in one message — handing
+      // them over one at a time lets the second survive the repair aimed at
+      // the first.
       const unclassified = parsed.contract.constraints.filter((c) => c.kind === "other");
-      if (unclassified.length === 0 || attempt === attempts) {
-        // Out of attempts with something still unclassified: the contract is
-        // returned, and `constraintCoverage` says it is incomplete rather than
-        // the caller discovering it from an `other` that enforces nothing.
+      const conflicts = researchConflicts(parsed.contract, opts.prompt);
+      const gaps = contractCoverageGaps(parsed.contract, opts.prompt);
+      // A ban the conflict check already condemned is not also "unclassified" —
+      // the conflict message says what to do with it.
+      const condemned = new Set(conflicts.map((c) => c.constraint));
+      const stillUnclassified = unclassified.filter((c) => !condemned.has(c));
+
+      const clean = stillUnclassified.length === 0 && conflicts.length === 0 && gaps.length === 0;
+      if (clean || attempt === attempts) {
+        // Out of attempts with something still open: the contract is returned,
+        // and each flag says what is incomplete rather than the caller
+        // discovering it from behaviour.
         return {
           ok: true,
           contract: parsed.contract,
           bootstrapModelId: modelId,
           attempts: attempt,
-          constraintCoverage: unclassified.length === 0 ? "complete" : "unclassified_remain",
-          ...(unclassified.length === 0 ? {} : { unclassified: unclassified.map((c) => c.text) }),
+          constraintCoverage: stillUnclassified.length === 0 ? "complete" : "unclassified_remain",
+          ...(stillUnclassified.length === 0
+            ? {}
+            : { unclassified: stillUnclassified.map((c) => c.text) }),
+          ...(conflicts.length === 0
+            ? {}
+            : { conflicts: conflicts.map((c) => c.constraint.text) }),
+          ...(gaps.length === 0 ? {} : { coverageGaps: gaps.map((g) => g.clause) }),
         };
       }
 
-      // A bounded correction, and the only one. `other` means the model wrote
-      // down a restriction and did not say what kind it is — and an
-      // unclassified constraint enforces nothing, so "the text is there" is not
-      // the same as "the constraint is in force". Asking is not a parser: the
-      // model already did the interpreting, and this asks it to finish.
-      //
-      // Only the final contract is returned, so the turn still records one.
-      lastProblem = unclassifiedMessage(unclassified.map((c) => c.text));
+      const corrections: string[] = [];
+      if (conflicts.length > 0) corrections.push(conflictMessage(conflicts.map((c) => c.constraint.text)));
+      if (gaps.length > 0) corrections.push(coverageMessage(gaps.map((g) => g.clause)));
+      if (stillUnclassified.length > 0) {
+        corrections.push(unclassifiedMessage(stillUnclassified.map((c) => c.text)));
+      }
+      lastProblem = corrections.join("\n\n");
       messages.push({ role: "user", content: lastProblem });
       continue;
     }
