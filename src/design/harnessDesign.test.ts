@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { describeDesign, designHarness } from "./harnessDesign.ts";
 import { measure, type Measure, type ModelProfile } from "../router/modelProfile.ts";
+import { prohibitionsIn } from "../agent/statedProhibitions.ts";
 
 /**
  * The designer: one request in, one harness design out.
@@ -379,5 +380,57 @@ describe("a tie is reported as a tie", () => {
       models: [model({ id: "coder-big", coding: 0.9, toolUse: 0.9 }), model({ id: "weak", coding: 0.1, toolUse: 0.1 })],
     });
     assert.equal(design.recommendation?.tiedWith, undefined);
+  });
+});
+
+describe("what the profile is built from, exactly", () => {
+  test("two stated requirements stay two, and do not cross the multi-part threshold", async () => {
+    // `projectTaskProfile` raises recovery, multiTurnContinuity and
+    // instructionFollowing once a contract holds three requirements. The
+    // harness adds two baselines to every request, one of which is a
+    // prohibition and filtered earlier — so a two-requirement request became a
+    // three-requirement one and was profiled as multi-part work.
+    const design = await designHarness({ text: "로그인 오류를 수정하고 테스트해줘." });
+    const stated = design.requirements.filter((r) => r.status !== "system_added");
+    assert.equal(stated.length, 2, "this request states exactly two things");
+    assert.equal(
+      design.profile.demands.multiTurnContinuity,
+      0,
+      "the baselines pushed a two-part request over the multi-part threshold",
+    );
+  });
+
+  test("a domain noun is not a request for the web", async () => {
+    // The local scan this replaced matched the noun anywhere in the sentence,
+    // so a request *about* search, or about a latest version, demanded web
+    // research of every candidate. `statedResearchDemand` reads clause by
+    // clause and asks whether the user asked to go and look.
+    for (const text of [
+      "검색 기능을 수정해줘.",
+      "최신 버전으로 업데이트해줘.",
+      "웹 서버 설정을 고쳐줘.",
+    ]) {
+      const design = await designHarness({ text });
+      assert.ok(!design.intents.includes("research"), `research inferred from: ${text}`);
+      assert.equal(design.profile.demands.webResearch ?? 0, 0, text);
+    }
+  });
+
+  test("a ban in one clause outranks a demand in another", async () => {
+    // Neither the pattern layer nor the constraint's own text settles this —
+    // the ban uses a verb the patterns do not know, and the demand is real and
+    // in a different clause. What decides it is the shape of the clause that
+    // mentions the web.
+    const text = "웹은 손대지 마. 최신 자료를 웹에서 찾아줘.";
+    assert.equal(
+      prohibitionsIn(text).has("research"),
+      false,
+      "this phrasing is now recognised — pick another verb for this test",
+    );
+    const design = await designHarness({ text });
+    assert.ok(
+      !design.intents.includes("research"),
+      "a demand in a later clause overrode a ban in an earlier one",
+    );
   });
 });

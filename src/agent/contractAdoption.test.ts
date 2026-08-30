@@ -1455,3 +1455,23 @@ describe("the shape of a ban is the last line", () => {
     assert.equal(researchAllowed(decision), true);
   });
 });
+
+describe("a ban in one clause outranks a demand in another", () => {
+  test("the shape check settles what neither pattern nor quote can", () => {
+    // Every other signal is silent here. The ban uses a verb the pattern layer
+    // does not know, so `prohibitionsIn` finds nothing; the constraint the
+    // model wrote is a bare code, so `quotesUser` finds nothing; and the demand
+    // in the second clause is real. Without the shape check the design reads
+    // the second clause as permission to ignore the first.
+    const text = "웹은 손대지 마. 최신 자료를 웹에서 찾아줘.";
+    assert.equal(
+      prohibitionsIn(text).has("research"),
+      false,
+      "this phrasing is now recognised — pick another verb for this test",
+    );
+    const contract = contractOf({ constraints: [constraint("no_research", "no_research")] });
+    const decision = decideResearch(contract, { userText: text });
+    assert.equal(researchAllowed(decision), false, "a later demand overrode an earlier ban");
+    assert.notEqual(decision.verdict, "model_only", "the user's ban was filed as the model's");
+  });
+});

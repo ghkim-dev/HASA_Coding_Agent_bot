@@ -9,6 +9,7 @@ import { prohibitionsIn } from "../agent/statedProhibitions.ts";
 import {
   emptyContract,
   mergeContract,
+  looksLikeResearchBan,
   statedResearchDemand,
   type Constraint,
   type Requirement,
@@ -186,7 +187,19 @@ function synthesiseContract(
   // one is a structural clause guard, the other a class the pattern layer
   // recognised — and a request that forbids the web must not demand it under
   // either reading.
-  if (statedResearchDemand(text) !== null && !forbidden.has("no_research")) intents.add("research");
+  //
+  // Three guards, and each catches a failure the others do not: the clause
+  // structure inside `statedResearchDemand`, the class the pattern layer
+  // recognised, and the coarse shape check for a ban phrased with a verb
+  // nothing knows. Without the third, "웹은 손대지 마. 최신 자료를 웹에서
+  // 찾아줘." read the second clause as permission to ignore the first.
+  if (
+    statedResearchDemand(text) !== null &&
+    !forbidden.has("no_research") &&
+    !looksLikeResearchBan(text)
+  ) {
+    intents.add("research");
+  }
 
   // Nothing is subtracted here.
   //

@@ -776,6 +776,23 @@ export function statedResearchDemand(text: string): string | null {
   return demandIn(text);
 }
 
+/**
+ * Whether any clause of the message reads as a ban on going to the web.
+ *
+ * The coarse last resort `decideResearch` uses, exported for the designer,
+ * which had no equivalent and could therefore be talked out of a prohibition
+ * the runtime would have honoured: "웹은 손대지 마. 최신 자료를 웹에서 찾아줘."
+ * uses a verb the pattern layer does not know, so `prohibitionsIn` was silent,
+ * and the demand in the second clause carried the design into asking for the
+ * web the first clause forbade.
+ *
+ * Deliberately coarse, and only ever used to *deny*. The cost of being wrong
+ * is a design that asks instead of assuming.
+ */
+export function looksLikeResearchBan(text: string): boolean {
+  return clausesOf(text).some((clause) => isNegativeClause(clause) && MENTIONS_WEB.test(clause));
+}
+
 /** A constraint shaped like a research ban — the enforced kind, or bare text. */
 const RESEARCH_BAN_TEXT = /^no[_\s-]*research$|검색\s*금지|웹\s*금지|조사\s*금지|research\s*금지/i;
 

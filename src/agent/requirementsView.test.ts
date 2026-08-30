@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { requirementsView } from "./requirementsView.ts";
 import { reduceTask, resolveIssuesBy } from "./taskReducer.ts";
+import { describeIssueDetail } from "./issueText.ts";
 import { mergeContract, emptyContract, parseTurnContract } from "./turnContract.ts";
 import type { SessionEvent } from "./sessionEvents.ts";
 import type { TaskContract } from "./turnContract.ts";
@@ -407,5 +408,22 @@ describe("a quarantined constraint is never shown as the user's rule", () => {
     const real = view.constraints.find((c) => c.text === "수정하지 마");
     assert.equal(real?.enforced, true);
     assert.equal(real?.quarantined, undefined);
+  });
+});
+
+describe("every occurrence of an internal code is translated", () => {
+  test("a detail naming the same code twice leaves none of it on screen", () => {
+    // The first version sliced past the first occurrence, so a second copy in
+    // the tail reached the panel intact.
+    const detail =
+      "TURN_CONTRACT_REQUIRED: 아직 정리하지 않았습니다. 다시 시도했으나 TURN_CONTRACT_REQUIRED 로 거부되었습니다.";
+    assert.ok(!describeIssueDetail(detail).includes("TURN_CONTRACT_REQUIRED"), describeIssueDetail(detail));
+  });
+
+  test("a detail naming two different codes leaves neither", () => {
+    const detail = "ACTION_DENIED_BY_CONSTRAINT 이후 TURN_CONTRACT_REQUIRED 가 이어졌습니다.";
+    const shown = describeIssueDetail(detail);
+    assert.ok(!shown.includes("ACTION_DENIED_BY_CONSTRAINT"), shown);
+    assert.ok(!shown.includes("TURN_CONTRACT_REQUIRED"), shown);
   });
 });

@@ -5,7 +5,7 @@ import { allowingApprovalPort } from "./approval.ts";
 import { nullLogger } from "../hasa-client/logger.ts";
 import { createRepoFixture, type RepoFixture } from "../testing/repo-fixture.ts";
 import { TurnRecorder } from "./sessionRecorder.ts";
-import { readSession, writeSession } from "./sessionLog.ts";
+import { readEvents, readSession, writeSession } from "./sessionLog.ts";
 import { SESSION_SCHEMA_VERSION, type SessionEvent } from "./sessionEvents.ts";
 import { activeRequirements, reduceContract, unverifiedProvenance, parseTurnContract } from "./turnContract.ts";
 import { TURN_CONTRACT_REQUIRED, assessNecessity } from "./actionPolicy.ts";
@@ -399,5 +399,45 @@ describe("H/L — how strongly an action is judged", () => {
 
   test("a turn nobody read judges nothing", () => {
     assert.equal(assessNecessity(reduceContract([]), "run_command").necessity, "allow");
+  });
+});
+
+describe("the runtime's own answer survives a reopen", () => {
+  test("a runtime_answer event is read back rather than dropped", () => {
+    // `readEvents` refuses any type it does not know, which is the right rule —
+    // a file written by a different build must not smuggle in an event nothing
+    // can interpret. The cost of that rule is that a *new* event type has to be
+    // added to the list, and this one was not: the status fast path answered
+    // correctly, and on reopen the turn came back reading as one that failed
+    // before it could interpret anything.
+    const stored = [
+      { type: "user_message", id: "e1", turnId: "t1", at: 1, text: "진행된 게 있어?" },
+      {
+        type: "runtime_answer",
+        id: "e2",
+        turnId: "t1",
+        at: 2,
+        kind: "status",
+        summary: "아직 실행된 작업이 없습니다.",
+      },
+      { type: "run_completed", id: "e3", turnId: "t1", at: 3, reason: "finished", summary: "정리했습니다." },
+    ];
+
+    const read = readEvents(stored);
+    const kinds = read.map((e) => e.type);
+    assert.deepEqual(kinds, ["user_message", "runtime_answer", "run_completed"], kinds.join(", "));
+    const answer = read.find((e) => e.type === "runtime_answer");
+    assert.equal(answer?.kind, "status");
+    assert.equal(answer?.summary, "아직 실행된 작업이 없습니다.");
+  });
+
+  test("an event type nobody knows is still refused", () => {
+    // The rule the list exists for, asserted beside the exception so a future
+    // reader sees both halves.
+    const read = readEvents([
+      { type: "user_message", id: "e1", turnId: "t1", at: 1, text: "안녕" },
+      { type: "some_future_event", id: "e2", turnId: "t1", at: 2 },
+    ]);
+    assert.deepEqual(read.map((e) => e.type), ["user_message"]);
   });
 });
