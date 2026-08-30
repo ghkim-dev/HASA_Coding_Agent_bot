@@ -89,7 +89,6 @@ const FILES = [
   // claiming something the runtime did not establish.
   "src/design/harnessDesign.ts",
 ];
-
 /**
  * Which suite is run for a mutation.
  *
@@ -127,6 +126,7 @@ const SUITES = {
   safety: ["src/agent/contractAdoption.test.ts", "src/agent/statedProhibitions.test.ts"],
   prohibit: ["src/agent/statedProhibitions.test.ts", "src/agent/contractAdoption.test.ts"],
   issues: ["src/agent/requirementsView.test.ts"],
+  replaylog: ["src/agent/contractReplay.test.ts"],
   designer: ["src/design/harnessDesign.test.ts"],
 };
 
@@ -566,7 +566,7 @@ const MUTATIONS = [
     "      enforced: c.quarantined !== true && ENFORCED.has(c.kind),",
     "      enforced: ENFORCED.has(c.kind),", "issues"],
   ["M157", "runtime_answer 를 replay 에서 폐기", "src/agent/sessionLog.ts",
-    '  "runtime_answer",', "", "issues"],
+    '  "runtime_answer",', "", "replaylog"],
   ["M158", "내부 코드 일부만 치환", "src/agent/issueText.ts",
     "    text = text.split(entry.code).join(\" \");",
     "    text = text.replace(entry.code, \" \");", "issues"],
@@ -590,11 +590,14 @@ const MUTATIONS = [
     "      unresolved: standing.filter((r) => unresolvedSubjects.has(r.id)).length,",
     "      unresolved: standing.filter((r) => unresolvedSubjects.has(r.text)).length,", "designer"],
   ["M165", "웹 수요를 자체 명사 스캔으로 되돌림", "src/design/harnessDesign.ts",
-    "  if (statedResearchDemand(text) !== null && !forbidden.has(\"no_research\")) intents.add(\"research\");",
-    "  if (/웹|검색|최신/.test(text) && !forbidden.has(\"no_research\")) intents.add(\"research\");", "designer"],
+    "    statedResearchDemand(text) !== null &&",
+    "    /웹|검색|최신/.test(text) &&", "designer"],
   ["M166", "금지가 같은 요청의 act 를 다시 삭제", "src/design/harnessDesign.ts",
     "  if (intents.size === 0) intents.add(\"inspect\");",
     "  if (forbidden.has(\"no_modify\")) intents.delete(\"modify\");\n  if (intents.size === 0) intents.add(\"inspect\");", "designer"],
+  ["M167", "디자이너가 금지 형태 최후 방어선을 잃음", "src/design/harnessDesign.ts",
+    "    !looksLikeResearchBan(text)",
+    "    true", "designer"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
