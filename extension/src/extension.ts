@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { DesignerHost } from "./design/designerHost.ts";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { AgentController } from "./agent/controller.js";
@@ -25,6 +26,8 @@ let refreshTimer: NodeJS.Timeout | null = null;
  *
  * They share `SECRET_KEY`, so a user who connected once has connected for both.
  */
+let designer: DesignerHost | null = null;
+
 export function activate(context: vscode.ExtensionContext): void {
   log = vscode.window.createOutputChannel("HASA Coding Agent");
   context.subscriptions.push(log);
@@ -40,7 +43,18 @@ export function activate(context: vscode.ExtensionContext): void {
       await pushState(context);
     }),
 
-    // The Arena, unchanged.
+    // The designer. Reads a request and recommends a model for it; runs nothing.
+    vscode.commands.registerCommand("hasa.designHarness", () => {
+      designer ??= new DesignerHost({
+        extensionUri: context.extensionUri,
+        models: async () => (await agent?.modelProfiles()) ?? null,
+        log: (line) => log.appendLine(line),
+      });
+      designer.open();
+    }),
+
+    // The Arena. Still here, now as the comparison engine behind the designer
+    // rather than the product's front door.
     vscode.commands.registerCommand("hasaArena.compare", () => openPanel(context)),
     vscode.commands.registerCommand("hasaArena.setApiKey", () => promptForApiKey(context)),
     vscode.commands.registerCommand("hasaArena.clearApiKey", async () => {
@@ -56,6 +70,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (refreshTimer) clearInterval(refreshTimer);
       orchestrator?.dispose();
       agent?.dispose();
+      designer?.dispose();
     }),
   );
 }

@@ -1,8 +1,8 @@
 {
-  "name": "hasa-agent-arena",
+  "name": "hasa-harness-designer",
   "version": "0.1.0",
   "private": true,
-  "description": "HASA Agent Arena — model runner, isolated workspaces, verifiable evaluator",
+  "description": "HASA 하네스 자동 설계 디자이너 — 요구사항에서 능력 수요를 뽑아 최적의 LLM을 근거와 함께 추천하고, 그 설계로 실행·검증하는 에이전트 하네스",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

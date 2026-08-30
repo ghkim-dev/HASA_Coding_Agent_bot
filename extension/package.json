@@ -1,7 +1,7 @@
 {
   "name": "hasa-agent-arena",
-  "displayName": "HASA Coding Agent",
-  "description": "HASA API Key 하나로 코드를 읽고, 수정하고, 검증하는 VS Code 코딩 에이전트. 모델 비교(Arena)도 함께 제공합니다.",
+  "displayName": "HASA 하네스 디자이너",
+  "description": "요구사항을 읽어 필요한 능력을 뽑고, 그 일에 맞는 LLM을 근거와 함께 추천하는 하네스 자동 설계 도구. 설계한 하네스로 코드를 읽고 수정하고 검증하는 에이전트가 함께 들어 있습니다.",
   "version": "0.1.0",
   "private": true,
   "publisher": "hasa-arena",
@@ -17,6 +17,10 @@
   "activationEvents": [],
   "contributes": {
     "commands": [
+      {
+        "command": "hasa.designHarness",
+        "title": "HASA: 하네스 설계 (요구사항 → 모델 추천)"
+      },
       {
         "command": "hasa.chat",
         "title": "HASA: Coding Agent 열기",

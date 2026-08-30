@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import type { AgentEvent, AgentMode } from "../../../src/agent/types.ts";
 import { AgentHost } from "./agentHost.ts";
+import { buildRegistry } from "../../../src/router/modelRegistry.ts";
+import type { ModelProfile } from "../../../src/router/modelProfile.ts";
 import { ChatPanel, type PanelMessage, type PanelState } from "./chatPanel.ts";
 import { parseSavedArtifact } from "../../../src/agent/tools/mediaTools.ts";
 import {
@@ -51,6 +53,20 @@ interface StagedAttachment {
  */
 export class AgentController {
   private readonly host: AgentHost;
+  /**
+   * The models the gateway offers, as profiles the router can rank.
+   *
+   * Exposed for the designer, which needs the list and nothing else from the
+   * agent — no session, no conversation, no turn. Null when there is no key or
+   * the gateway is unreachable, which the designer reports as "nothing to rank"
+   * rather than as "no model is suitable".
+   */
+  async modelProfiles(): Promise<readonly ModelProfile[] | null> {
+    const listing = await this.host.listModels();
+    if (listing === null || listing.models.length === 0) return null;
+    return buildRegistry(listing.models);
+  }
+
   private readonly context: vscode.ExtensionContext;
   private readonly log: vscode.OutputChannel;
   private panel: ChatPanel | null = null;
