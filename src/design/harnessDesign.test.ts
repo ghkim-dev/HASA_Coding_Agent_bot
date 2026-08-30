@@ -206,12 +206,21 @@ describe("the design says what it read, and no more", () => {
   // which made the design claim something the runtime had not established.
 
   test("a request the extractor cannot read is not reported as understood", async () => {
-    // English has no extraction pass, so this is unread — not a request to
-    // look at something. Both used to arrive as intents:["inspect"] over two
-    // baselines, and one of them was a lie.
-    const design = await designHarness({ text: "Please fix the login error." });
+    // A request with no act the extractor recognises in either language. It is
+    // unread — not a request to look at something — and the two used to arrive
+    // identically as intents:["inspect"] over two baselines.
+    //
+    // This case was English until `functionalExtract` grew an English pass;
+    // that it had to be replaced is the point, and the invariant is unchanged.
+    const design = await designHarness({ text: "적당히 잘 좀 해줘." });
     assert.equal(design.understood, false);
     assert.match(describeDesign(design), /읽지 못했습니다/);
+  });
+
+  test("an English request is read, and reported as read", async () => {
+    const design = await designHarness({ text: "Please fix the login error." });
+    assert.equal(design.understood, true);
+    assert.ok(design.intents.includes("modify"));
   });
 
   test("a pleasantry is unread, not a task", async () => {
@@ -224,7 +233,7 @@ describe("the design says what it read, and no more", () => {
     // there is no work to characterise, and every unread request would
     // otherwise get the same confident pick — the baselines' profile.
     const models = [model({ id: "coder-big", coding: 0.9, toolUse: 0.9 })];
-    const design = await designHarness({ text: "Please fix the login error.", models });
+    const design = await designHarness({ text: "적당히 잘 좀 해줘.", models });
     assert.equal(design.understood, false);
     assert.equal(design.recommendation, null);
   });

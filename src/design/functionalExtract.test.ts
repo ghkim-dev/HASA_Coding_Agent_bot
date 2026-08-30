@@ -263,10 +263,44 @@ describe("경계 입력", () => {
     assert.deepEqual(of("알아서 다 해줘."), []);
   });
 
-  test("영어 문장은 읽지 않는다", () => {
-    // Korean-only by construction. Recorded so a silent zero is a known
-    // limitation rather than a bug somebody rediscovers.
-    assert.deepEqual(of("Fix the login bug and run the tests."), []);
+  test("영어 명령문은 어순을 바꿔 읽는다", () => {
+    // Korean is verb-final and English is not, so the English pass takes its
+    // object on the other side of the verb. This test used to assert the
+    // opposite — that English produced nothing — and it recorded a real
+    // limitation until the pass was written.
+    const got = of("Fix the login bug and run the tests.");
+    assert.deepEqual(
+      got.map((c) => c.action),
+      ["modify", "execute"],
+    );
+    assert.deepEqual(
+      got.map((c) => c.object),
+      ["login bug", "tests"],
+    );
+  });
+
+  test("영어 서술문과 의문문은 명령으로 읽지 않는다", () => {
+    // The direction that must not fail. English marks the imperative by
+    // position, so a verb in the middle of a sentence is doing another job —
+    // a noun, a subordinate clause, a report about what already happened.
+    for (const text of [
+      "Why did the build fail?",
+      "The previous run did not use web search.",
+      "The tests run in CI.",
+      "I wonder if we should refactor this.",
+      "Thanks, that works!",
+    ]) {
+      assert.deepEqual(of(text), [], text);
+    }
+  });
+
+  test("영어 금지문은 그 동사를 요구로 만들지 않는다", () => {
+    // `statedProhibitions` reads these as bans; emitting the positive act here
+    // would have the runtime contradict itself about one sentence.
+    assert.deepEqual(of("Don't run the tests."), []);
+    const mixed = of("Do not modify anything, just explain.");
+    assert.ok(!mixed.some((c) => c.action === "modify"), "the forbidden act was read as a request");
+    assert.ok(mixed.some((c) => c.action === "inspect"), "the act that *was* asked for went missing");
   });
 
   test("접속사는 목적어가 되지 않는다", () => {

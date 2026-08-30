@@ -337,6 +337,190 @@ const BOUNDARIES =
  * a single sentence routinely holds two separate requests. "고치고 테스트해줘"
  * is two requirements and reading it as one loses the second.
  */
+
+// ---------------------------------------------------------------------------
+// The English pass
+// ---------------------------------------------------------------------------
+
+/**
+ * The same acts, read out of English.
+ *
+ * A separate pass rather than more entries in `VERBS`, because the two
+ * languages put the target on opposite sides of the verb. Korean is
+ * verb-final — `objectBefore` reads leftwards from the verb and that is the
+ * whole of how a target is found. English puts it after, so every Korean
+ * mechanism here would take the wrong words, and the ones that did not would
+ * take them from the previous sentence.
+ *
+ * Measured before this existed: 0 of 39 English requests produced a
+ * requirement, and one of the two English cases in the corpora was the single
+ * intent miss in 72. The runtime read English prohibitions — `do not modify`
+ * has been in `statedProhibitions` from the start — and nothing else, so an
+ * English request arrived as a design that had read nothing and said so with
+ * the same confidence as a Korean one it had read completely.
+ *
+ * The discipline is the one the rest of this file follows: a miss is safe,
+ * because the design reports what it read and `understood` says when that was
+ * nothing. A false positive is not, so the verbs below are imperatives a
+ * request actually uses, the object is bounded, and a negated verb is skipped
+ * exactly as it is on the Korean side.
+ */
+const ENGLISH_VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
+  // Order matters within an action the way it does above: the longer, more
+  // specific form is tried first so `look into` is not read as `look`.
+  { pattern: /\b(?:re-?implement|reimplement)\b/i, action: "create" },
+  { pattern: /\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\s+up|tidy)\b/i, action: "modify" },
+  { pattern: /\b(?:implement|create|add|write|generate|introduce|set\s+up|scaffold)\b/i, action: "create" },
+  { pattern: /\b(?:remove|delete|drop|strip|get\s+rid\s+of)\b/i, action: "remove" },
+  { pattern: /\b(?:run|execute|launch|start|install|build|compile|deploy)\b/i, action: "execute" },
+  { pattern: /\b(?:test|verify|validate|make\s+sure)\b/i, action: "verify" },
+  // `search` and `check` are here rather than in a research act because this
+  // list reads what the user asked the agent to *do*; where it looks is the
+  // research decision's question, and `statedResearchDemand` answers it from
+  // the same sentence.
+  { pattern: /\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\s+at|look\s+into|show|list|find|locate|search|check)\b/i, action: "inspect" },
+];
+
+/**
+ * A verb the sentence is telling us *not* to do.
+ *
+ * Read on the words before the verb rather than after it, which is where
+ * English puts its negation. `without` is included and `never` is not a
+ * prohibition of the following verb alone — "never mind, just read it" is not a
+ * ban on reading — so only the forms that attach to the verb are here.
+ */
+const ENGLISH_NEGATED = /\b(?:do\s+not|don'?t|never|without|avoid|no\s+need\s+to|instead\s+of|rather\s+than)\s*$/i;
+
+/**
+ * The politeness and framing a request opens with, which is not its object.
+ *
+ * "Please fix the login error" has an object of "the login error", and reading
+ * the whole tail including `please` would put the word into the requirement.
+ */
+const ENGLISH_LEAD = /^(?:please|kindly|could\s+you|can\s+you|would\s+you|i\s+want\s+you\s+to|i'?d\s+like\s+you\s+to|let'?s|we\s+should|you\s+should)\s+/i;
+
+/**
+ * Where an English object stops.
+ *
+ * A conjunction starts the next act, and punctuation closes the clause. The
+ * object is capped as well: a runaway match would swallow a paragraph and put
+ * it in a requirement, which is the shape of invention this file exists to
+ * avoid.
+ */
+const ENGLISH_OBJECT_END = /\s+(?:and|then|but|so|because|after|before|while|to)|[.,;:!?]/;
+
+const MAX_ENGLISH_OBJECT = 60;
+
+/**
+ * Adverbs and connectives an imperative may open with.
+ *
+ * Stripped before the position check below, so "just explain it" and "then run
+ * the tests" are still read as the requests they are.
+ */
+const ENGLISH_OPENER = /^(?:just|also|now|first|next|then|and|so|please|again|finally)\s+/i;
+
+/**
+ * Whether the verb is where an English imperative puts it: at the front.
+ *
+ * The check that separates a request from a report. Without it, "Why did the
+ * build fail?" produced a requirement to build and "The previous run did not
+ * use web search" produced one to run — a question about a past failure and a
+ * statement about what someone else did, both read as instructions. English
+ * marks the imperative by position, and this is that mark.
+ */
+function isImperativePosition(body: string, at: number): boolean {
+  let head = body.slice(0, at);
+  for (;;) {
+    const shorter = head.replace(ENGLISH_OPENER, "");
+    if (shorter === head) break;
+    head = shorter;
+  }
+  return head.trim().length === 0;
+}
+
+/** A question asks; it does not instruct. */
+const ENGLISH_QUESTION = /\?\s*$/;
+
+/** Words that are the verb's own particle rather than part of the target. */
+const ENGLISH_PARTICLE = /^(?:up|out|the|a|an|it|this|that|these|those|all|any)\s+/i;
+
+function englishObject(clause: string, after: number): string {
+  let rest = clause.slice(after).trim();
+  // Drop a leading particle, then a leading article — "clean up the imports"
+  // has an object of "imports", not "up the imports".
+  for (let i = 0; i < 2; i += 1) rest = rest.replace(ENGLISH_PARTICLE, "");
+  const stop = ENGLISH_OBJECT_END.exec(rest);
+  const object = (stop === null ? rest : rest.slice(0, stop.index))
+    // The clause split keeps the conjunction it broke on, so a trailing `and`
+    // rides along into the object: "fix the bug and" rather than "fix the bug".
+    .replace(/\s+(?:and|then|but|or)\s*$/i, "")
+    .trim();
+  return object.length > MAX_ENGLISH_OBJECT ? "" : object;
+}
+
+/** Whether this text is worth running the English pass over at all. */
+function looksEnglish(text: string): boolean {
+  return /[A-Za-z]/.test(text) && !/[가-힣]/.test(text);
+}
+
+/**
+ * English requests in one turn.
+ *
+ * Returns nothing for Korean, and nothing for a mixed sentence — a request
+ * that switches language mid-clause is one this pass cannot bound an object
+ * in, and guessing is worse than the honest empty answer the design already
+ * knows how to report.
+ */
+function englishCandidates(input: { turnId: string; text: string }): FunctionalCandidate[] {
+  if (!looksEnglish(input.text)) return [];
+
+  const out: FunctionalCandidate[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+
+  for (const clause of input.text.split(ENGLISH_BOUNDARIES)) {
+    const at = input.text.indexOf(clause, offset);
+    if (at === -1) continue;
+    offset = at + clause.length;
+    const body = clause.replace(ENGLISH_LEAD, "");
+    if (body.trim().length === 0) continue;
+    if (ENGLISH_QUESTION.test(body)) continue;
+
+    for (const { pattern, action } of ENGLISH_VERBS) {
+      const match = pattern.exec(body);
+      if (match === null) continue;
+      // The sentence forbids this verb rather than asking for it. Emitting the
+      // positive form would contradict `statedProhibitions`, which is reading
+      // the very same words.
+      if (ENGLISH_NEGATED.test(body.slice(0, match.index))) continue;
+      // A verb in the middle of a sentence is doing some other job — a noun
+      // ("the previous run"), a subordinate clause, a report about the past.
+      if (!isImperativePosition(body, match.index)) continue;
+
+      const object = englishObject(body, match.index + match[0].length);
+      if (object.length === 0 && !ACT_IS_ENOUGH.has(action)) continue;
+
+      const verb = match[0].toLowerCase();
+      const text = object.length === 0 ? ACT_ONLY[action] : `${verb} ${object}`;
+      const key = `${action}:${object.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push({
+        text,
+        action,
+        object,
+        span: { turnId: input.turnId, start: at, end: at + clause.replace(/\s+$/, "").length },
+      });
+      break; // One requirement per clause, as on the Korean side.
+    }
+  }
+  return out;
+}
+
+/** Where an English clause ends. Conjunctions and sentence punctuation. */
+const ENGLISH_BOUNDARIES = /(?<=[.!?])(?=\s|$)|(?<=,\s)|\s+(?=and\s+then\s+)|(?<=\sand\s)|(?<=\sthen\s)/i;
+
 export function functionalCandidates(input: { turnId: string; text: string }): FunctionalCandidate[] {
   const out: FunctionalCandidate[] = [];
   const seen = new Set<string>();
@@ -379,5 +563,10 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
     }
   }
 
+  // The English pass runs when the Korean one found nothing. Not in parallel:
+  // a sentence that produced Korean candidates is Korean, and running both
+  // would let an English word inside a Korean request add a second reading of
+  // the same clause.
+  if (out.length === 0) return englishCandidates(input);
   return out;
 }

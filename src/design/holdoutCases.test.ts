@@ -94,24 +94,26 @@ describe("Holdout 집합 자체", () => {
 });
 
 describe("Holdout 요구사항 정확성 — 분모를 함께", () => {
-  test("recall 42/43", () => {
-    // The one miss is `h-english-request`: a sentence with no Korean verb in it.
-    // Recorded rather than fixed — see `HOLDOUT_GAPS` below.
-    assert.deepEqual(score.requirementRecall, { hit: 42, of: 43, value: 0.977 });
-    assert.deepEqual(
-      score.missed.map((m) => m.caseId),
-      ["h-english-request"],
-    );
+  test("recall 43/43", () => {
+    // Was 42/43. The miss was `h-english-request` — a sentence with no Korean
+    // verb in it — and the English pass added to `functionalExtract` closed it.
+    // The holdout answers are unchanged: this is the code moving to meet them,
+    // which is the only direction a frozen set may be met from.
+    assert.deepEqual(score.requirementRecall, { hit: 43, of: 43, value: 1 });
+    assert.deepEqual(score.missed, []);
   });
 
-  test("precision 42/42 — 발명이 0이다", () => {
-    assert.deepEqual(score.requirementPrecision, { hit: 42, of: 42, value: 1 });
+  test("precision 43/43 — 발명이 0이다", () => {
+    // The number that mattered while the English pass was written. Reading a
+    // new language is only worth it if nothing is invented on the way, and a
+    // pass that raised recall by inventing a requirement would show up here.
+    assert.deepEqual(score.requirementPrecision, { hit: 43, of: 43, value: 1 });
     assert.deepEqual(score.spurious, []);
   });
 
-  test("target 42/42, span 근거 42/42, relation 38/38", () => {
-    assert.deepEqual(score.targetAccuracy, { hit: 42, of: 42, value: 1 });
-    assert.deepEqual(score.spanGrounding, { hit: 42, of: 42, value: 1 });
+  test("target 43/43, span 근거 43/43, relation 38/38", () => {
+    assert.deepEqual(score.targetAccuracy, { hit: 43, of: 43, value: 1 });
+    assert.deepEqual(score.spanGrounding, { hit: 43, of: 43, value: 1 });
     assert.deepEqual(score.relationAccuracy, { hit: 38, of: 38, value: 1 });
   });
 });
@@ -123,9 +125,11 @@ describe("Holdout 질문·실행 판정", () => {
     assert.deepEqual(score.questionCeiling, { hit: 33, of: 33, value: 1 });
   });
 
-  test("Requirement Startability 32/33, Harness Executability 32/33", () => {
-    assert.deepEqual(score.requirementStartability, { hit: 32, of: 33, value: 0.97 });
-    assert.deepEqual(score.harnessExecutability, { hit: 32, of: 33, value: 0.97 });
+  test("Requirement Startability 33/33, Harness Executability 33/33", () => {
+    // Both were 32/33, and the one short of each was the English request the
+    // extractor could not read: with no requirement there was nothing to start.
+    assert.deepEqual(score.requirementStartability, { hit: 33, of: 33, value: 1 });
+    assert.deepEqual(score.harnessExecutability, { hit: 33, of: 33, value: 1 });
   });
 
   test("사용자 요구사항이 없는데 Executable 인 사례는 0건이다", () => {
@@ -275,21 +279,16 @@ describe("모델 제안 경로 — 주입된 문자열만 사용한다", () => {
 /**
  * What the holdout found and this pass did not close, with a reason.
  *
- * One entry, and it is a capability gap rather than a bug: the extractor's verb
- * list is Korean, so an English-only sentence produces nothing. Fixing it properly
- * means English verb patterns *and* object extraction in the other word order,
- * which is its own piece of work — and guessing at it would risk the precision
- * that is currently 42/42.
+ * One entry now. The English gap that used to sit here was closed rather than
+ * carried: `functionalExtract` grew a separate English pass — its own verb list,
+ * the object taken on the other side of the verb, and an imperative-position
+ * check so a report ("The previous run did not use web search") and a question
+ * ("Why did the build fail?") are not read as instructions. Precision stayed at
+ * 1 through the change, which was the condition for making it at all.
+ *
+ * The entry left is a different shape of problem, and it is still open.
  */
 export const HOLDOUT_GAPS: readonly { caseId: string; axis: string; reason: string }[] = [
-  {
-    caseId: "h-english-request",
-    axis: "requirement / startability / executability",
-    reason:
-      "영어만으로 된 문장('Please fix the login error.')에는 한국어 동사가 없어 요구사항이 만들어지지 않는다. " +
-      "영어 동사 목록과 어순이 다른 목적어 추출이 함께 필요하므로 별도 작업으로 남긴다. " +
-      "영어 금지문(Don't run …)은 statedProhibitions 가 이미 읽으므로 h-english-prohibition 은 통과한다.",
-  },
   {
     caseId: "h-correction-supersedes-one",
     axis: "verb coverage",
