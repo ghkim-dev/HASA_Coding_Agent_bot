@@ -48,6 +48,8 @@ interface DesignPayload {
     filteredOut: Array<{ modelId: string; code: string; detail: string }>;
     /** How many were dropped in total, when the list above is truncated. */
     filteredOutTotal: number;
+    /** Candidates the score cannot separate from the winner. */
+    tiedWith: string[];
     unavailableReason?: string;
   } | null;
   questions: Array<{ about: string; options: string[] }>;
@@ -209,6 +211,7 @@ function toPayload(design: HarnessDesign): DesignPayload {
               detail: f.detail,
             })),
             filteredOutTotal: rec.filteredOut.length,
+            tiedWith: rec.tiedWith ?? [],
             ...(rec.unavailableReason === undefined
               ? {}
               : { unavailableReason: rec.unavailableReason }),

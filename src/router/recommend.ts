@@ -90,6 +90,16 @@ export interface RecommendationReason {
 
 export interface ModelRecommendation {
   selected: RankedModel | null;
+  /**
+   * Candidates the score cannot separate from the selected one.
+   *
+   * Present only when there are any. A tie is a fact about the evidence, not a
+   * defect in the ranker — on a gateway nobody has evaluated, every model
+   * scores the same default and the winner is decided by sort order. A caller
+   * that shows the pick without showing this is reporting an arbitrary choice
+   * as a finding.
+   */
+  tiedWith?: string[];
   /** Everything else that survived the filter, in rank order. */
   alternatives: RankedModel[];
   taskProfileId: string;
@@ -100,6 +110,16 @@ export interface ModelRecommendation {
   /** Set when nothing survived, so a caller can say why rather than "none". */
   unavailableReason?: string;
 }
+
+/**
+ * How close two scores must be to count as the same.
+ *
+ * Small, because the scores are sums of weighted measures in [0,1] and a real
+ * difference is visible in the third decimal. This is not a smoothing
+ * parameter: it exists to catch scores that are equal, including the ones that
+ * arrive equal through different arithmetic.
+ */
+const TIE_EPSILON = 1e-9;
 
 /** How the four terms combine. Named so a test can state which one it varies. */
 export interface RouterWeights {
@@ -281,6 +301,18 @@ export async function recommendModel(
   });
 
   const selected = ranked[0]!;
+  // Models the evidence cannot tell apart from the winner.
+  //
+  // On a fresh gateway every candidate is a cold start, every score is the same
+  // default, and `ranked[0]` is whichever model id happened to sort first —
+  // presented, with no further word, as a recommendation. Naming the tie is the
+  // difference between "this one fits your work" and "nothing here
+  // distinguishes these, and one had to go first".
+  const tiedWith = ranked
+    .slice(1)
+    .filter((m) => Math.abs(m.score - selected.score) < TIE_EPSILON)
+    .map((m) => m.modelId);
+
   return {
     selected,
     alternatives: ranked.slice(1),
@@ -288,6 +320,7 @@ export async function recommendModel(
     reasons: reasonsFor(task, selected, byId.get(selected.modelId)!, ranked.length),
     filteredOut,
     policyId,
+    ...(tiedWith.length === 0 ? {} : { tiedWith }),
   };
 }
 

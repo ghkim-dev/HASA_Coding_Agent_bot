@@ -62,7 +62,14 @@ export class AgentController {
    * rather than as "no model is suitable".
    */
   async modelProfiles(): Promise<readonly ModelProfile[] | null> {
-    const listing = await this.host.listModels();
+    // The models this key can actually call, not everything the gateway lists.
+    //
+    // `listModels` returns the raw catalogue, which includes audio and
+    // embedding endpoints and models this key class is not permitted to invoke.
+    // Ranking those produced a designer that recommended a model the user would
+    // get a 403 from — the router's own path has always used
+    // `conversationModels`, and the designer was the one caller that did not.
+    const listing = await this.host.conversationModels();
     if (listing === null || listing.models.length === 0) return null;
     return buildRegistry(listing.models);
   }

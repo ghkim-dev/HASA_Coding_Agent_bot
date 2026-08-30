@@ -330,3 +330,45 @@ describe("the web demand is read with the runtime's own vocabulary", () => {
     assert.ok((design.profile.demands.webResearch ?? 0) > 0);
   });
 });
+
+describe("a tie is reported as a tie", () => {
+  /** A model nobody has ever evaluated — the common case on a fresh gateway. */
+  function unevaluated(id: string): ModelProfile {
+    return {
+      modelId: id,
+      availability: {
+        available: true,
+        protocol: "native",
+        contextWindow: 128_000,
+        maxOutputTokens: 8_000,
+        supportsNativeTools: true,
+      },
+      capabilities: {},
+      efficiency: {},
+      semanticDescription: id,
+      evidence: { evalSampleCount: 0 },
+    };
+  }
+
+  test("cold start names the models the evidence cannot separate", async () => {
+    // Every candidate scores the same default and `ranked[0]` is whichever id
+    // sorted first. Shown alone, an arbitrary pick reads as a finding.
+    const design = await designHarness({
+      text: "로그인 오류를 수정하고 테스트해줘.",
+      models: [unevaluated("zebra"), unevaluated("alpha"), unevaluated("middle")],
+    });
+    const rec = design.recommendation;
+    assert.ok(rec !== null);
+    assert.ok(rec.selected !== null);
+    assert.deepEqual([...(rec.tiedWith ?? [])].sort(), ["middle", "zebra"]);
+    assert.equal(rec.selected.confidence.coldStart, true);
+  });
+
+  test("a real difference is not reported as a tie", async () => {
+    const design = await designHarness({
+      text: "로그인 오류를 수정하고 테스트해줘.",
+      models: [model({ id: "coder-big", coding: 0.9, toolUse: 0.9 }), model({ id: "weak", coding: 0.1, toolUse: 0.1 })],
+    });
+    assert.equal(design.recommendation?.tiedWith, undefined);
+  });
+});

@@ -229,6 +229,19 @@ function render(design) {
       );
     }
 
+    // A tie is a fact about the evidence, not a runner-up list. Said before the
+    // reasons, because it changes how the reasons should be read.
+    if (rec.tiedWith.length > 0) {
+      el.rec.appendChild(
+        make(
+          "p",
+          "none",
+          `${rec.tiedWith.join(", ")} 도 같은 점수입니다. 지금 있는 근거로는 이들을 구분할 수 없어, ` +
+            "순서상 앞선 것을 보여드립니다.",
+        ),
+      );
+    }
+
     for (const reason of rec.reasons) {
       const row = make("div", "reason", reason.detail);
       if (NEGATIVE_REASON.has(reason.code)) row.classList.add("against");

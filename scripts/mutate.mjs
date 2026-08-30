@@ -85,6 +85,9 @@ const FILES = [
   "src/agent/requirementsView.ts",
   "src/agent/issueText.ts",
   "src/agent/sessionLog.ts",
+  // C4.12: the designer. Every entry below is a defence against the design
+  // claiming something the runtime did not establish.
+  "src/design/harnessDesign.ts",
 ];
 
 /**
@@ -124,6 +127,7 @@ const SUITES = {
   safety: ["src/agent/contractAdoption.test.ts", "src/agent/statedProhibitions.test.ts"],
   prohibit: ["src/agent/statedProhibitions.test.ts", "src/agent/contractAdoption.test.ts"],
   issues: ["src/agent/requirementsView.test.ts"],
+  designer: ["src/design/harnessDesign.test.ts"],
 };
 
 const MUTATIONS = [
@@ -566,6 +570,31 @@ const MUTATIONS = [
   ["M158", "내부 코드 일부만 치환", "src/agent/issueText.ts",
     "    text = text.split(entry.code).join(\" \");",
     "    text = text.replace(entry.code, \" \");", "issues"],
+  // ---- C4.12: the designer says only what it established ------------------
+  ["M159", "못 읽은 요청을 이해한 것으로 표시", "src/design/harnessDesign.ts",
+    "  const understood = stated.length > 0;",
+    "  const understood = true;", "designer"],
+  ["M160", "못 읽은 요청에도 모델을 추천", "src/design/harnessDesign.ts",
+    "    !understood || input.models === undefined || input.models.length === 0",
+    "    input.models === undefined || input.models.length === 0", "designer"],
+  ["M161", "요약이 못 읽었다는 사실을 숨김", "src/design/harnessDesign.ts",
+    "  if (!design.understood) {",
+    "  if (false) {", "designer"],
+  ["M162", "baseline 을 사용자 요구사항으로 셈", "src/design/harnessDesign.ts",
+    "  const stated = design.requirements.filter((r) => r.status !== \"system_added\").length;",
+    "  const stated = design.requirements.length;", "designer"],
+  ["M163", "baseline 을 계약에 밀어넣어 복잡도 왜곡", "src/design/harnessDesign.ts",
+    "    if (spec.status === \"system_added\") continue;",
+    "", "designer"],
+  ["M164", "unresolved 를 다시 텍스트로 키잉 (죽은 필드)", "src/design/harnessDesign.ts",
+    "      unresolved: standing.filter((r) => unresolvedSubjects.has(r.id)).length,",
+    "      unresolved: standing.filter((r) => unresolvedSubjects.has(r.text)).length,", "designer"],
+  ["M165", "웹 수요를 자체 명사 스캔으로 되돌림", "src/design/harnessDesign.ts",
+    "  if (statedResearchDemand(text) !== null && !forbidden.has(\"no_research\")) intents.add(\"research\");",
+    "  if (/웹|검색|최신/.test(text) && !forbidden.has(\"no_research\")) intents.add(\"research\");", "designer"],
+  ["M166", "금지가 같은 요청의 act 를 다시 삭제", "src/design/harnessDesign.ts",
+    "  if (intents.size === 0) intents.add(\"inspect\");",
+    "  if (forbidden.has(\"no_modify\")) intents.delete(\"modify\");\n  if (intents.size === 0) intents.add(\"inspect\");", "designer"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
