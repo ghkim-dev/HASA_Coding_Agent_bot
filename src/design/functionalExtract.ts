@@ -78,9 +78,26 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // matching the tail of it and producing "의존성 되를 실행한다" — a made-up target
   // for an act the user did not ask for.
   { pattern: /(?<!되)돌려(?:줘|주세요|주|봐)/, action: "execute" },
+  // The plain stem with a connective, the same shape the `바꾸` entry covers.
+  // "테스트를 돌리고 실패하면 고쳐줘" is an ordinary request and produced
+  // nothing, because only `돌려-` was recognised.
+  { pattern: /(?<!되)돌리(?:고|면|는|며|자|라|기)/, action: "execute" },
+  // Work a project asks for that a codebase does not. These are absent from the
+  // list above because it grew around editing a repository, and the designer
+  // invites the other kind of request: "학습시켜줘", "설치해줘",
+  // "다운로드해줘" are the verbs a model-selection request is made of, and each
+  // produced no requirement at all.
+  { pattern: verb("설치", "(?:하|해)"), action: "execute" },
+  { pattern: verb("학습", "(?:하|해|시켜)"), action: "execute" },
+  { pattern: verb("훈련", "(?:하|해|시켜)"), action: "execute" },
+  { pattern: verb("다운로드", "(?:하|해|받)"), action: "execute" },
+  { pattern: verb("배포", "(?:하|해)"), action: "execute" },
+  { pattern: verb("추론", "(?:하|해)"), action: "execute" },
   { pattern: verb("테스트", "(?:하|해)"), action: "verify" },
   { pattern: verb("검증", "(?:하|해)"), action: "verify" },
   { pattern: verb("확인", "(?:하|해)"), action: "verify" },
+  { pattern: verb("측정", "(?:하|해)"), action: "verify" },
+  { pattern: verb("평가", "(?:하|해)"), action: "verify" },
   { pattern: verb("재현", "(?:하|해)"), action: "verify" },
   { pattern: verb("유지", "(?:하|해)"), action: "preserve" },
   { pattern: verb("보존", "(?:하|해)"), action: "preserve" },
@@ -100,6 +117,7 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: "modify" },
   { pattern: verb("정리", "(?:하|해)"), action: "modify" },
   { pattern: verb("갱신", "(?:하|해)"), action: "modify" },
+  { pattern: verb("번역", "(?:하|해)"), action: "modify" },
   // English stems, because Korean sentences use them with a Korean ending:
   // "refactor 해줘", "fix 해줘". The particle gap already allows the space.
   { pattern: verb("refactor", "(?:하|해)"), action: "modify" },
@@ -107,9 +125,15 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   { pattern: verb("추가", "(?:하|해)"), action: "create" },
   { pattern: verb("구현", "(?:하|해)"), action: "create" },
   { pattern: /만들어(?:줘|주세요|주)/, action: "create" },
+  // The connective forms. "분류기를 만들고 학습해줘" is two acts, and only the
+  // second was ever read.
+  { pattern: /만들(?:고|면|자|라|어야|어서)/, action: "create" },
+  { pattern: verb("생성", "(?:하|해)"), action: "create" },
   { pattern: verb("삭제", "(?:하|해)"), action: "remove" },
   { pattern: verb("제거", "(?:하|해)"), action: "remove" },
   { pattern: verb("분석", "(?:하|해)"), action: "inspect" },
+  { pattern: verb("비교", "(?:하|해)"), action: "inspect" },
+  { pattern: verb("조사", "(?:하|해)"), action: "inspect" },
   { pattern: verb("설명", "(?:하|해)"), action: "inspect" },
   { pattern: /보여(?:줘|주세요|주)/, action: "inspect" },
   { pattern: /찾아(?:줘|주세요|주|봐)/, action: "inspect" },
