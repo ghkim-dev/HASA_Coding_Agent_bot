@@ -107,9 +107,10 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   </header>
 
   <section class="ask">
-    <textarea id="req" rows="4" placeholder="예: 사과 이미지를 분할하는 모델을 웹에서 찾아 학습하고 성능을 비교해줘."></textarea>
+    <textarea id="req" rows="4" placeholder="예: 로그인 오류를 수정하고 테스트해줘."></textarea>
     <div class="askRow">
       <button id="go">설계하기</button>
+      <button id="key" class="ghost hidden">API Key 설정</button>
       <span id="models" class="muted"></span>
     </div>
   </section>
@@ -136,7 +137,8 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 
     <div class="card hidden" id="qCard">
       <h2>확인이 필요한 것</h2>
-      <p class="muted">아래는 런타임이 정하지 않고 남겨둔 것입니다. 고르시면 설계가 확정됩니다.</p>
+      <p class="muted">아래는 런타임이 대신 정하지 않고 남겨둔 것입니다.
+        아직 여기서 고를 수는 없습니다 — 요청에 한 줄 덧붙여 다시 설계하시면 반영됩니다.</p>
       <div id="questions"></div>
     </div>
   </section>

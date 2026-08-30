@@ -31,11 +31,23 @@ interface DesignPayload {
   demands: Record<string, number>;
   intents: string[];
   prohibitions: string[];
+  understood: boolean;
   recommendation: {
-    selected: { modelId: string; score: number } | null;
-    alternatives: Array<{ modelId: string; score: number }>;
-    reasons: string[];
-    filteredOut: Array<{ modelId: string; reason: string }>;
+    selected: {
+      modelId: string;
+      score: number;
+      /** The four terms, so a user can see which one carried the pick. */
+      breakdown: Record<string, number>;
+      /** How much of what this task needs was ever measured on this model. */
+      confidence: { known: number; total: number; coldStart: boolean };
+    } | null;
+    alternatives: Array<{ modelId: string; score: number; coldStart: boolean }>;
+    /** Kept with their codes: "good at what you need" and "bad at it" are different. */
+    reasons: Array<{ code: string; detail: string }>;
+    /** The human sentence, not only the enum. */
+    filteredOut: Array<{ modelId: string; code: string; detail: string }>;
+    /** How many were dropped in total, when the list above is truncated. */
+    filteredOutTotal: number;
     unavailableReason?: string;
   } | null;
   questions: Array<{ about: string; options: string[] }>;
@@ -144,8 +156,10 @@ export class DesignerHost {
  * the whole of what the layout depends on.
  */
 function toPayload(design: HarnessDesign): DesignPayload {
+  const rec = design.recommendation;
   return {
     summary: describeDesign(design),
+    understood: design.understood,
     requirements: design.requirements.map((r) => ({
       text: r.text,
       // The runtime can point at the words this came from.
@@ -161,26 +175,43 @@ function toPayload(design: HarnessDesign): DesignPayload {
     intents: design.intents,
     prohibitions: design.prohibitions.map((c) => c.kind),
     recommendation:
-      design.recommendation === null
+      rec === null
         ? null
         : {
             selected:
-              design.recommendation.selected === null
+              rec.selected === null
                 ? null
                 : {
-                    modelId: design.recommendation.selected.modelId,
-                    score: design.recommendation.selected.score,
+                    modelId: rec.selected.modelId,
+                    score: rec.selected.score,
+                    // The breakdown is the whole reason a score is trustworthy,
+                    // and it was computed and then dropped here — leaving a
+                    // number on screen with nothing behind it.
+                    breakdown: { ...rec.selected.breakdown },
+                    confidence: {
+                      known: rec.selected.confidence.known,
+                      total: rec.selected.confidence.total,
+                      coldStart: rec.selected.confidence.coldStart,
+                    },
                   },
-            alternatives: design.recommendation.alternatives
-              .slice(0, 4)
-              .map((a) => ({ modelId: a.modelId, score: a.score })),
-            reasons: design.recommendation.reasons.map((r) => r.detail),
-            filteredOut: design.recommendation.filteredOut
-              .slice(0, 6)
-              .map((f) => ({ modelId: f.modelId, reason: f.code })),
-            ...(design.recommendation.unavailableReason === undefined
+            alternatives: rec.alternatives.slice(0, 4).map((a) => ({
+              modelId: a.modelId,
+              score: a.score,
+              coldStart: a.confidence.coldStart,
+            })),
+            // Code *and* sentence. Rendering only the detail lost the
+            // difference between "strong at what you need" and "weak at it";
+            // rendering only the code showed the user an enum.
+            reasons: rec.reasons.map((r) => ({ code: r.code, detail: r.detail })),
+            filteredOut: rec.filteredOut.slice(0, 6).map((f) => ({
+              modelId: f.modelId,
+              code: f.code,
+              detail: f.detail,
+            })),
+            filteredOutTotal: rec.filteredOut.length,
+            ...(rec.unavailableReason === undefined
               ? {}
-              : { unavailableReason: design.recommendation.unavailableReason }),
+              : { unavailableReason: rec.unavailableReason }),
           },
     questions: design.questions.map((q) => ({ about: q.about, options: q.options })),
   };

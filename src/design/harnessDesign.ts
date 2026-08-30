@@ -9,6 +9,7 @@ import { prohibitionsIn } from "../agent/statedProhibitions.ts";
 import {
   emptyContract,
   mergeContract,
+  statedResearchDemand,
   type Constraint,
   type Requirement,
   type TaskContract,
@@ -58,8 +59,10 @@ import {
 export interface DesignConfidence {
   /** Requirements cut from the user's own words, with coordinates. */
   grounded: number;
-  /** Requirements the runtime added or could not point at words for. */
+  /** Requirements read from the user but with no coordinates to point at. */
   ungrounded: number;
+  /** The harness's own rules, which the user did not ask for. */
+  baseline: number;
   /** Requirements still carrying something unresolved. */
   unresolved: number;
 }
@@ -69,6 +72,17 @@ export interface HarnessDesign {
   preview: PreviewResult;
   /** The requirements a person should read, in the order they were stated. */
   requirements: RequirementSpec[];
+  /**
+   * Whether the runtime read anything at all out of the user's own words.
+   *
+   * False for a pleasantry, for a sentence in a language the extractor has no
+   * pass for, and for any phrasing it does not recognise. It is the difference
+   * between "you asked me to look at something" and "I could not read this",
+   * which the design used to report identically — both arrived as
+   * `intents: ["inspect"]` over two baseline requirements, and one of them was
+   * a lie.
+   */
+  understood: boolean;
   /** What this shape of work demands of a model. */
   profile: TaskProfile;
   /**
@@ -131,6 +145,13 @@ function synthesiseContract(
 
   for (const [index, spec] of requirements.entries()) {
     if (spec.polarity === "forbidden") continue;
+    // The harness's own baselines are not what the user asked for, and putting
+    // them in the contract moved the complexity band on 53 of 76 corpus cases:
+    // every request looked like it had two more requirements than it did, and
+    // `projectTaskProfile` raises `recovery`/`multiTurnContinuity` once a
+    // contract passes three. They are kept in `design.requirements` for the
+    // panel to show, apart, and out of the profile that ranks models.
+    if (spec.status === "system_added") continue;
     const intent = spec.act === undefined ? undefined : ACT_INTENT[spec.act];
     if (intent !== undefined) intents.add(intent);
     items.push({
@@ -153,17 +174,32 @@ function synthesiseContract(
   }));
   const forbidden = new Set(prohibitions.map((c) => c.kind));
 
-  // Going outside the workspace is not something the verb list can see — it is
-  // named in the request rather than acted out by it — so it is read from the
-  // words the same way the prohibitions are.
+  // Going outside the workspace is named in a request rather than acted out by
+  // it, so it is read from the words — with the runtime's own hardened reader,
+  // not a second noun scan of this module's own. The local one matched domain
+  // words: "로그인 오류를 수정하고 테스트해줘" asks for no web at all, and a bare
+  // `검색해`/`최신` alternative made the design demand webResearch 0.9 of every
+  // model for a pure coding chore. `statedResearchDemand` reads clause by
+  // clause and never inside a prohibition.
   //
-  // And never out of a sentence that forbids it. "웹검색은 하지 마" names the web
-  // and demands nothing; reading the noun inside the prohibition as a demand is
-  // the same inversion the research decision was rebuilt to end, arriving in new
-  // code. The prohibition wins, here as everywhere.
-  if (MENTIONS_RESEARCH.test(text) && !forbidden.has("no_research")) intents.add("research");
-  if (forbidden.has("no_execute")) intents.delete("execute");
-  if (forbidden.has("no_modify")) intents.delete("modify");
+  // The `forbidden` guard stays beside it. The two catch different failures —
+  // one is a structural clause guard, the other a class the pattern layer
+  // recognised — and a request that forbids the web must not demand it under
+  // either reading.
+  if (statedResearchDemand(text) !== null && !forbidden.has("no_research")) intents.add("research");
+
+  // Nothing is subtracted here.
+  //
+  // Two lines used to delete `execute` and `modify` when the request also
+  // forbade them, and that produced a design contradicting its own requirement
+  // list: "README를 고쳐줘. 다른 파일은 수정하지 마." kept "README를 수정한다"
+  // among its requirements while the profile carried no coding demand at all,
+  // so the router was asked to staff a modification with a model chosen for
+  // reading. Both halves are true at once — the user wants one file changed and
+  // the others left alone — and the way to honour that is the constraint, which
+  // reaches the router as `constraints.noModify` and filters rather than scores.
+  // The design phase runs nothing, so keeping the intent authorises nothing.
+
   // A request that names no act at all is still a request to look at something.
   if (intents.size === 0) intents.add("inspect");
 
@@ -178,10 +214,6 @@ function synthesiseContract(
   });
   return { contract, intents: [...intents], prohibitions };
 }
-
-/** Asking for something outside the workspace, as a request names it. */
-const MENTIONS_RESEARCH =
-  /웹\s*검색|웹서치|웹에서|인터넷|온라인|검색해|찾아봐|조사해|허깅\s*페이스|hugging\s*face|web\s*search|search\s+the\s+web|research\b|최신\s*(?:자료|정보|모델|버전)/i;
 
 export interface DesignHarnessInput {
   /** What the user typed. One request, in their own words. */
@@ -208,31 +240,49 @@ export async function designHarness(input: DesignHarnessInput): Promise<HarnessD
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
 
-  // `system_added` requirements are the harness's own baselines, not the
-  // user's. They belong in the record and in the profile, but the panel labels
-  // them apart — see `confidence.ungrounded`.
   const standing = preview.requirements;
+  // What the user actually asked for, as opposed to the rules the harness
+  // brings to every request. The distinction decides almost everything below:
+  // it is the profile's input, the requirement count the user is shown, and
+  // whether there is anything here to recommend a model for.
+  const stated = standing.filter((r) => r.status !== "system_added");
+  const understood = stated.length > 0;
+
   const { contract, intents, prohibitions } = synthesiseContract(input.text, standing);
   const profile = projectTaskProfile(contract);
 
+  // A recommendation is a claim about what the work needs. With nothing read
+  // from the request there is no work to characterise, and ranking models
+  // against the harness's own baselines produced a confident pick for
+  // "고마워" and for every English sentence — the profile was the same one
+  // every unread request gets, so the answer was the same too. Saying nothing
+  // was read is the honest output, and the panel prints it.
   const recommendation =
-    input.models === undefined || input.models.length === 0
+    !understood || input.models === undefined || input.models.length === 0
       ? null
       : await recommendModel(profile, input.models);
 
   const questions = questionsFrom(preview);
+  // Questions carry the requirement's *id* as their subject — see
+  // `questionsFrom`, where every askable finding is stamped with `spec.id`.
+  // Keying on the text instead meant the set never intersected and the field
+  // was zero on all 76 corpus cases, including the 16 that raise a question.
   const unresolvedSubjects = new Set(questions.map((q) => q.subject));
 
   return {
     preview,
     requirements: standing,
+    understood,
     profile,
     recommendation,
     questions,
     confidence: {
-      grounded: standing.filter((r) => r.span !== undefined).length,
-      ungrounded: standing.filter((r) => r.span === undefined).length,
-      unresolved: standing.filter((r) => unresolvedSubjects.has(r.text)).length,
+      grounded: stated.filter((r) => r.span !== undefined).length,
+      // The harness's own rules, counted apart rather than as something the
+      // user might have said.
+      ungrounded: stated.filter((r) => r.span === undefined).length,
+      baseline: standing.length - stated.length,
+      unresolved: standing.filter((r) => unresolvedSubjects.has(r.id)).length,
     },
     intents,
     prohibitions,
@@ -249,7 +299,16 @@ export async function designHarness(input: DesignHarnessInput): Promise<HarnessD
 export function describeDesign(design: HarnessDesign): string {
   const model = design.recommendation?.selected?.modelId ?? null;
   const parts: string[] = [];
-  parts.push(`요구사항 ${design.requirements.length}건`);
+  if (!design.understood) {
+    // Said first and said plainly. Everything after this sentence would be an
+    // answer about a request nobody read.
+    return "이 요청에서 요구사항을 읽지 못했습니다";
+  }
+  // The user's own, not the harness's baselines — those are counted apart in
+  // `confidence.baseline`, and reporting them here told someone whose request
+  // produced nothing that it had produced two requirements.
+  const stated = design.requirements.filter((r) => r.status !== "system_added").length;
+  parts.push(`요구사항 ${stated}건`);
   if (model !== null) parts.push(`추천 ${model}`);
   else if (design.recommendation !== null) parts.push("추천 가능한 모델 없음");
   else parts.push("모델 목록 없음");

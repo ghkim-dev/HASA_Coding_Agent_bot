@@ -762,6 +762,20 @@ function isNegativeClause(clause: string): boolean {
 /** Any mention of leaving the machine, for the coarse ban-shape check. */
 const MENTIONS_WEB = /웹|인터넷|온라인|허깅\s*페이스|hugging\s*face|web|internet|online/i;
 
+/**
+ * The user's own words asking for the web, if any clause does.
+ *
+ * Exported so the *designer* reads the request with the same vocabulary the
+ * runtime decides with. It had its own noun scan for a while, and that scan
+ * matched domain words — "로그인 오류를 수정하고 테스트해줘" contains no web
+ * request, but a bare `검색해` or `최신` alternative made one appear, and the
+ * design then demanded webResearch 0.9 of every model for a pure coding chore.
+ * One reading, one place.
+ */
+export function statedResearchDemand(text: string): string | null {
+  return demandIn(text);
+}
+
 /** A constraint shaped like a research ban — the enforced kind, or bare text. */
 const RESEARCH_BAN_TEXT = /^no[_\s-]*research$|검색\s*금지|웹\s*금지|조사\s*금지|research\s*금지/i;
 

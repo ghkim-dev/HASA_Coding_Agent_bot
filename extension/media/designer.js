@@ -24,6 +24,7 @@ const el = {
   qCard: /** @type {HTMLElement} */ (document.getElementById("qCard")),
   questions: /** @type {HTMLElement} */ (document.getElementById("questions")),
   err: /** @type {HTMLElement} */ (document.getElementById("err")),
+  key: /** @type {HTMLButtonElement} */ (document.getElementById("key")),
 };
 
 /** What each capability is called where a person reads it. */
@@ -52,6 +53,17 @@ const INTENT = {
   research: "조사",
   continue: "이어가기",
 };
+
+const TERM = {
+  capability: "필요 능력 대비",
+  evaluation: "이 하네스에서 측정된 성적",
+  efficiency: "효율(적은 호출)",
+  semantic: "의미 유사도",
+  total: "합계",
+};
+
+/** Reason codes that say the model is *weak* at what the task needs. */
+const NEGATIVE_REASON = new Set(["HIGH_DEMAND_UNMET", "EVALUATION_UNAVAILABLE"]);
 
 const CONSTRAINT = {
   no_execute: "실행 금지",
@@ -82,6 +94,10 @@ el.go.addEventListener("click", () => {
   vscode.postMessage({ type: "design", text: value });
 });
 
+el.key.addEventListener("click", () => {
+  vscode.postMessage({ type: "openSettings" });
+});
+
 el.req.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === "Enter") el.go.click();
 });
@@ -93,6 +109,9 @@ window.addEventListener("message", (event) => {
       message.source === "gateway"
         ? `모델 ${message.count}개를 대상으로 비교합니다`
         : message.detail;
+    // The control that fixes it, beside the sentence that reports it. The
+    // panel used to tell the user to set a key and give them nothing to press.
+    el.key.classList.toggle("hidden", message.source === "gateway");
     return;
   }
   if (message.type === "designing") {
@@ -105,6 +124,10 @@ window.addEventListener("message", (event) => {
     el.go.disabled = false;
     el.err.textContent = message.message;
     el.err.classList.remove("hidden");
+    // The previous design is not an answer to this request. Leaving it on
+    // screen under a red banner — still reading "요구사항을 읽는 중…" — showed a
+    // stale result as though it were the new one.
+    el.out.classList.add("hidden");
     return;
   }
   if (message.type === "design") {
@@ -112,6 +135,17 @@ window.addEventListener("message", (event) => {
     render(message.design);
   }
 });
+
+/** Why each model was dropped, in the words the router wrote, not its enum. */
+function renderDropped(rec) {
+  if (rec.filteredOut.length === 0) return;
+  el.rec.appendChild(make("h3", "muted", "제외된 모델"));
+  for (const f of rec.filteredOut) {
+    el.rec.appendChild(make("div", "dropped", `${f.modelId} — ${f.detail}`));
+  }
+  const hidden = rec.filteredOutTotal - rec.filteredOut.length;
+  if (hidden > 0) el.rec.appendChild(make("div", "dropped", `외 ${hidden}개 더 제외됨`));
+}
 
 function render(design) {
   el.out.classList.remove("hidden");
@@ -162,35 +196,74 @@ function render(design) {
   // --- the recommendation -------------------------------------------------
   el.rec.textContent = "";
   const rec = design.recommendation;
-  if (rec === null) {
+  if (design.understood === false) {
+    el.rec.appendChild(
+      make("p", "none", "요청을 읽지 못해 추천하지 않았습니다. 무엇을 어떻게 해달라는지 한 문장으로 더 적어 주세요."),
+    );
+  } else if (rec === null) {
     el.rec.appendChild(
       make("p", "muted", "비교할 모델 목록이 없습니다. API Key를 설정하면 실제 모델을 대상으로 추천합니다."),
     );
   } else if (rec.selected === null) {
     el.rec.appendChild(make("p", "none", rec.unavailableReason ?? "이 요청을 맡길 수 있는 모델이 없습니다."));
-    for (const f of rec.filteredOut) {
-      el.rec.appendChild(make("div", "dropped", `제외 ${f.modelId} — ${f.reason}`));
-    }
+    renderDropped(rec);
   } else {
     const pick = make("div", "pick");
     pick.appendChild(make("span", "id", rec.selected.modelId));
-    pick.appendChild(make("span", "muted", `  점수 ${rec.selected.score.toFixed(2)}`));
+    pick.appendChild(make("span", "muted", `  점수 ${rec.selected.score.toFixed(3)}`));
     el.rec.appendChild(pick);
-    for (const reason of rec.reasons) {
-      el.rec.appendChild(make("div", "reason", reason));
+
+    // How much of what this task needs was ever measured on this model. A
+    // cold-start winner scoring 0.50 is a tie broken by nothing, and saying so
+    // is the difference between a recommendation and a coin toss.
+    const conf = rec.selected.confidence;
+    if (conf.coldStart || conf.known < conf.total) {
+      el.rec.appendChild(
+        make(
+          "p",
+          "none",
+          conf.coldStart
+            ? `이 모델은 이 하네스에서 측정된 적이 없습니다 (필요 능력 ${conf.total}개 중 0개 확인). 점수는 근거가 아니라 기본값입니다.`
+            : `필요한 능력 ${conf.total}개 중 ${conf.known}개만 측정돼 있습니다. 나머지는 추정입니다.`,
+        ),
+      );
     }
+
+    for (const reason of rec.reasons) {
+      const row = make("div", "reason", reason.detail);
+      if (NEGATIVE_REASON.has(reason.code)) row.classList.add("against");
+      el.rec.appendChild(row);
+    }
+
+    // The four terms behind the number. Computed all along and thrown away
+    // before the panel saw them, which left a score on screen with nothing
+    // under it.
+    const terms = Object.entries(rec.selected.breakdown).filter(([k]) => k !== "total");
+    if (terms.length > 0) {
+      el.rec.appendChild(make("h3", "muted", "점수 구성"));
+      for (const [key, value] of terms) {
+        const row = make("div", "demand");
+        row.appendChild(make("span", "", TERM[key] ?? key));
+        const bar = make("span", "bar");
+        const fill = make("span", "fill");
+        fill.style.width = `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
+        bar.appendChild(fill);
+        row.appendChild(bar);
+        row.appendChild(make("span", "val", value.toFixed(2)));
+        el.rec.appendChild(row);
+      }
+    }
+
     if (rec.alternatives.length > 0) {
       el.rec.appendChild(make("h3", "muted", "다음 후보"));
       for (const a of rec.alternatives) {
         const row = make("div", "alt");
-        row.appendChild(make("span", "", a.modelId));
-        row.appendChild(make("span", "", a.score.toFixed(2)));
+        row.appendChild(make("span", "", a.modelId + (a.coldStart ? " (미측정)" : "")));
+        row.appendChild(make("span", "", a.score.toFixed(3)));
         el.rec.appendChild(row);
       }
     }
-    for (const f of rec.filteredOut) {
-      el.rec.appendChild(make("div", "dropped", `제외 ${f.modelId} — ${f.reason}`));
-    }
+    renderDropped(rec);
   }
 
   // --- what is still open -------------------------------------------------
