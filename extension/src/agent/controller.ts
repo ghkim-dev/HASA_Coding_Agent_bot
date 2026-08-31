@@ -92,7 +92,16 @@ export class AgentController {
     this.host = new AgentHost(context, log);
   }
 
-  async open(): Promise<void> {
+  /**
+   * Opens the chat window, optionally on a request the designer read.
+   *
+   * `seed` fills the composer and selects a model. It does not send: the
+   * designer's promise is that designing runs nothing, and a handoff that
+   * started a turn on arrival would break it at the moment a person is least
+   * expecting it. What the seed buys is that the request does not have to be
+   * typed twice and the recommendation the user just read actually applies.
+   */
+  async open(seed?: { prompt: string; modelId: string | null }): Promise<void> {
     this.panel = ChatPanel.show(this.context.extensionUri, (message) => {
       void this.handle(message).catch((err) => this.fail(err));
     });
@@ -110,6 +119,13 @@ export class AgentController {
     // to an empty one that was still the open conversation underneath.
     const already = this.host.recordedEvents();
     if (already.length > 0) this.panel.post({ type: "transcript", events: [...already] });
+
+    // Before the key check below, so a handoff that arrives without a key still
+    // leaves the request in the composer rather than dropping it on the floor.
+    if (seed !== undefined) {
+      if (seed.modelId !== null) this.host.selectModel(seed.modelId);
+      this.panel.post({ type: "prefill", text: seed.prompt });
+    }
 
     // Checking the key on open rather than on first message: a user who typed
     // a wrong key should learn it now, not after writing a request.

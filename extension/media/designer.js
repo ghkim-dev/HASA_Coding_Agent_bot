@@ -25,6 +25,8 @@ const el = {
   questions: /** @type {HTMLElement} */ (document.getElementById("questions")),
   err: /** @type {HTMLElement} */ (document.getElementById("err")),
   key: /** @type {HTMLButtonElement} */ (document.getElementById("key")),
+  handoff: /** @type {HTMLButtonElement} */ (document.getElementById("handoff")),
+  handoffWhy: /** @type {HTMLElement} */ (document.getElementById("handoffWhy")),
 };
 
 /** What each capability is called where a person reads it. */
@@ -96,6 +98,13 @@ el.go.addEventListener("click", () => {
 
 el.key.addEventListener("click", () => {
   vscode.postMessage({ type: "openSettings" });
+});
+
+el.handoff.addEventListener("click", () => {
+  // No payload. The host still holds the design it produced and the words it
+  // produced it from, and sending a copy from here would make this the second
+  // place either one lives.
+  vscode.postMessage({ type: "handoff" });
 });
 
 el.req.addEventListener("keydown", (event) => {
@@ -290,4 +299,14 @@ function render(design) {
     box.appendChild(opts);
     el.questions.appendChild(box);
   }
+
+  // --- handing it over ----------------------------------------------------
+  //
+  // Every word here was decided in the host. This picks no model, counts no
+  // problem and disables nothing on its own judgement — a view that worked any
+  // of that out for itself would be a second opinion sitting next to the first.
+  el.handoffWhy.textContent =
+    design.handoff.blockerCount === 0
+      ? design.handoff.why
+      : `${design.handoff.why} 넘기기 전에 확인할 것이 ${design.handoff.blockerCount}개 있습니다.`;
 }

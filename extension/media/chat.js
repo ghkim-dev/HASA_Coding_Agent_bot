@@ -1269,6 +1269,22 @@ window.addEventListener("message", (e) => {
   else if (message.type === "notice") notice(message.level, message.text);
   else if (message.type === "artifact") showArtifact(message);
   else if (message.type === "transcript") renderTranscript(message.events);
+  else if (message.type === "prefill") prefill(message.text);
 });
+
+/**
+ * Puts a request in the composer, focused, without sending it.
+ *
+ * Appends rather than replaces when something is already typed: the only way
+ * this arrives is a handoff from the designer, and silently discarding a
+ * half-written message because another window sent one is not a trade a user
+ * agreed to.
+ */
+function prefill(text) {
+  const existing = el.prompt.value.trim();
+  el.prompt.value = existing.length === 0 ? text : `${existing}\n\n${text}`;
+  el.prompt.focus();
+  el.prompt.setSelectionRange(el.prompt.value.length, el.prompt.value.length);
+}
 
 post({ type: "ready" });

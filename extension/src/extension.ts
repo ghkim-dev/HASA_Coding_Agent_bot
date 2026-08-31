@@ -48,6 +48,13 @@ export function activate(context: vscode.ExtensionContext): void {
       designer ??= new DesignerHost({
         extensionUri: context.extensionUri,
         models: async () => (await agent?.modelProfiles()) ?? null,
+        // The other half of the product, reachable from the first. The README
+        // said the agent takes over when a design is done and nothing carried
+        // it there, so a person who had just watched the runtime read their
+        // request had to go and type it again.
+        startAgent: async (seed) => {
+          await agent?.open(seed);
+        },
         log: (line) => log.appendLine(line),
       });
       designer.open();

@@ -102,6 +102,9 @@ const FILES = [
   // that module holds cannot be mutated for want of a suite, and this one
   // now has both.
   "src/agent/conversationAdoption.ts",
+  // C4.14: what crosses from the designer to the agent. Every defence here is
+  // against the handoff saying something the design did not.
+  "src/design/harnessHandoff.ts",
 ];
 /**
  * Which suite is run for a mutation.
@@ -118,6 +121,7 @@ const SUITES = {
   permission: ["src/design/modelPermission.test.ts"],
   extract: ["src/design/functionalExtract.test.ts", "src/design/preview.test.ts"],
   adoptconv: ["src/agent/conversationAdoption.test.ts"],
+  handoff: ["src/design/harnessHandoff.test.ts"],
   recall: [
     "src/design/functionalExtract.test.ts",
     "src/design/evalScenarioRecall.test.ts",
@@ -663,6 +667,19 @@ const MUTATIONS = [
   ["M180", "작업 폴더를 대화가 아니라 창에서 가져옴", "src/agent/conversationAdoption.ts",
     "    boundRoot: stored.workspace?.boundRoot ?? null,",
     "    boundRoot: null,", "adoptconv"],
+  // ---- C4.14: the handoff, and what it refuses to carry -------------------
+  ["M181", "설계가 읽지 못한 요청도 조용히 넘김", "src/design/harnessHandoff.ts",
+    "  if (!design.understood) {",
+    "  if (false) {", "handoff"],
+  ["M182", "미정 질문을 넘기기 전에 알리지 않음", "src/design/harnessHandoff.ts",
+    "  for (const question of design.questions) {",
+    "  for (const question of []) {", "handoff"],
+  ["M183", "동점을 숨기고 임의 선택을 추천으로 제시", "src/design/harnessHandoff.ts",
+    "  if (tied.length > 0) {",
+    "  if (false) {", "handoff"],
+  ["M184", "원문 대신 설계가 이해한 것을 넘김", "src/design/harnessHandoff.ts",
+    "    prompt: text,",
+    "    prompt: design.requirements.map((r) => r.text).join(\" \"),", "handoff"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

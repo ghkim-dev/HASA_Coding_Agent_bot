@@ -19,7 +19,15 @@ import * as vscode from "vscode";
 export type DesignerMessage =
   | { type: "design"; text: string }
   | { type: "cancel" }
-  | { type: "openSettings" };
+  | { type: "openSettings" }
+  /**
+   * Start the coding agent on the design that is on screen.
+   *
+   * Carries nothing. The host holds the design it just produced and the text it
+   * produced it from; a webview that sent its own copy of either would be the
+   * second place either one lives, and the two could disagree.
+   */
+  | { type: "handoff" };
 
 /** What the host tells the webview. */
 export type DesignerHostMessage =
@@ -140,6 +148,14 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <p class="muted">아래는 런타임이 대신 정하지 않고 남겨둔 것입니다.
         아직 여기서 고를 수는 없습니다 — 요청에 한 줄 덧붙여 다시 설계하시면 반영됩니다.</p>
       <div id="questions"></div>
+    </div>
+
+    <div class="card">
+      <h2>이 설계로 시작하기</h2>
+      <p class="muted">요청과 추천 모델을 그대로 들고 코딩 에이전트를 엽니다.
+        보내지는 않습니다 — 실행 여부는 그쪽 창에서 정하시면 됩니다.</p>
+      <button id="handoff" type="button">코딩 에이전트로 넘기기</button>
+      <p id="handoffWhy" class="muted"></p>
     </div>
   </section>
 

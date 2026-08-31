@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { designHarness, describeDesign, type HarnessDesign } from "../../../src/design/harnessDesign.ts";
+import { handoffFor } from "../../../src/design/harnessHandoff.ts";
 import { buildRegistry } from "../../../src/router/modelRegistry.ts";
 import type { ModelProfile } from "../../../src/router/modelProfile.ts";
 import { DesignerPanel, type DesignerMessage } from "./designerPanel.ts";
@@ -53,6 +54,14 @@ interface DesignPayload {
     unavailableReason?: string;
   } | null;
   questions: Array<{ about: string; options: string[] }>;
+  /**
+   * What handing this design to the agent would carry, decided here.
+   *
+   * The view shows it and judges nothing, like every other field above. A
+   * webview that worked out for itself which model to name would be a second
+   * ranker, disagreeing with the first one on the same screen.
+   */
+  handoff: { modelId: string | null; why: string; blockerCount: number };
 }
 
 export interface DesignerHostOptions {
@@ -65,6 +74,13 @@ export interface DesignerHostOptions {
    * null when there is no list — never an empty array standing in for one.
    */
   models: () => Promise<readonly ModelProfile[] | null>;
+  /**
+   * Opens the coding agent on a request, with a model already chosen.
+   *
+   * Injected rather than reached for, so this module keeps knowing nothing
+   * about the agent beyond "there is one and it can be started".
+   */
+  startAgent?: (seed: { prompt: string; modelId: string | null }) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -73,6 +89,14 @@ export class DesignerHost {
   private panel: DesignerPanel | null = null;
   /** The design in flight, so a second request supersedes the first. */
   private running: AbortController | null = null;
+  /**
+   * The design on screen and the words it was read from.
+   *
+   * Both, together, because a handoff needs the text the user typed and the
+   * design's one conclusion that is not in that text. Cleared when a new design
+   * starts, so a handoff can never carry the previous request's answer.
+   */
+  private shown: { design: HarnessDesign; text: string } | null = null;
 
   constructor(opts: DesignerHostOptions) {
     this.opts = opts;
@@ -116,12 +140,20 @@ export class DesignerHost {
       void this.announceModels();
       return;
     }
+    if (message.type === "handoff") {
+      await this.handoff();
+      return;
+    }
     if (message.type !== "design") return;
 
     // A second request supersedes the first rather than queueing behind it.
     this.running?.abort();
     const controller = new AbortController();
     this.running = controller;
+    // Dropped before the new one starts, not after it finishes. A design that
+    // is cancelled or fails would otherwise leave the previous one on offer
+    // under a screen showing something else.
+    this.shown = null;
     this.panel?.post({ type: "designing" });
 
     try {
@@ -134,7 +166,8 @@ export class DesignerHost {
       });
       if (controller.signal.aborted) return;
       this.opts.log?.(`[hasa] designed: ${describeDesign(design)}`);
-      this.panel?.post({ type: "design", design: toPayload(design) });
+      this.shown = { design, text: message.text };
+      this.panel?.post({ type: "design", design: toPayload(design, message.text) });
     } catch (err) {
       if (controller.signal.aborted) return;
       const detail = err instanceof Error ? err.message : String(err);
@@ -147,6 +180,36 @@ export class DesignerHost {
       if (this.running === controller) this.running = null;
     }
   }
+
+  /**
+   * Hands the design on screen to the coding agent.
+   *
+   * Asks first when the design left something open. `handoffFor` decides what
+   * counts as open and this decides nothing — the list it shows is the design's
+   * own account of what it could not settle, so a person is choosing to skip
+   * something the runtime named rather than something a dialog invented.
+   *
+   * Nothing runs at the end of this. The agent opens with the request in its
+   * composer and the recommended model selected, and the send button is still
+   * the user's.
+   */
+  private async handoff(): Promise<void> {
+    const start = this.opts.startAgent;
+    if (start === undefined || this.shown === null) return;
+
+    const handoff = handoffFor(this.shown.design, this.shown.text);
+    if (handoff.blockers.length > 0) {
+      const answer = await vscode.window.showWarningMessage(
+        "설계에 아직 정해지지 않은 것이 있습니다. 그대로 넘길까요?",
+        { modal: true, detail: handoff.blockers.join("\n") },
+        "그대로 넘기기",
+      );
+      if (answer !== "그대로 넘기기") return;
+    }
+
+    this.opts.log?.(`[hasa] handoff: ${handoff.why}`);
+    await start({ prompt: handoff.prompt, modelId: handoff.modelId });
+  }
 }
 
 /**
@@ -157,8 +220,9 @@ export class DesignerHost {
  * `span`, `status`, `polarity`, `provenance` — and the three booleans below are
  * the whole of what the layout depends on.
  */
-function toPayload(design: HarnessDesign): DesignPayload {
+function toPayload(design: HarnessDesign, text: string): DesignPayload {
   const rec = design.recommendation;
+  const handoff = handoffFor(design, text);
   return {
     summary: describeDesign(design),
     understood: design.understood,
@@ -217,6 +281,14 @@ function toPayload(design: HarnessDesign): DesignPayload {
               : { unavailableReason: rec.unavailableReason }),
           },
     questions: design.questions.map((q) => ({ about: q.about, options: q.options })),
+    handoff: {
+      modelId: handoff.modelId,
+      why: handoff.why,
+      // The count rather than the list: the panel says how many, the modal that
+      // opens on click says which. Showing both would put the same warning in
+      // two places and let them drift.
+      blockerCount: handoff.blockers.length,
+    },
   };
 }
 

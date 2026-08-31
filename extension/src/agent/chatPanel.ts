@@ -130,7 +130,14 @@ export type HostMessage =
    * turn, which is what makes a reopened conversation look like the one that
    * was there.
    */
-  | { type: "transcript"; events: SessionEvent[] };
+  | { type: "transcript"; events: SessionEvent[] }
+  /**
+   * Puts a request in the composer without sending it.
+   *
+   * How a design reaches the agent. Deliberately not a "send this": the
+   * designer executes nothing, and the button that ends that is the user's.
+   */
+  | { type: "prefill"; text: string };
 
 export class ChatPanel {
   static active: ChatPanel | null = null;
