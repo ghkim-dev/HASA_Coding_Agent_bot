@@ -197,6 +197,18 @@ describe("나열과 범위는 하나의 목적어다", () => {
     assert.deepEqual(texts("src 폴더 안에서만 로그를 추가해줘."), ["로그를 추가한다"]);
     assert.deepEqual(texts("사용할 수 있는 모델을 확인해줘."), ["모델을 확인한다"]);
   });
+
+  test("`과` 로 끝나는 명사와 접속 조사 `과` 는 뒤에 올 말이 있는지로 갈린다", () => {
+    // `결과`, `성과`, `효과` end in the syllable that joins a list, and nothing
+    // in the shape of the word separates the two readings. What separates them
+    // is whether there is another member after it: a connective with nothing to
+    // connect to is part of a noun. Without that guard the first sentence widens
+    // to "이전 실행 결과" on the strength of a coordination it does not contain.
+    assert.deepEqual(texts("이전 실행 결과를 비교해줘."), ["실행 결과를 비교한다"]);
+    assert.deepEqual(texts("지난 학습 결과와 로그를 비교해줘."), [
+      "지난 학습 결과와 로그를 비교한다",
+    ]);
+  });
 });
 
 /**

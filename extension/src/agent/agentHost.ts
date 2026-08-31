@@ -78,6 +78,7 @@ import { transcribeAudio, TranscriptionUnavailable } from "../../../src/provider
 import type { Logger } from "../../../src/hasa-client/logger.ts";
 import type { ConnectionState } from "./chatPanel.ts";
 import { canonicalizeRoot } from "../../../src/agent/workspaceIdentity.ts";
+import { adoptConversation } from "../../../src/agent/conversationAdoption.ts";
 import {
   describeAmbiguity,
   resolveWorkspaceContext,
@@ -1604,20 +1605,21 @@ export class AgentHost {
     // holding conversation B's messages under conversation A's contract, and
     // A's constraints would govern B's first turn. The doc comment on this
     // method claimed the two halves always move together; this makes that true.
-    this.conversationId = stored.id;
-    this.recorded = [...(stored.events ?? [])];
-    this.pendingRestore = stored.messages;
-    this.pendingEvents = [];
-    this.pendingDelta = [];
-    // Counts turns rather than distinct event `turnId`s: a turn can end with no
-    // events at all, and counting those would hand the next turn an id that is
-    // already taken. Turns are never removed — an orphan is kept — so this only
-    // ever grows, which is what keeps ids unique across forks.
-    this.turnOrdinal = stored.turns?.length ?? new Set(this.recorded.map((e) => e.turnId)).size;
-    // Taken from the conversation rather than from the window. A conversation
-    // resumed a week later must resolve `src/a.ts` to the file it meant then,
-    // not to whichever folder is in front now.
-    this.boundRoot = stored.workspace?.boundRoot ?? null;
+    //
+    // The arithmetic lives in `conversationAdoption.ts`, which imports no
+    // `vscode` and therefore has a suite. It used to be written out here, where
+    // nothing in `node --test` could reach it — the mutation harness recorded
+    // that as a defence with no test behind it, which is honest and is not the
+    // same as covered. One object, complete before this method sees it, so
+    // there is nothing left here to assign in the wrong order.
+    const next = adoptConversation(stored);
+    this.conversationId = next.conversationId;
+    this.recorded = next.recorded;
+    this.pendingRestore = next.pendingRestore;
+    this.pendingEvents = next.pendingEvents;
+    this.pendingDelta = next.pendingDelta;
+    this.turnOrdinal = next.turnOrdinal;
+    this.boundRoot = next.boundRoot;
     // Last, so both halves come from the chain now in `this.recorded`.
     if (this.session !== null) this.applyPendingRestore(this.session);
     this.log.appendLine(

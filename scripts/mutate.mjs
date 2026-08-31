@@ -75,12 +75,16 @@ const FILES = [
   // C4.11: the safety invariant — a model-authored anything may not release a
   // prohibition the user stated in their own words.
   //
-  // `extension/src/agent/agentHost.ts` is deliberately absent. The conversation
-  // adoption ordering fixed in this pass lives there, and that module imports
-  // `vscode` — nothing in `node --test` can load it, so a mutation of it would
+  // `extension/src/agent/agentHost.ts` is deliberately absent: it imports
+  // `vscode`, nothing in `node --test` can load it, and a mutation of it would
   // report "does not bite" for want of a suite rather than for want of a
-  // defence. Reported as an uncovered defence instead of dressed up as a
-  // verified one.
+  // defence.
+  //
+  // The conversation adoption ordering used to be the thing that note was
+  // apologising for. It is now `src/agent/conversationAdoption.ts`, listed
+  // below with a suite behind it — the host assigns what that function returns
+  // and decides nothing itself. What remains uncovered here is the rest of the
+  // host, and that is still an uncovered defence rather than a verified one.
   //
   // `statedProhibitions.ts` belongs to this slice too and is listed once,
   // above with `loop.ts`. It was listed twice until the duplicate produced a
@@ -93,6 +97,11 @@ const FILES = [
   "src/design/harnessDesign.ts",
   // The ranker itself, now that a corpus scores it — see recommendationCases.
   "src/router/recommend.ts",
+  // C4.14: moving the session onto a stored conversation. Lifted out of
+  // `agentHost.ts` for exactly this reason — the note above says a defence
+  // that module holds cannot be mutated for want of a suite, and this one
+  // now has both.
+  "src/agent/conversationAdoption.ts",
 ];
 /**
  * Which suite is run for a mutation.
@@ -108,6 +117,7 @@ const SUITES = {
   parse: ["src/design/proposalParse.test.ts", "src/design/preview.test.ts"],
   permission: ["src/design/modelPermission.test.ts"],
   extract: ["src/design/functionalExtract.test.ts", "src/design/preview.test.ts"],
+  adoptconv: ["src/agent/conversationAdoption.test.ts"],
   recall: [
     "src/design/functionalExtract.test.ts",
     "src/design/evalScenarioRecall.test.ts",
@@ -262,7 +272,7 @@ const MUTATIONS = [
   // --- Gold 기준선과 설계 규칙 -----------------------------------------------
   ["M39", "목적어 구 경계를 무시", "src/design/functionalExtract.ts",
     `    if (token.grammar) {
-      if (kept.length === 0) continue;
+      if (run.length === 0) continue;
       break;
     }`,
     `    if (token.grammar) {
@@ -637,6 +647,22 @@ const MUTATIONS = [
   ["M176", "접속 조사 뒤에 이어질 말이 없어도 나열로 봄", "src/design/functionalExtract.ts",
     "  const coordinated = run.some((token, i) => i < run.length - 1 && COORDINATOR.test(token));",
     "  const coordinated = run.some((token) => COORDINATOR.test(token));", "recall"],
+  // ---- C4.14: which conversation is open, in one place --------------------
+  ["M177", "이전 대화의 미전송 이벤트를 새 대화로 넘김", "src/agent/conversationAdoption.ts",
+    "    pendingEvents: [],",
+    "    pendingEvents: [...(stored.events ?? [])],", "adoptconv"],
+  ["M178", "저장된 메시지 배열을 그대로 넘겨줌", "src/agent/conversationAdoption.ts",
+    "    pendingRestore: [...stored.messages],",
+    "    pendingRestore: stored.messages,", "adoptconv"],
+  ["M179", "다음 턴 id 를 턴 그래프만 보고 셈 — 빈 그래프면 0", "src/agent/conversationAdoption.ts",
+    `    turnOrdinal: Math.max(
+      stored.turns?.length ?? 0,
+      new Set(recorded.map((event) => event.turnId)).size,
+    ),`,
+    "    turnOrdinal: stored.turns?.length ?? new Set(recorded.map((e) => e.turnId)).size,", "adoptconv"],
+  ["M180", "작업 폴더를 대화가 아니라 창에서 가져옴", "src/agent/conversationAdoption.ts",
+    "    boundRoot: stored.workspace?.boundRoot ?? null,",
+    "    boundRoot: null,", "adoptconv"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
