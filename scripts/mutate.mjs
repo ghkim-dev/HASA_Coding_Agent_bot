@@ -81,7 +81,10 @@ const FILES = [
   // report "does not bite" for want of a suite rather than for want of a
   // defence. Reported as an uncovered defence instead of dressed up as a
   // verified one.
-  "src/agent/statedProhibitions.ts",
+  //
+  // `statedProhibitions.ts` belongs to this slice too and is listed once,
+  // above with `loop.ts`. It was listed twice until the duplicate produced a
+  // spurious cleanup failure — see the uniqueness check below.
   "src/agent/requirementsView.ts",
   "src/agent/issueText.ts",
   "src/agent/sessionLog.ts",
@@ -105,6 +108,10 @@ const SUITES = {
   parse: ["src/design/proposalParse.test.ts", "src/design/preview.test.ts"],
   permission: ["src/design/modelPermission.test.ts"],
   extract: ["src/design/functionalExtract.test.ts", "src/design/preview.test.ts"],
+  recall: [
+    "src/design/functionalExtract.test.ts",
+    "src/design/evalScenarioRecall.test.ts",
+  ],
   metrics: ["src/design/preview.test.ts"],
   gold: ["src/design/goldRequirements.test.ts"],
   rules: ["src/design/designRules.test.ts"],
@@ -614,6 +621,22 @@ const MUTATIONS = [
   ["M171", "적격 필터를 건너뜀 — 못 쓰는 모델도 후보", "src/router/recommend.ts",
     "  const { eligible, filteredOut } = filterEligible(profiles, task);",
     "  const { eligible, filteredOut } = { eligible: [...profiles], filteredOut: [] };", "recommend"],
+  // ---- C4.14: what the designer reads back, and how much of it -----------
+  ["M172", "나열을 두 토큰에서 다시 자름", "src/design/functionalExtract.ts",
+    "  const kept = coordinated ? run : run.slice(-2);",
+    "  const kept = run.slice(-2);", "recall"],
+  ["M173", "범위 조사를 다시 위치로 읽음", "src/design/functionalExtract.ts",
+    "    const located = token.replace(/(?:안에서만|에서만|에서|안에)$/u, \"\");",
+    "    const located = token.replace(/(?:안에서만|에서만|에서|안에|까지|부터)$/u, \"\");", "recall"],
+  ["M174", "사용자 동사를 버리고 분류 대표어로 씀", "src/design/functionalExtract.ts",
+    "          : `${object}${objectParticle(object)} ${phrase ?? ACTION_TEXT[action]}`;",
+    "          : `${object}${objectParticle(object)} ${ACTION_TEXT[action]}`;", "recall"],
+  ["M175", "`-라는 게 아니라` 정정을 요청으로 읽음", "src/design/functionalExtract.ts",
+    "  /(?:지|진)(?:는|도|를|은)?\\s*(?:마|말|않|못|안)|(?:면|서는)\\s*안|(?:라|다|자|란)는?\\s*(?:게|것이|건|말이)\\s*아니/;",
+    "  /(?:지|진)(?:는|도|를|은)?\\s*(?:마|말|않|못|안)|(?:면|서는)\\s*안/;", "extract"],
+  ["M176", "접속 조사 뒤에 이어질 말이 없어도 나열로 봄", "src/design/functionalExtract.ts",
+    "  const coordinated = run.some((token, i) => i < run.length - 1 && COORDINATOR.test(token));",
+    "  const coordinated = run.some((token) => COORDINATOR.test(token));", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
@@ -707,6 +730,16 @@ const unbacked = MUTATIONS.filter(([, , file]) => !FILES.includes(file));
 if (unbacked.length > 0) {
   const names = unbacked.map(([id, , file]) => `${id} → ${file}`).join(", ");
   throw new Error(`백업 대상이 아닌 파일을 변이시키려 합니다: ${names}`);
+}
+
+// A file listed twice is backed up twice, restored twice, and has its `.bak`
+// unlinked twice — the second unlink throws ENOENT and prints `.bak 삭제 실패`,
+// which is the identical line a genuine cleanup failure prints. The duplicate
+// corrupts nothing; what it costs is the ability to tell a real failure from
+// noise at the end of a run, so it is refused here rather than tolerated there.
+const duplicated = [...new Set(FILES.filter((f, i) => FILES.indexOf(f) !== i))];
+if (duplicated.length > 0) {
+  throw new Error(`FILES 에 같은 파일이 두 번 있습니다: ${duplicated.join(", ")}`);
 }
 
 // A leftover `.bak` is evidence that a previous run did not finish restoring.

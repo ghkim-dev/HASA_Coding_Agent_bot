@@ -41,7 +41,7 @@ import { parseProposals } from "./proposalParse.ts";
  * everywhere else, which would make this test a portability bug rather than a
  * guarantee.
  */
-const HOLDOUT_DIGEST = "24197c8eb77ddb429b95ad0e77d3e799012f3b3b33d1cae4e570318ec3bb1a6f";
+const HOLDOUT_DIGEST = "f750b45e1b25fd99c8a36081e8911c11bbcac7275180e3719231744b41524d84";
 
 /** The content this digest is over. One definition, used to pin and to verify. */
 function normalise(source: string): string {

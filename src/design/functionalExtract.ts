@@ -69,11 +69,38 @@ export interface FunctionalCandidate {
  * contradict it, which is what `NEGATED` below enforces.
  */
 const GAP = "(?:[은는만도]*\\s*)?";
-const verb = (stem: string, tail: string): RegExp => new RegExp(`${stem}${GAP}${tail}`);
 
-const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
-  { pattern: verb("재실행", "(?:하|해|시켜)"), action: "execute" },
-  { pattern: verb("실행", "(?:하|해|시켜)"), action: "execute" },
+interface VerbEntry {
+  pattern: RegExp;
+  action: ActionKind;
+  /** How the requirement reads. Absent falls back to the class in `ACTION_TEXT`. */
+  phrase?: string;
+}
+
+/**
+ * A noun-verb, and the words it renders as.
+ *
+ * The phrase is the stem the user wrote rather than a representative of its
+ * class, because the representative renames the act. `번역해줘` came back as
+ * "수정한다"; `분석` and `비교` both as "살펴본다"; `학습` as "실행한다". A tool
+ * whose entire job is to show a person what it understood cannot hand them back
+ * a different verb from the one they typed — and the difference is not cosmetic:
+ * "결과를 살펴본다" and "결과를 비교한다" are different deliverables.
+ *
+ * `render` overrides where the class phrase carries a word the stem does not.
+ * `preserve` says "그대로 유지한다", and dropping 그대로 turns "leave it alone"
+ * into "maintain it". The two English stems take their class phrase for the
+ * obvious reason: "fix한다" is not Korean.
+ */
+const verb = (stem: string, tail: string, action: ActionKind, render?: string): VerbEntry => ({
+  pattern: new RegExp(`${stem}${GAP}${tail}`),
+  action,
+  phrase: render ?? `${stem}한다`,
+});
+
+const VERBS: ReadonlyArray<VerbEntry> = [
+  verb("재실행", "(?:하|해|시켜)", "execute"),
+  verb("실행", "(?:하|해|시켜)", "execute"),
   // `되돌려` is not `돌려`: "의존성을 되돌려줘" is a revert, and this pattern was
   // matching the tail of it and producing "의존성 되를 실행한다" — a made-up target
   // for an act the user did not ask for.
@@ -87,25 +114,33 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // invites the other kind of request: "학습시켜줘", "설치해줘",
   // "다운로드해줘" are the verbs a model-selection request is made of, and each
   // produced no requirement at all.
-  { pattern: verb("설치", "(?:하|해)"), action: "execute" },
-  { pattern: verb("학습", "(?:하|해|시켜)"), action: "execute" },
-  { pattern: verb("훈련", "(?:하|해|시켜)"), action: "execute" },
-  { pattern: verb("다운로드", "(?:하|해|받)"), action: "execute" },
-  { pattern: verb("배포", "(?:하|해)"), action: "execute" },
-  { pattern: verb("추론", "(?:하|해)"), action: "execute" },
-  { pattern: verb("테스트", "(?:하|해)"), action: "verify" },
-  { pattern: verb("검증", "(?:하|해)"), action: "verify" },
-  { pattern: verb("확인", "(?:하|해)"), action: "verify" },
-  { pattern: verb("측정", "(?:하|해)"), action: "verify" },
-  { pattern: verb("평가", "(?:하|해)"), action: "verify" },
-  { pattern: verb("재현", "(?:하|해)"), action: "verify" },
-  { pattern: verb("유지", "(?:하|해)"), action: "preserve" },
-  { pattern: verb("보존", "(?:하|해)"), action: "preserve" },
+  verb("설치", "(?:하|해)", "execute"),
+  verb("학습", "(?:하|해|시켜)", "execute"),
+  verb("훈련", "(?:하|해|시켜)", "execute"),
+  verb("다운로드", "(?:하|해|받)", "execute"),
+  verb("배포", "(?:하|해)", "execute"),
+  verb("추론", "(?:하|해)", "execute"),
+  // "CNN부터 Transformer까지 사용하고" names what the project is built out of, and
+  // it read as nothing at all.
+  //
+  // `쓰다` is the other half of this and is deliberately absent: "보고서를 쓰고"
+  // is writing, not using, and nothing here can tell the two apart from the
+  // object alone. A missed request is a gap; a request turned into the wrong act
+  // is an invention, and this file is written against the second one.
+  verb("사용", "(?:하|해)", "execute"),
+  verb("테스트", "(?:하|해)", "verify"),
+  verb("검증", "(?:하|해)", "verify"),
+  verb("확인", "(?:하|해)", "verify"),
+  verb("측정", "(?:하|해)", "verify"),
+  verb("평가", "(?:하|해)", "verify"),
+  verb("재현", "(?:하|해)", "verify"),
+  verb("유지", "(?:하|해)", "preserve", "그대로 유지한다"),
+  verb("보존", "(?:하|해)", "preserve", "그대로 유지한다"),
   { pattern: /그대로\s*(?:둬|두|유지)/, action: "preserve" },
-  { pattern: verb("수정", "(?:하|해)"), action: "modify" },
+  verb("수정", "(?:하|해)", "modify"),
   { pattern: /고(?:쳐|치)/, action: "modify" },
-  { pattern: verb("개선", "(?:하|해)"), action: "modify" },
-  { pattern: verb("리팩터링", "(?:하|해)"), action: "modify" },
+  verb("개선", "(?:하|해)", "modify"),
+  verb("리팩터링", "(?:하|해)", "modify"),
   { pattern: /바꿔(?:줘|주세요|주)/, action: "modify" },
   // The plain stem, which only `바꿔주-` covered. "이름을 바꾸되", "이름을 바꾸고",
   // "이름을 바꾸면서" are ordinary requests and produced no requirement at all —
@@ -115,27 +150,34 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // prohibition rather than becoming a request to change something.
   { pattern: /바꾸(?:되|고|면|니|는|어|었|자|라|시)/, action: "modify" },
   { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: "modify" },
-  { pattern: verb("정리", "(?:하|해)"), action: "modify" },
-  { pattern: verb("갱신", "(?:하|해)"), action: "modify" },
-  { pattern: verb("번역", "(?:하|해)"), action: "modify" },
+  verb("정리", "(?:하|해)", "modify"),
+  verb("갱신", "(?:하|해)", "modify"),
+  verb("번역", "(?:하|해)", "modify"),
   // English stems, because Korean sentences use them with a Korean ending:
   // "refactor 해줘", "fix 해줘". The particle gap already allows the space.
-  { pattern: verb("refactor", "(?:하|해)"), action: "modify" },
-  { pattern: verb("fix", "(?:하|해)"), action: "modify" },
-  { pattern: verb("추가", "(?:하|해)"), action: "create" },
-  { pattern: verb("구현", "(?:하|해)"), action: "create" },
+  verb("refactor", "(?:하|해)", "modify", "수정한다"),
+  verb("fix", "(?:하|해)", "modify", "수정한다"),
+  verb("추가", "(?:하|해)", "create"),
+  verb("구현", "(?:하|해)", "create"),
   { pattern: /만들어(?:줘|주세요|주)/, action: "create" },
   // The connective forms. "분류기를 만들고 학습해줘" is two acts, and only the
   // second was ever read.
   { pattern: /만들(?:고|면|자|라|어야|어서)/, action: "create" },
-  { pattern: verb("생성", "(?:하|해)"), action: "create" },
-  { pattern: verb("삭제", "(?:하|해)"), action: "remove" },
-  { pattern: verb("제거", "(?:하|해)"), action: "remove" },
-  { pattern: verb("분석", "(?:하|해)"), action: "inspect" },
-  { pattern: verb("비교", "(?:하|해)"), action: "inspect" },
-  { pattern: verb("조사", "(?:하|해)"), action: "inspect" },
-  { pattern: verb("설명", "(?:하|해)"), action: "inspect" },
-  { pattern: /보여(?:줘|주세요|주)/, action: "inspect" },
+  verb("생성", "(?:하|해)", "create"),
+  verb("삭제", "(?:하|해)", "remove"),
+  verb("제거", "(?:하|해)", "remove"),
+  verb("분석", "(?:하|해)", "inspect"),
+  verb("비교", "(?:하|해)", "inspect"),
+  verb("조사", "(?:하|해)", "inspect"),
+  // "웹과 Hugging Face 도 참고하고" — a request to go and read something, and one
+  // of the most common things a design request says. It produced nothing.
+  verb("참고", "(?:하|해)", "inspect"),
+  verb("검토", "(?:하|해)", "inspect"),
+  // `살펴보다` was the word this file *renders* for the whole inspect class and
+  // not a word it could read: "결과와 로그를 살펴봐줘" produced nothing at all.
+  { pattern: /살펴(?:봐|보)/, action: "inspect" },
+  verb("설명", "(?:하|해)", "inspect"),
+  { pattern: /보여(?:줘|주세요|주|달라|다오)/, action: "inspect" },
   { pattern: /찾아(?:줘|주세요|주|봐)/, action: "inspect" },
   // "원인을 알려줘" is a request to look and report, and one of the most common
   // shapes there is. It produced nothing at all.
@@ -150,8 +192,15 @@ const VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
  *
  *     수정하지 마 / 수정하진 마 / 보여주지 마   → 지·진 + 마·말·않·못·안
  *     실행하면 안 돼 / 실행해서는 안 된다      → 면·서는 + 안
+ *     실행하라는 게 아니라 보여달라는 말이야    → 라는 + 게/것이/건/말이 + 아니
+ *
+ * The third form is how a person corrects an agent that did the wrong thing, and
+ * it was read as a request to do that thing again: "아니, 실행하라는 게 아니라
+ * 코드를 보여달라는 말이야" produced "요청한 명령을 실행한다" — the correction
+ * turned into the very act it was issued against.
  */
-const NEGATED = /(?:지|진)(?:는|도|를|은)?\s*(?:마|말|않|못|안)|(?:면|서는)\s*안/;
+const NEGATED =
+  /(?:지|진)(?:는|도|를|은)?\s*(?:마|말|않|못|안)|(?:면|서는)\s*안|(?:라|다|자|란)는?\s*(?:게|것이|건|말이)\s*아니/;
 
 /** How an act with no stated target is written down. The target stays open. */
 const ACT_ONLY: Readonly<Record<ActionKind, string>> = {
@@ -183,7 +232,7 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -214,6 +263,16 @@ const ACT_IS_ENOUGH: ReadonlySet<ActionKind> = new Set<ActionKind>(["verify", "e
 const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되이]며|는지|은지|을지|인지)$/u;
 
 /**
+ * The connectives that join the members of a noun list, as they attach to one.
+ *
+ * `및` and `그리고` are absent because they stand alone as tokens, and
+ * `NOT_AN_OBJECT` already ends a run on them — "A 및 B를 수정해줘" targets `B`,
+ * and this does not change that. Recorded rather than fixed: stepping *over* a
+ * standalone connective is a different rule with a different failure mode.
+ */
+const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
+
+/**
  * The object of a verb: the noun phrase immediately before it.
  *
  * Immediately, and in the same clause. Reaching further back finds a noun from
@@ -225,15 +284,29 @@ function objectBefore(clause: string, verbStart: number): string {
   const before = clause.slice(0, verbStart).trim();
   if (before.length === 0) return "";
 
-  // Up to three tokens, so a modifier stays with its noun: "로그인 오류" rather
-  // than "오류", "main.py 코드" rather than "py 코드만".
-  const marked = /((?:[^\s,]+\s+){0,2}[^\s,]+)\s*(?:을|를)\s*$/.exec(before);
+  // The marked phrase, as wide as the sentence wrote it.
+  //
+  // It used to stop at three tokens, which is one bound too many. The branch
+  // below that runs when no `을`/`를` is present has never been capped at all,
+  // and the run-of-nouns scan under this is what actually stops a phrase
+  // reaching into the previous thought. So the cap applied only to the
+  // sentences that marked their object *most* clearly — and it cut them:
+  // "개와 고양이 분류 프로젝트를 만들어줘" never saw the word 개와 at all.
+  const marked = /((?:[^\s,]+\s+){0,6}[^\s,]+)\s*(?:을|를)\s*$/.exec(before);
   const phrase = marked?.[1] ?? before;
 
   const tokens = phrase.split(/\s+/).map((token) => {
     // Location particles can trail any token: a stray "안에서만" would
     // otherwise push "auth" out of the window and leave a bare "폴더".
-    const located = token.replace(/(?:안에서만|에서만|에서|안에|까지|부터)$/u, "");
+    //
+    // `까지` and `부터` used to be in this list and are not location. They mark
+    // the two ends of a range, and both ends are the target: "CNN부터
+    // Transformer까지 사용하고" had every one of its tokens marked as grammar and
+    // came out with no object at all, so a request naming two architectures
+    // named nothing. They come off with the other case particles instead, at the
+    // end of the phrase only, which leaves "CNN부터 Transformer" — the range as
+    // the user wrote it.
+    const located = token.replace(/(?:안에서만|에서만|에서|안에)$/u, "");
     let out = located;
 
     // The additive `도`, but only when two syllables survive it. Stripping it
@@ -284,16 +357,36 @@ function objectBefore(clause: string, verbStart: number): string {
   // actually built. Before the head is found the same tokens are *skipped*
   // rather than final, because Korean puts trailing adverbs between the object
   // and its verb: "auth 폴더 안에서만 수정하고" still targets "auth 폴더".
-  const kept: string[] = [];
-  for (let i = tokens.length - 1; i >= 0 && kept.length < 2; i -= 1) {
+  const run: string[] = [];
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
     const token = tokens[i];
     if (token === undefined) continue;
     if (token.grammar) {
-      if (kept.length === 0) continue;
+      if (run.length === 0) continue;
       break;
     }
-    kept.unshift(token.text);
+    run.unshift(token.text);
   }
+
+  // Two of that run, unless the run is a list.
+  //
+  // A coordinated list is one noun phrase however many members it has, and
+  // cutting it at two deletes the rest without a trace. "CNN과 ViT로 분류기를
+  // 만들고" gave the target "ViT로 분류기": a request naming two architectures
+  // came out naming one, and the member it dropped was the one the user put
+  // first. Same for "개와 고양이 분류 프로젝트" and "CNN과 Transformer로 이미지
+  // 분류기".
+  //
+  // `과`/`와` also end ordinary nouns — `결과`, `성과`, `효과` — so this widens
+  // the phrase for some sentences that coordinate nothing. That error runs in
+  // one direction only: the run is already bounded by the clause and by every
+  // grammar token inside it, so a false positive shows more of the user's own
+  // words and can never reach a word from another thought.
+  //
+  // The connective needs something after it to connect to, which is what stops
+  // a phrase merely *ending* in 결과 from widening.
+  const coordinated = run.some((token, i) => i < run.length - 1 && COORDINATOR.test(token));
+  const kept = coordinated ? run : run.slice(-2);
 
   // Case particles come off last, and only from the token that ends the phrase.
   //
@@ -303,7 +396,7 @@ function objectBefore(clause: string, verbStart: number): string {
   // that survived rather than off whichever adverb happened to be last:
   // "기존 API 호환성은 반드시" keeps `호환성`, not `반드시`.
   const lastAt = kept.length - 1;
-  if (lastAt >= 0) kept[lastAt] = (kept[lastAt] ?? "").replace(/(?:만|[이가은는의로])$/u, "");
+  if (lastAt >= 0) kept[lastAt] = (kept[lastAt] ?? "").replace(/(?:까지|부터|만|[이가은는의로])$/u, "");
 
   const joined = kept.filter((t) => t.length > 0).join(" ");
   return joined.length < 2 ? "" : joined;
@@ -344,6 +437,14 @@ function objectParticle(object: string): string {
  * the general rule already ends the prohibition there and everything after it is
  * the positive request the user actually made. It had a dedicated branch until
  * mutation testing showed that deleting it changed no behaviour at all.
+ *
+ * `-어서`/`-해서` is **not** here, and was tried. "…를 확인해서 모델 목록을 알려줘"
+ * is two acts and only the first is read, which the boundary would fix. It costs
+ * more than it recovers: Korean elides the shared object in the second clause,
+ * and a `modify`/`create`/`remove` clause with no object is dropped outright, so
+ * "최신 요약 모델을 웹에서 찾아서 정리해줘" went from one requirement to none.
+ * Splitting a sentence is only safe where each half can still name its own
+ * target, and `-어서` is the connective where that is least often true.
  *
  * `-되` is here for "이름을 바꾸되 기존 동작은 유지해줘" — "do X but Y", which is
  * two requests and was read as one. Since only the first matching verb in a clause
@@ -556,7 +657,7 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
     offset = at + clause.length;
     if (clause.trim().length === 0) continue;
 
-    for (const { pattern, action } of VERBS) {
+    for (const { pattern, action, phrase } of VERBS) {
       const match = pattern.exec(clause);
       if (match === null) continue;
 
@@ -570,7 +671,10 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
       // this cannot name, and naming it anyway is inventing.
       if (object.length === 0 && !ACT_IS_ENOUGH.has(action)) continue;
 
-      const text = object.length === 0 ? ACT_ONLY[action] : `${object}${objectParticle(object)} ${ACTION_TEXT[action]}`;
+      const text =
+        object.length === 0
+          ? ACT_ONLY[action]
+          : `${object}${objectParticle(object)} ${phrase ?? ACTION_TEXT[action]}`;
       // Keyed on the act and its target, not the rendered sentence, so a
       // rewording never silently merges two different asks.
       const key = `${action}:${object}`;

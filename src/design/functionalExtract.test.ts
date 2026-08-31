@@ -71,7 +71,7 @@ describe("부정문", () => {
     // "말고 결과를 살펴본다" — the connective ending the prohibition survived
     // into the noun window and became the thing to inspect.
     const got = texts("테스트는 실행하지 말고 결과만 설명해줘.");
-    assert.deepEqual(got, ["결과를 살펴본다"]);
+    assert.deepEqual(got, ["결과를 설명한다"]);
     assert.ok(!got.some((t) => t.includes("말고")), got.join(", "));
   });
 
@@ -115,8 +115,12 @@ describe("병렬 요청", () => {
   });
 
   test("`면서` 로 이어진 두 요청", () => {
+    // `기존` used to be cut off by the two-token window, which is why this read
+    // "Arena와 Worktree를" until the window learned about lists. It is the
+    // user's own word and it changes what the requirement means — keeping the
+    // *existing* Arena is not the same instruction as keeping an Arena.
     assert.deepEqual(texts("기존 Arena와 Worktree를 유지하면서 HASA Coding Agent를 추가해줘."), [
-      "Arena와 Worktree를 그대로 유지한다",
+      "기존 Arena와 Worktree를 그대로 유지한다",
       "Coding Agent를 추가한다",
     ]);
   });
@@ -124,7 +128,7 @@ describe("병렬 요청", () => {
 
 describe("조사와 파일명", () => {
   test("점이 든 파일명을 문장 경계로 자르지 않는다", () => {
-    assert.deepEqual(texts("main.py 코드만 분석해줘."), ["main.py 코드를 살펴본다"]);
+    assert.deepEqual(texts("main.py 코드만 분석해줘."), ["main.py 코드를 분석한다"]);
   });
 
   test("`도` 는 목적어에 남지 않는다", () => {
@@ -135,7 +139,7 @@ describe("조사와 파일명", () => {
 
   test("`도` 를 지워도 단어가 남을 때만 지운다", () => {
     // "속도" is a word, not a noun plus the additive particle.
-    assert.deepEqual(texts("응답 속도를 개선해줘."), ["응답 속도를 수정한다"]);
+    assert.deepEqual(texts("응답 속도를 개선해줘."), ["응답 속도를 개선한다"]);
   });
 
   test("`만` / `에서만` / `안에서만`", () => {
@@ -155,6 +159,98 @@ describe("조사와 파일명", () => {
     assert.ok(texts("main.py 코드를 보여줘.")[0]?.startsWith("main.py 코드를"));
     // Latin endings read as their Korean transliteration: `t` → 트, vowel-final.
     assert.ok(texts("Coding Agent를 추가해줘.")[0]?.startsWith("Coding Agent를"));
+  });
+});
+
+/**
+ * A list is one noun phrase, and so is a range.
+ *
+ * Every case here lost part of what the user named. The window was "the last two
+ * noun tokens", which is right for a modifier chain and wrong for an
+ * enumeration: it kept the head and deleted the members in front of it, so a
+ * request naming two architectures came back naming one — and the member it
+ * deleted was always the one the user put first.
+ */
+describe("나열과 범위는 하나의 목적어다", () => {
+  test("접속 조사로 이어진 목록은 통째로 남는다", () => {
+    assert.deepEqual(texts("CNN과 ViT로 분류기를 만들고 각각 학습해줘."), [
+      "CNN과 ViT로 분류기를 추가한다",
+      "각각을 학습한다",
+    ]);
+    assert.deepEqual(texts("개와 고양이 분류 프로젝트를 만들어줘."), [
+      "개와 고양이 분류 프로젝트를 추가한다",
+    ]);
+    assert.deepEqual(texts("웹과 Hugging Face를 참고해줘."), ["웹과 Hugging Face를 참고한다"]);
+  });
+
+  test("범위 조사 부터·까지는 위치가 아니라 목적어의 일부다", () => {
+    // Read as location particles, these marked every token in the phrase as
+    // grammar and the request came out with no object at all.
+    assert.deepEqual(texts("CNN부터 Transformer까지 사용해줘."), [
+      "CNN부터 Transformer를 사용한다",
+    ]);
+  });
+
+  test("목록이 아닌 구는 여전히 두 토큰에서 끊긴다", () => {
+    // The widening is for lists only. With no connective the window is what it
+    // always was, which is what keeps an adverbial phrase out of the object.
+    assert.deepEqual(texts("src 폴더 안에서만 로그를 추가해줘."), ["로그를 추가한다"]);
+    assert.deepEqual(texts("사용할 수 있는 모델을 확인해줘."), ["모델을 확인한다"]);
+  });
+});
+
+/**
+ * The act the user named, not a representative of its class.
+ *
+ * A designer's entire output is a list of sentences saying "this is what I
+ * understood". Handing back a different verb from the one that was typed is a
+ * misreading the user cannot correct, because they never see the word that was
+ * dropped.
+ */
+describe("사용자가 쓴 동사가 요구사항에 남는다", () => {
+  test("분류가 아니라 그 동사로 읽힌다", () => {
+    assert.deepEqual(texts("README를 한국어로 번역해줘."), ["README 한국어를 번역한다"]);
+    assert.deepEqual(texts("두 결과를 비교해줘."), ["두 결과를 비교한다"]);
+    assert.deepEqual(texts("모델을 학습해줘."), ["모델을 학습한다"]);
+    assert.deepEqual(texts("의존성을 설치해줘."), ["의존성을 설치한다"]);
+  });
+
+  test("분류의 말이 더 정확한 곳에서는 분류의 말을 쓴다", () => {
+    // `유지` on its own loses 그대로, and "fix한다" is not Korean. Both take the
+    // class phrase on purpose.
+    assert.deepEqual(texts("기존 동작을 유지해줘."), ["기존 동작을 그대로 유지한다"]);
+    assert.deepEqual(texts("로그인 오류를 fix 해줘."), ["로그인 오류를 수정한다"]);
+  });
+
+  test("살펴보다는 출력하는 말이면서 읽는 말이기도 하다", () => {
+    // It was only ever the former: the verb this file renders for the whole
+    // inspect class could not be typed as input.
+    assert.deepEqual(texts("결과와 로그를 살펴봐줘."), ["결과와 로그를 살펴본다"]);
+  });
+});
+
+describe("정정문은 요청이 아니다", () => {
+  test("`-라는 게 아니라` 는 앞의 동사를 부정한다", () => {
+    // How a person corrects an agent that did the wrong thing — and it produced
+    // a requirement to do that thing again.
+    const got = texts("아니, 실행하라는 게 아니라 코드 결과물을 보여달라는 말이야.");
+    assert.deepEqual(got, ["코드 결과물을 살펴본다"]);
+    assert.ok(!got.some((t) => t.includes("실행")), got.join(", "));
+  });
+});
+
+describe("읽지 않기로 한 것들", () => {
+  // Pinned so the gaps stay visible. Asserting that nothing is produced is the
+  // only way a deliberate omission stays a decision instead of decaying into an
+  // oversight nobody remembers making.
+  test("`쓰다` 는 읽지 않는다 — 쓰기와 사용하기를 가릴 수 없다", () => {
+    assert.deepEqual(texts("CNN과 Transformer를 쓰고 학습까지 해줘."), []);
+    assert.deepEqual(texts("보고서를 쓰고 공유해줘."), []);
+  });
+
+  test("`실제로` 는 목적어가 아니다", () => {
+    // It became one: "실제를 살펴본다" named a target the sentence does not have.
+    assert.deepEqual(texts("실제로 호출되는지도 알려줘."), ["요청한 내용을 살펴본다"]);
   });
 });
 

@@ -91,18 +91,28 @@ describe("the designer on project-scale requests", () => {
     assert.equal(score.turnsRead, 24);
   });
 
-  test("keyword fidelity 22/47", () => {
-    // Was 14/47. This is the honest number and it is not good: of the things a
-    // user names, fewer than half survive into what the design shows back.
+  test("keyword fidelity 35/47", () => {
+    // 14 → 22 → 35. The 22 was target extraction: an enumeration lost every
+    // member but the last ("CNN과 ViT로 분류기를 만들고" → "ViT로 분류기"), a
+    // range lost both ends, and the renderer replaced the user's verb with a
+    // representative of its class, so 번역 came back as 수정 and 비교 as 살펴봄.
     //
-    // What is left is target extraction rather than verb coverage. "CNN과 ViT로
-    // 분류기를 만들고" yields "ViT로 분류기" — the object is taken as the noun
-    // phrase nearest the verb, so an enumeration loses everything but its last
-    // member. Fixing that is its own piece of work and is not attempted here;
-    // recording the number is what stops it being invisible.
+    // The twelve still missing are three separate things, none of them a
+    // one-line fix and each recorded rather than rounded away:
+    //
+    //   · `쓰다` is not read at all, on purpose — "보고서를 쓰고" is writing and
+    //     "CNN을 쓰고" is using, and the object cannot tell them apart. A missed
+    //     request is a gap; a request turned into the wrong act is an invention.
+    //   · "학습과 추론을 하고" binds a coordinated pair to the light verb 하다.
+    //     Reading it needs 하다 itself to be a verb here, which would match
+    //     almost every Korean sentence.
+    //   · "Hugging Face와 …에서 모델을 찾아줘" names Hugging Face as a *source*,
+    //     not as the object of 찾다. Sources are their own feature; the URL half
+    //     of that same sentence already becomes a requirement and the bare name
+    //     does not.
     assert.deepEqual(
       { hit: score.keywordHit, of: score.keywordTotal },
-      { hit: 22, of: 47 },
+      { hit: 35, of: 47 },
       "keyword fidelity moved — a rise is a result worth recording, a drop is a regression",
     );
   });

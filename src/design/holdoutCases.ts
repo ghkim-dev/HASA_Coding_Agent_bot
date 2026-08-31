@@ -50,6 +50,15 @@ import type { RequirementPriority, RequirementKind } from "./requirementSpec.ts"
  *      "변경만 해줘" would add a second, targetless requirement; it does not,
  *      because `변경` is not one of the extractor's verbs — which is recorded as a
  *      known gap rather than papered over.
+ *   6. `h-inherit-three-turns` — `extras.standing` reworded from "결제 모듈을
+ *      수정한다" to "결제 모듈을 리팩터링한다" (2026-09-01). Not an answer about
+ *      the Korean and not a concession to output: the answer under test is that
+ *      the first turn's requirement is *still standing* after the third, and its
+ *      identity — `action: "modify"`, `target: "결제 모듈"` — is unchanged above.
+ *      `standing` matches on rendered text, and the renderer stopped replacing
+ *      the user's verb with a representative of its class, so "리팩터링해줘" now
+ *      reads back as 리팩터링. Had the action or the target moved, the answer
+ *      would be the thing that is right.
  *
  * The first run's numbers, before any of this, are in the commit message: recall
  * 37/43, precision 37/38, target accuracy 31/37. They are the honest first
@@ -132,7 +141,7 @@ export const HOLDOUT_CASES: readonly HoldoutCase[] = [
     startable: true,
     executable: true,
     extras: {
-      standing: ["결제 모듈을 수정한다", "통합 테스트를 실행한다", "응답 형식을 그대로 유지한다"],
+      standing: ["결제 모듈을 리팩터링한다", "통합 테스트를 실행한다", "응답 형식을 그대로 유지한다"],
     },
   },
   {
