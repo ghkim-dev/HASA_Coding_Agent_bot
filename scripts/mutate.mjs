@@ -305,8 +305,11 @@ const MUTATIONS = [
     }`, "gold"],
   ["M41", "때를 나타내는 말을 목적어로", "src/design/functionalExtract.ts",
     "|오늘|어제|내일|왜", "|왜", "extract"],
+  // Repointed when `STEM` gained the particle slot — the line it names is the
+  // same defence, and only the contraction is taken away here. M185 removes the
+  // other half of the same line; the two do not overlap.
   ["M42", "금지 축약형(하진) 을 다시 놓침", "src/agent/statedProhibitions.ts",
-    'const STEM = "하[지진]";', 'const STEM = "하지";', "gold"],
+    'const STEM = "하[지진](?:[는도를은])?";', 'const STEM = "하지(?:[는도를은])?";', "gold"],
   ["M43", "'하면 안 돼' 금지를 다시 놓침", "src/agent/statedProhibitions.ts",
     'const MYEON_AN = "(?:면|서는)\\\\s*안\\\\s*(?:돼|되|된|됩)(?![^.!。\\\\n]*[?？])";',
     'const MYEON_AN = "(?!)";', "gold"],
