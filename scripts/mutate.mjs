@@ -88,6 +88,8 @@ const FILES = [
   // C4.12: the designer. Every entry below is a defence against the design
   // claiming something the runtime did not establish.
   "src/design/harnessDesign.ts",
+  // The ranker itself, now that a corpus scores it — see recommendationCases.
+  "src/router/recommend.ts",
 ];
 /**
  * Which suite is run for a mutation.
@@ -128,6 +130,7 @@ const SUITES = {
   issues: ["src/agent/requirementsView.test.ts"],
   replaylog: ["src/agent/contractReplay.test.ts"],
   designer: ["src/design/harnessDesign.test.ts"],
+  recommend: ["src/design/recommendationCases.test.ts"],
 };
 
 const MUTATIONS = [
@@ -598,10 +601,28 @@ const MUTATIONS = [
   ["M167", "디자이너가 금지 형태 최후 방어선을 잃음", "src/design/harnessDesign.ts",
     "    !looksLikeResearchBan(text)",
     "    true", "designer"],
+  // ---- C4.13: the recommender, against its own denominator ----------------
+  ["M168", "능력 수요를 무시하고 모든 능력을 동등 취급", "src/router/recommend.ts",
+    "    if (demand <= 0) continue;",
+    "    if (false) continue;", "recommend"],
+  ["M169", "측정된 능력치를 읽지 않음 — 모두 중립값", "src/router/recommend.ts",
+    "    weighted += demand * (known?.value ?? 0.5);",
+    "    weighted += demand * 0.5;", "recommend"],
+  ["M170", "능력 항을 점수에서 제거", "src/router/recommend.ts",
+    "      weights.capability * capability +",
+    "      0 * capability +", "recommend"],
+  ["M171", "적격 필터를 건너뜀 — 못 쓰는 모델도 후보", "src/router/recommend.ts",
+    "  const { eligible, filteredOut } = filterEligible(profiles, task);",
+    "  const { eligible, filteredOut } = { eligible: [...profiles], filteredOut: [] };", "recommend"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
 const EXPECTED_SILENT = new Map([
+  [
+    "M168",
+    "demand<=0 인 능력은 분자에 0*value 를, 분모에 0 을 더하므로 건너뛰든 아니든 " +
+      "capabilityScore 의 값이 같다 — 산술적으로 동등한 변이다",
+  ],
   [
     "M146",
     "partial 은 termination 이 finished 일 때만 도달 가능한데(taskDisposition), 그 경우 아래 " +
