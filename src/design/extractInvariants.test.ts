@@ -116,27 +116,33 @@ describe("추출기 불변식", () => {
     assert.deepEqual(wrong, []);
   });
 
-  test("사용자가 금지한 동작을 요구사항으로 만들지 않는다", () => {
+  test("금지하는 절에서 그 동작을 요구사항으로 만들지 않는다", () => {
     // The same invariant `statedProhibitions` enforces at the tool gate, checked
     // here at the other end: the two modules read the same words and must not
-    // disagree about them. A positive requirement to do the forbidden thing is
-    // how a refusal becomes a plan.
+    // disagree about them. A positive requirement drawn out of the clause that
+    // forbids it is how a refusal becomes a plan.
+    //
+    // Scoped to the clause, not the turn. This asserted the turn-wide version
+    // first and passed — and the generated corpus in
+    // `functionalExtract.fuzz.test.ts` showed that version is simply wrong:
+    // "수정하지 말고 추가해줘" forbids one act and asks for another, and both are
+    // what the user said. It passed here because a real sentence that forbids
+    // something rarely asks for the same class in the same breath, which is a
+    // property of the corpus rather than of the code.
     const contradictions: string[] = [];
-    for (const turn of TURNS) {
-      const forbidden = new Set<string>([...prohibitionsIn(turn.text)]);
-      if (forbidden.size === 0) continue;
-      for (const candidate of functionalCandidates({ turnId: "t1", text: turn.text })) {
-        const clashes =
-          (forbidden.has("execute") && candidate.action === "execute") ||
-          (forbidden.has("modify") &&
-            (candidate.action === "modify" ||
-              candidate.action === "create" ||
-              candidate.action === "remove"));
-        if (clashes) {
-          contradictions.push(
-            `${turn.id}: [${[...forbidden].join(",")}] 를 금지했는데 ${candidate.action} — ${candidate.text}`,
-          );
-        }
+    for (const { turn, candidate } of candidates) {
+      const clause = turn.text.slice(candidate.span.start, candidate.span.end);
+      const forbidden = new Set<string>([...prohibitionsIn(clause)]);
+      const clashes =
+        (forbidden.has("execute") && candidate.action === "execute") ||
+        (forbidden.has("modify") &&
+          (candidate.action === "modify" ||
+            candidate.action === "create" ||
+            candidate.action === "remove"));
+      if (clashes) {
+        contradictions.push(
+          `${turn.id}: 금지하는 절 "${clause}" 에서 ${candidate.action} — ${candidate.text}`,
+        );
       }
     }
     assert.deepEqual(contradictions, []);

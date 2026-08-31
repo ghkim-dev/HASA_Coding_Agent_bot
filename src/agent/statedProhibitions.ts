@@ -48,15 +48,29 @@ export type ProhibitedClass = "execute" | "modify" | "research";
 const NEG = "(?:마|말|않고)";
 
 /**
- * `하지` and its contraction `하진`.
+ * `하지`, its contraction `하진`, and the particle a speaker puts after either.
  *
  * "수정하진 마" is the same prohibition as "수정하지 마", and only the second one
  * was recognised. The asymmetry was measurable and one-sided: `functionalExtract`
  * already treats both forms as a negation, so the contracted sentence produced no
  * prohibition *and* no positive requirement — the runtime read "수정하진 마" as
  * having asked for nothing at all, and the action gate had nothing to refuse.
+ *
+ * `(?:[는도를은])?` closes the same asymmetry for a whole family that was still
+ * open. Korean marks contrast and addition on the negated verb — 수정하지**는**
+ * 마세요, 실행하지**도** 마, 수정하지**를** 마 — and every one of those was read
+ * by `functionalExtract`'s `NEGATED`, which allows the particle, and by nothing
+ * here, which did not. Sixteen forms across the two classes produced no
+ * prohibition at all: the request was correctly suppressed and the ban was
+ * invisible to the tool gate, so the model was free to do the thing the user had
+ * just refused in the politest available way. Found by generating prohibitions
+ * and asking whether the runtime read them back, which is what
+ * `statedProhibitions.fuzz.test.ts` now does on every run.
+ *
+ * The particle cannot make this fire on a sentence that is not a prohibition:
+ * whatever sits between `하지` and `마`/`말`/`않고`, the negation is still there.
  */
-const STEM = "하[지진]";
+const STEM = "하[지진](?:[는도를은])?";
 
 /**
  * "실행하면 안 돼" — the negation after the verb ending rather than after `하지`.

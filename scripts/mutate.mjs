@@ -119,12 +119,21 @@ const SUITES = {
   preview: ["src/design/preview.test.ts"],
   parse: ["src/design/proposalParse.test.ts", "src/design/preview.test.ts"],
   permission: ["src/design/modelPermission.test.ts"],
-  extract: ["src/design/functionalExtract.test.ts", "src/design/preview.test.ts"],
+  extract: [
+    "src/design/functionalExtract.test.ts",
+    "src/design/preview.test.ts",
+    // The generated corpus, in the suite that owns the negation guard. A
+    // hand-written case can only forbid what somebody thought to write down;
+    // this one puts a prohibition next to its own positive form thousands of
+    // times a run, which is the collision the guard exists for.
+    "src/design/functionalExtract.fuzz.test.ts",
+  ],
   adoptconv: ["src/agent/conversationAdoption.test.ts"],
   handoff: ["src/design/harnessHandoff.test.ts"],
   recall: [
     "src/design/functionalExtract.test.ts",
     "src/design/evalScenarioRecall.test.ts",
+    "src/design/extractInvariants.test.ts",
   ],
   metrics: ["src/design/preview.test.ts"],
   gold: ["src/design/goldRequirements.test.ts"],
@@ -146,8 +155,20 @@ const SUITES = {
   contract: ["src/agent/turnContract.test.ts", "src/agent/continuity.test.ts"],
   adoption: ["src/agent/contractAdoption.test.ts"],
   adoptionui: ["src/agent/contractAdoption.test.ts", "src/agent/progressView.test.ts"],
-  safety: ["src/agent/contractAdoption.test.ts", "src/agent/statedProhibitions.test.ts"],
-  prohibit: ["src/agent/statedProhibitions.test.ts", "src/agent/contractAdoption.test.ts"],
+  safety: [
+    "src/agent/contractAdoption.test.ts",
+    "src/agent/statedProhibitions.test.ts",
+    // The generated prohibition corpus. It is here because it catches what the
+    // hand-written file next to it does not: reverting either of the two stem
+    // widenings — the `하진` contraction and the particle before the negation —
+    // leaves that file green and turns this one red.
+    "src/agent/statedProhibitions.fuzz.test.ts",
+  ],
+  prohibit: [
+    "src/agent/statedProhibitions.test.ts",
+    "src/agent/contractAdoption.test.ts",
+    "src/agent/statedProhibitions.fuzz.test.ts",
+  ],
   issues: ["src/agent/requirementsView.test.ts"],
   replaylog: ["src/agent/contractReplay.test.ts"],
   designer: ["src/design/harnessDesign.test.ts"],
@@ -680,6 +701,10 @@ const MUTATIONS = [
   ["M184", "원문 대신 설계가 이해한 것을 넘김", "src/design/harnessHandoff.ts",
     "    prompt: text,",
     "    prompt: design.requirements.map((r) => r.text).join(\" \"),", "handoff"],
+  // ---- C4.14: the prohibition forms a generated corpus found ---------------
+  ["M185", "부정 앞의 조사를 다시 놓침 (하지는 마세요)", "src/agent/statedProhibitions.ts",
+    "const STEM = \"하[지진](?:[는도를은])?\";",
+    "const STEM = \"하[지진]\";", "prohibit"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
