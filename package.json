@@ -20,7 +20,8 @@
     "watch:extension": "node extension/build.mjs --watch",
     "test:extension": "node extension/build.mjs && node extension/test/runTest.js",
     "design:preview": "node --env-file-if-exists=.env src/design/previewCli.ts",
-    "design:mutate": "node scripts/mutate.mjs"
+    "design:mutate": "node scripts/mutate.mjs",
+    "design:anchors": "node scripts/mutate.mjs --anchors"
   },
   "dependencies": {
     "fastify": "^5.2.1",

@@ -767,9 +767,9 @@ const MUTATIONS = [
   ["M196", "표지 없는 후속 턴을 다시 새 작업으로 (앞 요구사항 전부 폐기)", "src/design/preview.ts",
     "  return \"refine\";",
     "  return \"new_task\";", "conversation"],
-  ["M197", "새 작업 표지를 무시 — 주제를 바꿔도 이어붙임", "src/design/preview.ts",
-    "  if (/이제\\s*(?:완전히\\s*)?다른|다른\\s*걸|새로운?\\s*(?:작업|일|주제)|그건\\s*됐고|잊(?:어|고)|forget (?:that|it)|new task|different task|instead,? let'?s/i.test(text)) {",
-    "  if (false) {", "conversation"],
+  ["M197", "한국어 새 작업 표지를 무시 — 주제를 바꿔도 이어붙임", "src/design/preview.ts",
+    "    /이제\\s*(?:완전히\\s*)?다른|다른\\s*걸|새로운?\\s*(?:작업|일|주제)|그건\\s*됐고|잊(?:어|고)/u.test(text) ||",
+    "    false ||", "conversation"],
   ["M198", "`아니,` 로 시작하는 정정을 놓침", "src/design/preview.ts",
     "    /^\\s*아니[,\\s]/u.test(text)",
     "    false", "conversation"],
@@ -962,6 +962,37 @@ const leftovers = FILES.filter((f) => existsSync(`${f}.bak`));
 if (leftovers.length > 0) {
   throw new Error(
     `이전 실행이 남긴 .bak 파일이 있습니다. 원본을 확인한 뒤 지우고 다시 실행하십시오: ${leftovers.join(", ")}`,
+  );
+}
+
+// Every anchor still matches, checked before anything runs.
+//
+// A search string drifts whenever the line it names is edited, and until now the
+// only way to find out was a full sweep — twenty-five minutes to learn that one
+// entry needed a one-line fix, and the run that told you exited non-zero without
+// measuring the rest. Four mutations drifted this way in one pass.
+//
+// `--anchors` does this check and stops, so it can be run after any edit that
+// touches a mutated file. Without the flag it runs anyway, as a precondition:
+// nothing is mutated while an entry is pointing at code that is not there.
+const drifted = MUTATIONS.filter(([, , file, from]) => !normalise(readFileSync(file, "utf8")).includes(from));
+if (process.argv.includes("--anchors")) {
+  for (const [id, label, file, from] of MUTATIONS) {
+    if (!normalise(readFileSync(file, "utf8")).includes(from)) {
+      process.stdout.write(`${id} ${label.padEnd(40)} !! ${file}\n`);
+    }
+  }
+  process.stdout.write(
+    drifted.length === 0
+      ? `치환 문자열 ${MUTATIONS.length}개 모두 일치합니다.\n`
+      : `${drifted.length} / ${MUTATIONS.length} 개가 어긋났습니다.\n`,
+  );
+  process.exit(drifted.length === 0 ? 0 : 1);
+}
+if (drifted.length > 0) {
+  throw new Error(
+    `코드가 바뀌어 치환 문자열이 어긋난 변이가 있습니다. ` +
+      `\`node scripts/mutate.mjs --anchors\` 로 목록을 보십시오: ${drifted.map(([id]) => id).join(", ")}`,
   );
 }
 
