@@ -102,6 +102,10 @@ const FILES = [
   // that module holds cannot be mutated for want of a suite, and this one
   // now has both.
   "src/agent/conversationAdoption.ts",
+  // C4.21: whether a running session must choose its model again. Lifted out
+  // of `agentHost.ts` for the same reason, and its asymmetry is the kind a
+  // reader gets backwards without anything looking wrong.
+  "src/agent/modelRevisit.ts",
   // C4.14: what crosses from the designer to the agent. Every defence here is
   // against the handoff saying something the design did not.
   "src/design/harnessHandoff.ts",
@@ -141,6 +145,7 @@ const SUITES = {
     "src/design/functionalExtract.fuzz.test.ts",
   ],
   adoptconv: ["src/agent/conversationAdoption.test.ts"],
+  revisit: ["src/agent/modelRevisit.test.ts"],
   // The English pass, which had six hand-written cases and no denominator
   // until the three project topics were asked in English.
   english: [
@@ -854,6 +859,16 @@ const MUTATIONS = [
   ["M223", "핸드오프 경고 개수를 0 으로 고정", "src/design/designerPayload.ts",
     "      blockerCount: handoff.blockers.length,",
     "      blockerCount: 0,", "payload"],
+  // ---- C4.21: when a session must choose its model again --------------------
+  ["M224", "모드 전환 비대칭을 뒤집음 — 채팅 전용 모델로 코드를 쓰게 둠", "src/agent/modelRevisit.ts",
+    "  return modeCanWrite(mode) && !modeCanWrite(modeAtSession);",
+    "  return modeCanWrite(modeAtSession) && !modeCanWrite(mode);", "revisit"],
+  ["M225", "손으로 고른 모델을 무시", "src/agent/modelRevisit.ts",
+    "  if (selectedModelId !== null) return selectedModelId !== sessionChoice?.modelId;",
+    "  if (false) return false;", "revisit"],
+  ["M226", "세션이 없어도 다시 고르지 않음", "src/agent/modelRevisit.ts",
+    "  if (sessionChoice === null || modeAtSession === null) return true;",
+    "  if (sessionChoice === null || modeAtSession === null) return false;", "revisit"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

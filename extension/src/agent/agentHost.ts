@@ -79,6 +79,7 @@ import type { Logger } from "../../../src/hasa-client/logger.ts";
 import type { ConnectionState } from "./chatPanel.ts";
 import { canonicalizeRoot } from "../../../src/agent/workspaceIdentity.ts";
 import { adoptConversation } from "../../../src/agent/conversationAdoption.ts";
+import { modelNeedsRevisiting } from "../../../src/agent/modelRevisit.ts";
 import {
   describeAmbiguity,
   resolveWorkspaceContext,
@@ -910,10 +911,16 @@ export class AgentHost {
    * exists to prevent and which a reused session would walk straight into.
    */
   private modelNeedsRevisiting(): boolean {
-    if (this.selectedModelId !== null) return this.selectedModelId !== this.sessionChoice?.modelId;
-    if (this.sessionChoice === null || this.modeAtSession === null) return true;
-    if (this.modeAtSession === this.mode) return false;
-    return modeCanWrite(this.mode) && !modeCanWrite(this.modeAtSession);
+    // The policy lives in `src/agent/modelRevisit.ts`, where it can be loaded
+    // and tested. Its asymmetry is the whole of it and getting it backwards
+    // costs nothing visible: the session keeps running, the model answers, and
+    // the change is described rather than made.
+    return modelNeedsRevisiting({
+      selectedModelId: this.selectedModelId,
+      sessionChoice: this.sessionChoice,
+      modeAtSession: this.modeAtSession,
+      mode: this.mode,
+    });
   }
 
   /**

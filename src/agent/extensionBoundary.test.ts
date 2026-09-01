@@ -211,6 +211,45 @@ describe("the webview cannot execute what it is sent", () => {
   });
 });
 
+describe("a new key is a new history (§1.1)", () => {
+  // `reset()` runs when the API key changes, and its own comment says why: "A
+  // different key is a different history." Every field it forgets is one key's
+  // conversation surviving into another's — the oldest rule in this repository,
+  // enforced by remembering to add a line.
+  //
+  // Checked against `adopt()` rather than against a list written here. Adopting
+  // a conversation moves every conversation-scoped field; changing the key must
+  // clear at least those, because a key change is strictly the broader event.
+  // So the realistic mistake — adding a field, wiring it into `adopt`, and
+  // forgetting `reset` — is the one this catches, and it needs no list to
+  // maintain.
+
+  const host = hostFiles.find((f) => f.name.endsWith("agent/agentHost.ts"));
+
+  /** The `this.x =` assignments inside one method body. */
+  const assignedIn = (source: string, signature: string): string[] => {
+    const start = source.indexOf(signature);
+    assert.notEqual(start, -1, `${signature} not found`);
+    // To the closing brace at the method's own indentation.
+    const end = source.indexOf("\n  }", start);
+    assert.notEqual(end, -1, `${signature} has no end`);
+    return [...source.slice(start, end).matchAll(/this\.(\w+)\s*=/g)].map((m) => m[1] ?? "");
+  };
+
+  test("the host is where it is expected to be", () => {
+    assert.ok(host !== undefined, "agentHost.ts moved — this whole section is measuring nothing");
+  });
+
+  test("changing the key clears everything adopting a conversation moves", () => {
+    assert.ok(host !== undefined);
+    const adopted = new Set(assignedIn(host.text, "private adopt(stored: StoredConversation"));
+    const cleared = new Set(assignedIn(host.text, "private reset(): void {"));
+    assert.ok(adopted.size >= 5, `only ${adopted.size} fields move on adopt — the scan may have drifted`);
+    const forgotten = [...adopted].filter((field) => !cleared.has(field));
+    assert.deepEqual(forgotten, [], "a conversation-scoped field survives a key change");
+  });
+});
+
 describe("the extension stays thin (§ the reason src/ holds the logic)", () => {
   test("no decision about models, commands or approval is made in the extension", () => {
     // Anything here is untestable by `pnpm test`. The policies live in `src/`
