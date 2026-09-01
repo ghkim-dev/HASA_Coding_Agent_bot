@@ -91,12 +91,23 @@ interface VerbEntry {
  * `preserve` says "그대로 유지한다", and dropping 그대로 turns "leave it alone"
  * into "maintain it". The two English stems take their class phrase for the
  * obvious reason: "fix한다" is not Korean.
+ *
+ * Each call also records its stem in `STEMS`, which is what lets the noun-phrase
+ * scan below tell a verb from a noun. Collected here rather than written out
+ * beside it, because a verb added in one place and forgotten in the other
+ * quietly becomes a target: `생성하는 도구를 만들어줘` targeted `생성하는 도구`,
+ * with a verb sitting in the middle of the noun phrase.
  */
-const verb = (stem: string, tail: string, action: ActionKind, render?: string): VerbEntry => ({
-  pattern: new RegExp(`${stem}${GAP}${tail}`),
-  action,
-  phrase: render ?? `${stem}한다`,
-});
+const STEMS: string[] = [];
+
+const verb = (stem: string, tail: string, action: ActionKind, render?: string): VerbEntry => {
+  STEMS.push(stem);
+  return {
+    pattern: new RegExp(`${stem}${GAP}${tail}`),
+    action,
+    phrase: render ?? `${stem}한다`,
+  };
+};
 
 const VERBS: ReadonlyArray<VerbEntry> = [
   verb("재실행", "(?:하|해|시켜)", "execute"),
@@ -128,6 +139,13 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   // object alone. A missed request is a gap; a request turned into the wrong act
   // is an invention, and this file is written against the second one.
   verb("사용", "(?:하|해)", "execute"),
+  // Generative media, which is the third kind of project this has been asked to
+  // read and the first one where half the ordinary sentences produced nothing.
+  // Running a renderer and trying something again are both `execute`; what they
+  // have in common is that a machine does work and no file is authored by the
+  // act itself.
+  verb("렌더링", "(?:하|해)", "execute"),
+  verb("시도", "(?:하|해)", "execute"),
   verb("테스트", "(?:하|해)", "verify"),
   verb("검증", "(?:하|해)", "verify"),
   verb("확인", "(?:하|해)", "verify"),
@@ -141,7 +159,7 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   { pattern: /고(?:쳐|치)/, action: "modify" },
   verb("개선", "(?:하|해)", "modify"),
   verb("리팩터링", "(?:하|해)", "modify"),
-  { pattern: /바꿔(?:줘|주세요|주)/, action: "modify" },
+  { pattern: /바꿔(?:줘|주세요|주(?![는던]))/, action: "modify" },
   // The plain stem, which only `바꿔주-` covered. "이름을 바꾸되", "이름을 바꾸고",
   // "이름을 바꾸면서" are ordinary requests and produced no requirement at all —
   // and every one of them is half of a rename-versus-keep pair, so the sentences
@@ -153,17 +171,34 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   verb("정리", "(?:하|해)", "modify"),
   verb("갱신", "(?:하|해)", "modify"),
   verb("번역", "(?:하|해)", "modify"),
+  // `변환` is `modify` rather than `create` on the argument the sentence itself
+  // makes: "이미지를 영상으로 변환해줘" marks the *source* as the object. What is
+  // asked for is that this thing become another form, not that a second thing
+  // appear beside it. `설정` is the same class for the same reason — it changes
+  // how something already behaves.
+  verb("변환", "(?:하|해)", "modify"),
+  verb("설정", "(?:하|해)", "modify"),
+  { pattern: /움직이(?:게|도록|는)/, action: "modify", phrase: "움직이게 한다" },
   // English stems, because Korean sentences use them with a Korean ending:
   // "refactor 해줘", "fix 해줘". The particle gap already allows the space.
   verb("refactor", "(?:하|해)", "modify", "수정한다"),
   verb("fix", "(?:하|해)", "modify", "수정한다"),
   verb("추가", "(?:하|해)", "create"),
   verb("구현", "(?:하|해)", "create"),
-  { pattern: /만들어(?:줘|주세요|주)/, action: "create" },
+  { pattern: /만들어(?:줘|주세요|주(?![는던]))/, action: "create" },
   // The connective forms. "분류기를 만들고 학습해줘" is two acts, and only the
   // second was ever read.
   { pattern: /만들(?:고|면|자|라|어야|어서)/, action: "create" },
   verb("생성", "(?:하|해)", "create"),
+  // `create` because a file that did not exist now does, which is the same test
+  // `추가` and `구현` pass. `지원` is here rather than under `modify` because
+  // "이미지 생성과 영상 생성을 모두 지원해줘" asks for both to be built.
+  verb("저장", "(?:하|해)", "create"),
+  verb("지원", "(?:하|해)", "create"),
+  { pattern: /내보내(?:줘|주세요|주(?![는던])|고|면|서|기)/, action: "create", phrase: "내보낸다" },
+  { pattern: /뽑아(?:줘|주세요|주(?![는던])|봐)/, action: "create", phrase: "뽑아낸다" },
+  { pattern: /넣어(?:줘|주세요|주(?![는던]))/, action: "create", phrase: "넣는다" },
+  { pattern: /붙여(?:줘|주세요|주(?![는던])|서)/, action: "create", phrase: "붙인다" },
   verb("삭제", "(?:하|해)", "remove"),
   verb("제거", "(?:하|해)", "remove"),
   verb("분석", "(?:하|해)", "inspect"),
@@ -177,11 +212,11 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   // not a word it could read: "결과와 로그를 살펴봐줘" produced nothing at all.
   { pattern: /살펴(?:봐|보)/, action: "inspect" },
   verb("설명", "(?:하|해)", "inspect"),
-  { pattern: /보여(?:줘|주세요|주|달라|다오)/, action: "inspect" },
-  { pattern: /찾아(?:줘|주세요|주|봐)/, action: "inspect" },
+  { pattern: /보여(?:줘|주세요|주(?![는던])|달라|다오)/, action: "inspect" },
+  { pattern: /찾아(?:줘|주세요|주(?![는던])|봐)/, action: "inspect" },
   // "원인을 알려줘" is a request to look and report, and one of the most common
   // shapes there is. It produced nothing at all.
-  { pattern: /알려(?:줘|주세요|주|줄래|주라|다오)/, action: "inspect" },
+  { pattern: /알려(?:줘|주세요|주(?![는던])|줄래|주라|다오)/, action: "inspect" },
 ];
 
 /**
@@ -232,7 +267,7 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -263,6 +298,52 @@ const ACT_IS_ENOUGH: ReadonlySet<ActionKind> = new Set<ActionKind>(["verify", "e
 const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되이]며|는지|은지|을지|인지)$/u;
 
 /**
+ * A verb wearing an adnominal ending, sitting inside a noun phrase.
+ *
+ * Korean builds relative clauses by putting the verb in front of the noun, and
+ * the verb is not part of the noun phrase however adjacent it is:
+ *
+ *     생성하는 도구를 만들어줘        → 도구      (not `생성하는 도구`)
+ *     만들어주는 프로젝트를 만들어줘   → 프로젝트  (not `만들어주는 프로젝트`)
+ *     생성된 영상을 저장해줘          → 영상      (not `생성된 영상`)
+ *
+ * Two halves, because two different things give a verb away. The first is the
+ * auxiliary: anything ending in `주는`, `하는`, `되는` is a verb form whatever
+ * stem it is built on, and no Korean noun ends that way. The second needs the
+ * lexicon — `-한`, `-된`, `-할` are also how adjectives and nouns end — so it
+ * fires only on a stem this file already recognises as an act.
+ *
+ * That second restriction is what keeps `실패한 부분`, `낡은 설정` and
+ * `업로드한 사진` intact: those modifiers carry content, the gold set pinned
+ * them as part of the target, and none of their stems is one of these verbs.
+ * The rule reaches exactly as far as the list of acts and no further.
+ */
+const VERB_FORM = /(?:(?:어|아|여)?주는|하는|되는|시키는|받는)$/u;
+const VERB_ADNOMINAL = new RegExp(
+  // `생성하는`, `생성되는`, `학습시키는` — the light verb is present and settles it.
+  `^(?:${STEMS.join("|")})(?:(?:하|되|시키)[는던]` +
+    // `생성된`, `생성한`, `사용할`, `삭제될` — the ending carries the verb itself.
+    `|[한된할될])$`,
+  "u",
+);
+
+/**
+ * A verb wearing the conditional `-면`, which `CLAUSE_ENDING` cannot see.
+ *
+ * That list is spelled by syllable — `[하되지으우이라]면` — because it has to
+ * leave `화면`, `측면`, `순서` and every other noun that happens to end that way
+ * alone. `바꾸면` ends in 꾸, so it fell outside, and "프롬프트를 바꾸면 결과가
+ * 어떻게 달라지는지 비교해줘" took its target from inside the condition.
+ *
+ * The lexicon settles what the syllable cannot: a token ending in 면 is a verb
+ * when one of the acts above matches it. `화면` matches nothing here and stays a
+ * noun; `바꾸면` matches the rename entry and stops the scan.
+ */
+function conditionalVerbToken(token: string): boolean {
+  return token.endsWith("면") && VERBS.some((entry) => entry.pattern.test(token));
+}
+
+/**
  * The connectives that join the members of a noun list, as they attach to one.
  *
  * `및` and `그리고` are absent because they stand alone as tokens, and
@@ -272,6 +353,21 @@ const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되�
  */
 const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
 
+/** A number word standing in front of its counter: `한 장`, `두 개`, `5초`. */
+const NUMERAL = /^(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇|여러|\d+)$/u;
+
+/**
+ * Nouns whose last syllable is `도` and is not the additive particle.
+ *
+ * `-도` builds measure nouns from Sino-Korean roots, so this is a suffix rather
+ * than a closed class, and every one of these is a word a project that measures
+ * anything will write down. Listed because nothing in the shape of `해상도`
+ * separates it from `결과도`, and the cost of getting it wrong is a target the
+ * user does not recognise: `프레임 수와 해상`.
+ */
+const MEASURE_NOUN =
+  /^(?:.*(?:속도|해상도|정확도|밀도|온도|각도|채도|명도|강도|빈도|정도|고도|위도|경도|진도|척도|난이도|만족도|신뢰도|충실도|완성도|기여도|중요도|우선도|유사도|선명도|투명도|가용도))$/u;
+
 /**
  * The object of a verb: the noun phrase immediately before it.
  *
@@ -280,9 +376,9 @@ const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
  * 수정하고 테스트해줘" would become "로그인 오류를 테스트한다" — a requirement the
  * user did not state.
  */
-function objectBefore(clause: string, verbStart: number): string {
+function objectBefore(clause: string, verbStart: number): { target: string; shown: string } {
   const before = clause.slice(0, verbStart).trim();
-  if (before.length === 0) return "";
+  if (before.length === 0) return { target: "", shown: "" };
 
   // The marked phrase, as wide as the sentence wrote it.
   //
@@ -292,8 +388,44 @@ function objectBefore(clause: string, verbStart: number): string {
   // reaching into the previous thought. So the cap applied only to the
   // sentences that marked their object *most* clearly — and it cut them:
   // "개와 고양이 분류 프로젝트를 만들어줘" never saw the word 개와 at all.
-  const marked = /((?:[^\s,]+\s+){0,6}[^\s,]+)\s*(?:을|를)\s*$/.exec(before);
-  const phrase = marked?.[1] ?? before;
+  // Where the object particle actually is, which is not always the end.
+  //
+  // The regex this replaces was anchored at `$`, so it only fired when `을`/`를`
+  // closed the phrase immediately in front of the verb. Korean puts the
+  // instrumental after the object all the time — "이미지 한 장을 5초 영상으로
+  // 변환해줘" — and every one of those sentences fell through to the uncapped
+  // branch and took its target from whatever happened to sit last, which was the
+  // means rather than the thing.
+  // The scan stops at a clause ending, so it cannot take its object from a
+  // different thought. "프롬프트를 바꾸면 결과가 어떻게 달라지는지 비교해줘"
+  // marks 프롬프트 inside the condition and marks nothing in the request, and
+  // without this the comparison came out as being about the prompt.
+  const beforeTokens = before.split(/\s+/);
+  let markAt = -1;
+  for (let i = beforeTokens.length - 1; i >= 0; i -= 1) {
+    const token = beforeTokens[i] ?? "";
+    if (CLAUSE_ENDING.test(token) || conditionalVerbToken(token)) break;
+    if (/[을를]$/u.test(token)) {
+      markAt = i;
+      break;
+    }
+  }
+  const marked = markAt === -1 ? null : beforeTokens.slice(Math.max(0, markAt - 6), markAt + 1);
+  // Without the particle. It is grammar, the token scan takes it off anyway, and
+  // leaving it on made the phrase stop ending with its own head noun — which is
+  // the test the `shown` rule below uses to decide they are the same phrase.
+  const phrase = marked === null ? before : marked.join(" ").replace(/[을를]$/u, "");
+
+  /**
+   * Whether this clause marks its object with `을`/`를` anywhere in front of
+   * the verb — not only at the end, which is what `marked` above requires.
+   *
+   * It gates the instrumental rule below and nothing else. When the sentence
+   * has said which noun is the object, a `-로` phrase is certainly not it; when
+   * the sentence has marked nothing, the `-로` phrase may be the only noun
+   * there is, and dropping it would leave the request with no target at all.
+   */
+  const marksItsObject = /[을를](?:\s|$)/u.test(before);
 
   const tokens = phrase.split(/\s+/).map((token) => {
     // Location particles can trail any token: a stray "안에서만" would
@@ -306,17 +438,51 @@ function objectBefore(clause: string, verbStart: number): string {
     // named nothing. They come off with the other case particles instead, at the
     // end of the phrase only, which leaves "CNN부터 Transformer" — the range as
     // the user wrote it.
-    const located = token.replace(/(?:안에서만|에서만|에서|안에)$/u, "");
+    //
+    // The instrumental `-로`/`-으로` joins the locatives, because it names a
+    // means and never the thing acted on. "결과를 미리보기로 보여줘" targets
+    // 결과, not `결과 미리보기`; "사진을 애니메이션으로 바꿔줘" targets the photo,
+    // not the animation it is turned into. Both came out with the method welded
+    // onto the object, which reads as a target the user never named.
+    //
+    // Two guards, because `-로` cannot be told from a noun that ends in 로.
+    // `고속도로` would become `고속도`, and unlike the other rules here that
+    // error *drops* a real target rather than adding a false one. So it applies
+    // only when the sentence has already said which noun is the object — if
+    // `을`/`를` marks something else, this phrase is certainly not it — and only
+    // when at least two Hangul syllables precede the particle, which spares
+    // `경로`, `통로`, `진로`, `회로` and their kin. `고속도로 정보를 추가해줘`
+    // still loses its 고속도로; that is the case left over, and it is recorded rather
+    // than hidden.
+    const located = !marksItsObject
+      ? token.replace(/(?:안에서만|에서만|에서|안에)$/u, "")
+      : token
+          // The bare dative-locative joins the list once the object is settled.
+          // "정지 이미지에 움직임을 넣어줘" is about the motion; the image is
+          // where it goes. Held back until then for the same reason as `-로`:
+          // with nothing else marked, the `-에` phrase may be all there is.
+          .replace(/(?:안에서만|에서만|에서|안에|에게|에)$/u, "")
+          .replace(/(?<=[가-힣]{2,})으로$/u, "")
+          .replace(/(?:(?<=[가-힣]{2,})|(?<=[A-Za-z0-9]{2,}))로$/u, "");
     let out = located;
 
     // The additive `도`, but only when two syllables survive it. Stripping it
     // unconditionally turns "속도" into "속"; "결과도" and "코드도" are the
     // cases worth recovering and both leave a word behind.
+    //
+    // Length is not enough on its own, which "해상도" showed: it leaves "해상",
+    // a perfectly plausible two-syllable word, so the guard passed and a request
+    // to configure the resolution came out as `프레임 수와 해상`. `-도` is a live
+    // suffix for measure nouns — degree, rate, accuracy — and the words it makes
+    // are exactly the ones a project measuring anything will name. They are
+    // listed rather than guessed at, because there is nothing in the shape of
+    // `해상도` that distinguishes it from `결과도`.
     const dropped = out.replace(/도$/u, "");
-    if (out.endsWith("도") && dropped.length >= 2) out = dropped;
+    if (out.endsWith("도") && dropped.length >= 2 && !MEASURE_NOUN.test(out)) out = dropped;
 
     // `을`/`를` mark an object unambiguously, so they can go anywhere they
     // appear. The rest wait until the phrase is chosen — see below.
+    const carriesObjectMark = /[을를]$/u.test(out);
     out = out.replace(/[을를]$/u, "").trim();
 
     // The same token with a case particle taken off, for the grammar tests only.
@@ -334,6 +500,17 @@ function objectBefore(clause: string, verbStart: number): string {
 
     return {
       text: out,
+      /** This token was marked as an object by the sentence itself. */
+      carriesObjectMark,
+      /**
+       * Grammar, but with a noun still inside it — `영상으로`, `미리보기로`.
+       *
+       * Different from a bare particle word like `안에서만`, which leaves
+       * nothing behind. A modifier standing in front of one of these belongs to
+       * *it*, not to the verb: `5초짜리` describes the 영상, and reading it as
+       * the thing being converted produced "5초짜리를 영상으로 변환한다".
+       */
+      carriesNoun: located !== token && located.length > 0,
       // Not part of a noun phrase, whatever it is next to. Three kinds, and each
       // one was a wrong target in a real sentence: a locative that had its
       // particle taken off ("CI에서 pytest를" → "CI pytest"), a clause ending
@@ -344,7 +521,13 @@ function objectBefore(clause: string, verbStart: number): string {
         NOT_AN_OBJECT.test(bare) ||
         located !== token ||
         CLAUSE_ENDING.test(out) ||
-        CLAUSE_ENDING.test(bare),
+        CLAUSE_ENDING.test(bare) ||
+        conditionalVerbToken(out) ||
+        // A relative clause's verb, tested on `token` rather than `out`: the
+        // `[은는만이가]` strip above would turn `생성하는` into `생성하` and
+        // `만들어주는` into `만들어주`, hiding the very ending that identifies it.
+        VERB_FORM.test(token) ||
+        VERB_ADNOMINAL.test(token),
     };
   });
 
@@ -358,6 +541,8 @@ function objectBefore(clause: string, verbStart: number): string {
   // rather than final, because Korean puts trailing adverbs between the object
   // and its verb: "auth 폴더 안에서만 수정하고" still targets "auth 폴더".
   const run: string[] = [];
+  let runEndsAt = -1;
+  let runMarked = false;
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
     const token = tokens[i];
     if (token === undefined) continue;
@@ -365,8 +550,25 @@ function objectBefore(clause: string, verbStart: number): string {
       if (run.length === 0) continue;
       break;
     }
+    if (run.length === 0) runEndsAt = i;
+    if (token.carriesObjectMark) runMarked = true;
     run.unshift(token.text);
   }
+
+  // A bare modifier in front of a noun-plus-particle belongs to that noun.
+  //
+  // "이미지를 업로드하면 5초짜리 영상으로 변환해줘" marks its object inside the
+  // condition, so the scan — which is not allowed to cross a clause boundary —
+  // comes back with `5초짜리`, a size with nothing to size. It sits in front of
+  // `영상으로`, which is grammar here but still has a noun inside it, and that
+  // is what it describes.
+  //
+  // Only when the run carries no object mark of its own. "결과를 미리보기로
+  // 보여줘" has exactly the same shape and `결과` is the object, which the
+  // sentence said with `를`; and "auth 폴더 안에서만 수정해줘" is untouched
+  // because `안에서만` is a bare particle with no noun in it.
+  const trailing = runEndsAt === -1 ? undefined : tokens[runEndsAt + 1];
+  if (!runMarked && trailing?.grammar === true && trailing.carriesNoun) run.length = 0;
 
   // Two of that run, unless the run is a list.
   //
@@ -386,7 +588,26 @@ function objectBefore(clause: string, verbStart: number): string {
   // The connective needs something after it to connect to, which is what stops
   // a phrase merely *ending* in 결과 from widening.
   const coordinated = run.some((token, i) => i < run.length - 1 && COORDINATOR.test(token));
-  const kept = coordinated ? run : run.slice(-2);
+
+  // A numeral and the counter it belongs to are one word, so the window counts
+  // them as one.
+  //
+  // "이미지 한 장을 5초 영상으로 변환해줘" is about an image, and the last two
+  // tokens of its phrase are `한 장` — a quantity with nothing to quantify.
+  // Korean writes counters as separate words and there is no reading in which
+  // `장` is the thing being converted.
+  const units: string[] = [];
+  for (let i = 0; i < run.length; i += 1) {
+    const token = run[i] ?? "";
+    const next = run[i + 1];
+    if (NUMERAL.test(token) && next !== undefined) {
+      units.push(`${token} ${next}`);
+      i += 1;
+      continue;
+    }
+    units.push(token);
+  }
+  const kept = coordinated ? run : units.slice(-2).join(" ").split(/\s+/);
 
   // Case particles come off last, and only from the token that ends the phrase.
   //
@@ -396,10 +617,98 @@ function objectBefore(clause: string, verbStart: number): string {
   // that survived rather than off whichever adverb happened to be last:
   // "기존 API 호환성은 반드시" keeps `호환성`, not `반드시`.
   const lastAt = kept.length - 1;
-  if (lastAt >= 0) kept[lastAt] = (kept[lastAt] ?? "").replace(/(?:까지|부터|만|[이가은는의로])$/u, "");
+  // `으로` before the bare `로`, or the vowel that carries it is left behind.
+  //
+  // Korean writes the instrumental as `-로` after a vowel and `-으로` after a
+  // consonant, and taking off only the `로` produced `동영상으`, `기본값으`,
+  // `JSON으`, `파이썬으`. Every one of those is a word that does not exist,
+  // shown to the user as the thing their request is about — and none of the
+  // checks caught it: the fragment is still a substring of what they typed, so
+  // "never invent a target" held while the target was mangled.
+  if (lastAt >= 0) {
+    kept[lastAt] = (kept[lastAt] ?? "").replace(/(?:까지|부터|으로|만|[이가은는의로])$/u, "");
+  }
 
   const joined = kept.filter((t) => t.length > 0).join(" ");
-  return joined.length < 2 ? "" : joined;
+  const target = joined.length < 2 ? "" : joined;
+
+  // What the sentence says about the target, as opposed to the target itself.
+  //
+  // These are two different jobs and merging them made both worse. The target is
+  // what a run has to be bound to, so a relative clause inside it is a defect:
+  // `개와 고양이 분류하는 프로젝트` is not a thing that can be resolved to
+  // anything. But taking the clause out means the design stops showing words the
+  // user typed, and "프로젝트를 추가한다" is a poor account of a request that
+  // named two animals and a classifier.
+  //
+  // So the clause comes out of the target and stays in the sentence:
+  //
+  //     target 프로젝트
+  //     shown  개와 고양이를 분류하는 프로젝트
+  //
+  // Four conditions, and each one is a case that came out worse without it.
+  //
+  //   · it holds a relative clause or a real list — the two ways a sentence says
+  //     something about its target that the target itself cannot carry:
+  //
+  //         개와 고양이를 분류하는 프로젝트   the verb is not part of the noun
+  //         CNN과 ViT로 분류기               a list of means, joined by 과
+  //
+  //     Not everything wider than the target: "src 폴더 안에서만 로그를 추가해줘"
+  //     and "테스트가 실패하면 로그를 추가해줘" would otherwise be shown as flat
+  //     statements that swallow a scope and a condition, and a requirement
+  //     reading "테스트가 실패하면 로그를 추가한다" claims something the runtime
+  //     has no way to honour.
+  //   · the coordinator has something after it, the same guard the target window
+  //     uses — `결과` ends in the syllable that joins a list, and "이전 실행
+  //     결과" coordinates nothing.
+  //   · it does not begin with a grammar word. "기준으로 사용할 수 있는 모델"
+  //     starts mid-phrase and reads as a fragment.
+  //   · five tokens at most. Past that it stops being a description of the
+  //     target and becomes the sentence again, URL and all.
+  const phraseTokens = phrase.split(/\s+/);
+  const describes =
+    phraseTokens.some((token, i) => VERB_FORM.test(token) || VERB_ADNOMINAL.test(token)) ||
+    phraseTokens.some((token, i) => i < phraseTokens.length - 1 && COORDINATOR.test(token));
+  const described =
+    marked !== null &&
+    target.length > 0 &&
+    phrase.endsWith(target) &&
+    phrase !== target &&
+    phraseTokens.length <= 5 &&
+    tokens[0]?.grammar === false &&
+    describes
+      ? phrase
+      : target;
+
+  return { target, shown: described };
+}
+
+/**
+ * The instrumental phrase sitting between the object and its verb.
+ *
+ * Not part of the target — "README를 한국어로 번역해줘" is about the README, and
+ * welding the language onto it produced the target `README 한국어`, a thing that
+ * does not exist. But it is part of what the user asked for, and a design that
+ * drops it says "README를 번역한다" to someone who specified a language.
+ *
+ * So it comes out of the target and goes back into the sentence:
+ *
+ *     README를 한국어로 번역한다
+ *     업로드한 사진을 애니메이션으로 수정한다
+ *     결과를 미리보기로 살펴본다
+ *
+ * Gated the same way the target rule is — only when the clause marks its object
+ * elsewhere — and refused for the adverbs that merely end in 로. `그대로` is the
+ * one that matters: without `NOT_AN_OBJECT` here, "기존 동작을 그대로 유지해줘"
+ * renders 그대로 twice.
+ */
+function mannerBefore(clause: string, verbStart: number): string {
+  const before = clause.slice(0, verbStart).trim();
+  if (!/[을를](?:\s|$)/u.test(before)) return "";
+  const last = before.split(/\s+/).at(-1) ?? "";
+  if (NOT_AN_OBJECT.test(last)) return "";
+  return /(?:(?<=[가-힣]{2,})으?로|(?<=[A-Za-z0-9]{2,})로)$/u.test(last) ? last : "";
 }
 
 /**
@@ -646,35 +955,88 @@ function englishCandidates(input: { turnId: string; text: string }): FunctionalC
 /** Where an English clause ends. Conjunctions and sentence punctuation. */
 const ENGLISH_BOUNDARIES = /(?<=[.!?])(?=\s|$)|(?<=,\s)|\s+(?=and\s+then\s+)|(?<=\sand\s)|(?<=\sthen\s)/i;
 
+/**
+ * `-ㄹ 수 있게 해줘` and `-게 해줘`, rewritten as the plain imperative.
+ *
+ * This is how a person states a feature request in Korean — "프레임 수와
+ * 해상도를 설정할 수 있게 해줘", "실패하면 다시 시도하게 해줘" — and the
+ * extractor read none of it, because the verb it needs to see is buried under a
+ * causative that ends in the bare `하다`. Adding `할` to every verb's endings
+ * would have found it and broken more than it fixed: `사용할 수 있는 모델을
+ * 확인해줘` would then match `사용할` first and report a request to use
+ * something.
+ *
+ * So the construction is normalised instead of the verb table widened. The
+ * rewrite only ever removes the causative tail, and the stem keeps its position,
+ * so everything in front of the verb — which is where the target comes from — is
+ * byte-identical to the sentence the user typed.
+ *
+ * `고를 수 있게 해줘` still reads as nothing: `고르다` is not one of the acts,
+ * and inferring one from "let the user choose" would be the runtime deciding
+ * what the feature is.
+ */
+function plainImperative(clause: string): string {
+  return clause
+    .replace(/([가-힣]{2,})할\s*수\s*있(?:게|도록)\s*(?:해|하)(?:줘|주세요|주라|주)?/gu, "$1해줘")
+    .replace(/([가-힣]{2,})하(?:게|도록)\s*(?:해|하)(?:줘|주세요|주라|주)?/gu, "$1해줘");
+}
+
 export function functionalCandidates(input: { turnId: string; text: string }): FunctionalCandidate[] {
   const out: FunctionalCandidate[] = [];
   const seen = new Set<string>();
 
   let offset = 0;
-  for (const clause of input.text.split(BOUNDARIES)) {
-    const at = input.text.indexOf(clause, offset);
+  for (const source of input.text.split(BOUNDARIES)) {
+    const at = input.text.indexOf(source, offset);
     if (at === -1) continue;
-    offset = at + clause.length;
-    if (clause.trim().length === 0) continue;
+    offset = at + source.length;
+    if (source.trim().length === 0) continue;
 
-    for (const { pattern, action, phrase } of VERBS) {
-      const match = pattern.exec(clause);
-      if (match === null) continue;
+    // The causative rewritten away, for reading only. `source` is what the span
+    // points at and what `input.text` still contains.
+    const clause = plainImperative(source);
+
+    // A conditional verb loses to any other verb in the same clause.
+    //
+    // "프롬프트를 바꾸면 결과가 어떻게 달라지는지 비교해줘" came out as
+    // "프롬프트를 수정한다": `-면` marks a hypothesis, the table happens to try
+    // `바꾸` before `비교`, and the first match wins the clause. So the design
+    // recorded a change the user had not asked for and lost the comparison they
+    // had. Two passes rather than a rule inside the loop, because the question
+    // is not "is this verb conditional" but "is there anything else here".
+    //
+    // `-면서` is excluded: it means "while", not "if", and the clause splitter
+    // already breaks on it. Requiring the syllable to end the match keeps
+    // "유지하면서" out.
+    const conditional = (match: RegExpExecArray): boolean => {
+      const after = clause.slice(match.index + match[0].length);
+      return /^면(?!서)/u.test(after) || (match[0].endsWith("면") && !after.startsWith("서"));
+    };
+    const ordered = [
+      ...VERBS.map((entry) => ({ entry, match: entry.pattern.exec(clause) })).filter(
+        (found): found is { entry: VerbEntry; match: RegExpExecArray } => found.match !== null,
+      ),
+    ];
+    const preferred = ordered.filter((found) => !conditional(found.match));
+    for (const { entry: { action, phrase }, match } of preferred.length > 0 ? preferred : ordered) {
 
       // The user forbade this verb rather than asking for it. Emitting the
       // positive form here would contradict `statedProhibitions`, which is
       // reading the very same words.
       if (NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8))) continue;
 
-      const object = objectBefore(clause, match.index);
+      const { target: object, shown } = objectBefore(clause, match.index);
       // No object and no act that stands alone: the user asked for something
       // this cannot name, and naming it anyway is inventing.
       if (object.length === 0 && !ACT_IS_ENOUGH.has(action)) continue;
 
+      // Kept out of the target and put back into the sentence — see
+      // `mannerBefore`. Only where there is a target to keep it out of.
+      const manner = object.length === 0 ? "" : mannerBefore(clause, match.index);
       const text =
         object.length === 0
           ? ACT_ONLY[action]
-          : `${object}${objectParticle(object)} ${phrase ?? ACTION_TEXT[action]}`;
+          : `${shown}${objectParticle(shown)} ${manner === "" ? "" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`;
       // Keyed on the act and its target, not the rendered sentence, so a
       // rewording never silently merges two different asks.
       const key = `${action}:${object}`;
@@ -685,7 +1047,9 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
         text,
         action,
         object,
-        span: { turnId: input.turnId, start: at, end: at + clause.replace(/\s+$/, "").length },
+        // `source`, not `clause`: the span points into the text the user typed,
+        // and the causative rewrite above exists only for reading.
+        span: { turnId: input.turnId, start: at, end: at + source.replace(/\s+$/, "").length },
       });
       break; // One requirement per clause. Two verbs in one clause is one act.
     }

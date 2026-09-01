@@ -150,6 +150,10 @@ describe("조사와 파일명", () => {
   test("조사는 구가 정해진 뒤 마지막 토큰에서만 떼어낸다", () => {
     // Stripping from every token cut `있는` — a verb ending — down to `있`,
     // and the object came out as "있 모델".
+    //
+    // The phrase around it is not shown either: it begins with `사용할`, which is
+    // a verb, and a sentence starting mid-clause reads as a fragment.
+    assert.equal(of("사용할 수 있는 모델을 확인해줘.")[0]?.object, "모델");
     assert.deepEqual(texts("사용할 수 있는 모델을 확인해줘."), ["모델을 확인한다"]);
     assert.deepEqual(texts("기존 API 호환성은 반드시 유지해줘."), ["API 호환성을 그대로 유지한다"]);
   });
@@ -195,7 +199,9 @@ describe("나열과 범위는 하나의 목적어다", () => {
     // The widening is for lists only. With no connective the window is what it
     // always was, which is what keeps an adverbial phrase out of the object.
     assert.deepEqual(texts("src 폴더 안에서만 로그를 추가해줘."), ["로그를 추가한다"]);
-    assert.deepEqual(texts("사용할 수 있는 모델을 확인해줘."), ["모델을 확인한다"]);
+    // The target, which is the thing the window decides. The sentence around it
+    // is wider now and is checked where that rule lives.
+    assert.equal(of("사용할 수 있는 모델을 확인해줘.")[0]?.object, "모델");
   });
 
   test("`과` 로 끝나는 명사와 접속 조사 `과` 는 뒤에 올 말이 있는지로 갈린다", () => {
@@ -221,7 +227,11 @@ describe("나열과 범위는 하나의 목적어다", () => {
  */
 describe("사용자가 쓴 동사가 요구사항에 남는다", () => {
   test("분류가 아니라 그 동사로 읽힌다", () => {
-    assert.deepEqual(texts("README를 한국어로 번역해줘."), ["README 한국어를 번역한다"]);
+    // Was "README 한국어를 번역한다". `한국어로` is how, not what — the target is
+    // the README — and welding it on produced a compound noun that does not
+    // exist. It is still the user's word, so it moved out of the target and back
+    // into the sentence rather than being dropped.
+    assert.deepEqual(texts("README를 한국어로 번역해줘."), ["README를 한국어로 번역한다"]);
     assert.deepEqual(texts("두 결과를 비교해줘."), ["두 결과를 비교한다"]);
     assert.deepEqual(texts("모델을 학습해줘."), ["모델을 학습한다"]);
     assert.deepEqual(texts("의존성을 설치해줘."), ["의존성을 설치한다"]);
@@ -238,6 +248,79 @@ describe("사용자가 쓴 동사가 요구사항에 남는다", () => {
     // It was only ever the former: the verb this file renders for the whole
     // inspect class could not be typed as input.
     assert.deepEqual(texts("결과와 로그를 살펴봐줘."), ["결과와 로그를 살펴본다"]);
+  });
+});
+
+/**
+ * What a sentence says about its target, and what the target is.
+ *
+ * Every case here came from the first request in a domain nobody had tested —
+ * turning images into video. Half of those sentences produced nothing and most
+ * of the rest produced a target that was not a word: `동영상으`, `해상`,
+ * `5초짜리`. What they have in common is that Korean puts a great deal in front
+ * of its verb that is *not* the object, and telling those apart is most of the
+ * work.
+ */
+describe("무엇이 대상이고 무엇이 대상이 아닌가", () => {
+  test("도구격 `-로`/`-으로` 는 방법이지 대상이 아니다", () => {
+    // `동영상으로` had only its `로` taken off, so the target was `동영상으` — a
+    // fragment, shown to the user as the thing their request was about. The
+    // means stays in the sentence, out of the target.
+    assert.deepEqual(texts("이미지를 동영상으로 만들어줘."), ["이미지를 동영상으로 추가한다"]);
+    assert.equal(of("이미지를 동영상으로 만들어줘.")[0]?.object, "이미지");
+    assert.deepEqual(texts("설정을 기본값으로 되돌려줘."), ["설정을 기본값으로 수정한다"]);
+    assert.deepEqual(texts("결과를 미리보기로 보여줘."), ["결과를 미리보기로 살펴본다"]);
+  });
+
+  test("`-도` 로 끝나는 측정 명사에서 조사를 떼지 않는다", () => {
+    // The length guard passed `해상도` because `해상` is two syllables and looks
+    // like a word. `-도` builds measure nouns and they are exactly what a
+    // project measuring anything names.
+    assert.deepEqual(texts("해상도를 설정해줘."), ["해상도를 설정한다"]);
+    assert.deepEqual(texts("정확도를 측정해줘."), ["정확도를 측정한다"]);
+    // The additive particle still comes off where it is one.
+    assert.deepEqual(texts("결과도 확인해줘."), ["결과를 확인한다"]);
+  });
+
+  test("관형절의 동사는 목적어의 일부가 아니다", () => {
+    assert.equal(of("생성하는 도구를 만들어줘.")[0]?.object, "도구");
+    assert.equal(of("생성된 영상을 저장해줘.")[0]?.object, "영상");
+    // A contentful modifier is still kept — `업로드` is not one of the acts.
+    assert.equal(of("업로드한 사진을 바꿔줘.")[0]?.object, "업로드한 사진");
+  });
+
+  test("수사와 단위는 한 낱말이다", () => {
+    // The two-token window ended at `한 장` — a quantity with nothing to
+    // quantify — because Korean writes the counter as its own word.
+    assert.deepEqual(texts("이미지 한 장을 영상으로 변환해줘."), [
+      "이미지 한 장을 영상으로 변환한다",
+    ]);
+  });
+
+  test("`-ㄹ 수 있게 해줘` 는 기능 요청이다", () => {
+    // The commonest way to ask for a feature in Korean, and it read as nothing.
+    assert.deepEqual(texts("프레임 수와 해상도를 설정할 수 있게 해줘."), [
+      "프레임 수와 해상도를 설정한다",
+    ]);
+    assert.deepEqual(texts("실패하면 다시 시도하게 해줘."), ["요청한 명령을 실행한다"]);
+  });
+
+  test("조건절의 동사는 요청이 아니고, 대상도 아니다", () => {
+    // Two failures in one sentence: `-면` marks a hypothesis and the table
+    // happens to try 바꾸 before 비교, so the design recorded a change nobody
+    // asked for and lost the comparison. The target then came out of the
+    // condition as well.
+    assert.deepEqual(texts("프롬프트를 바꾸면 결과가 어떻게 달라지는지 비교해줘."), [
+      "결과를 비교한다",
+    ]);
+  });
+
+  test("대상이 조건절 뒤에 있으면 수식어를 대상으로 삼지 않는다", () => {
+    // "5초짜리를 영상으로 변환한다" — a size with nothing to size, produced
+    // because the marked object sits on the far side of the condition. Nothing
+    // is the honest answer here; inventing one out of the nearest modifier is
+    // not.
+    assert.deepEqual(texts("이미지를 업로드하면 5초짜리 영상으로 변환해줘."), []);
   });
 });
 

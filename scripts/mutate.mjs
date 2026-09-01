@@ -134,6 +134,10 @@ const SUITES = {
     "src/design/functionalExtract.test.ts",
     "src/design/evalScenarioRecall.test.ts",
     "src/design/extractInvariants.test.ts",
+    // The generative-media corpus. Three project topics the extractor had never
+    // been asked to read, and the numbers it scores there are what most of the
+    // mutations below are measured against.
+    "src/design/mediaCases.test.ts",
   ],
   metrics: ["src/design/preview.test.ts"],
   gold: ["src/design/goldRequirements.test.ts"],
@@ -708,6 +712,37 @@ const MUTATIONS = [
   ["M185", "부정 앞의 조사를 다시 놓침 (하지는 마세요)", "src/agent/statedProhibitions.ts",
     "const STEM = \"하[지진](?:[는도를은])?\";",
     "const STEM = \"하[지진]\";", "prohibit"],
+  // ---- C4.15: the designer on a domain it had never read --------------------
+  ["M186", "`으로` 에서 `로` 만 떼어 조각을 남김", "src/design/functionalExtract.ts",
+    "    kept[lastAt] = (kept[lastAt] ?? \"\").replace(/(?:까지|부터|으로|만|[이가은는의로])$/u, \"\");",
+    "    kept[lastAt] = (kept[lastAt] ?? \"\").replace(/(?:까지|부터|만|[이가은는의로])$/u, \"\");", "recall"],
+  ["M187", "도구격 구를 대상에 다시 붙임", "src/design/functionalExtract.ts",
+    "    const located = !marksItsObject",
+    "    const located = true", "recall"],
+  ["M188", "측정 명사에서 `도` 를 조사로 떼어냄", "src/design/functionalExtract.ts",
+    "    if (out.endsWith(\"도\") && dropped.length >= 2 && !MEASURE_NOUN.test(out)) out = dropped;",
+    "    if (out.endsWith(\"도\") && dropped.length >= 2) out = dropped;", "recall"],
+  ["M189", "관형절의 동사를 명사구의 일부로 봄", "src/design/functionalExtract.ts",
+    "        VERB_ADNOMINAL.test(token),",
+    "        false,", "recall"],
+  ["M190", "수사+단위를 두 낱말로 세어 대상을 자름", "src/design/functionalExtract.ts",
+    "    if (NUMERAL.test(token) && next !== undefined) {",
+    "    if (false && next !== undefined) {", "recall"],
+  ["M191", "`-ㄹ 수 있게 해줘` 를 다시 읽지 못함", "src/design/functionalExtract.ts",
+    "    const clause = plainImperative(source);",
+    "    const clause = source;", "recall"],
+  ["M192", "조건절의 동사를 요청으로 읽음", "src/design/functionalExtract.ts",
+    "    const preferred = ordered.filter((found) => !conditional(found.match));",
+    "    const preferred = ordered;", "recall"],
+  ["M193", "목적어 표시를 문장 끝에서만 찾음", "src/design/functionalExtract.ts",
+    "    if (/[을를]$/u.test(token)) {",
+    "    if (/[을를]$/u.test(token) && i === beforeTokens.length - 1) {", "recall"],
+  ["M194", "조건절을 넘어가서 목적어를 가져옴", "src/design/functionalExtract.ts",
+    "    if (CLAUSE_ENDING.test(token) || conditionalVerbToken(token)) break;",
+    "    if (false) break;", "recall"],
+  ["M195", "맨 수식어를 대상으로 삼음", "src/design/functionalExtract.ts",
+    "  if (!runMarked && trailing?.grammar === true && trailing.carriesNoun) run.length = 0;",
+    "  if (false) run.length = 0;", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

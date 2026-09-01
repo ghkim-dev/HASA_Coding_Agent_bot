@@ -79,7 +79,10 @@ describe("추출기 불변식", () => {
     const forbidding = TURNS.filter((t) => [...prohibitionsIn(t.text)].length > 0).length;
     assert.deepEqual(
       { turns: TURNS.length, candidates: candidates.length, withObject, forbidding },
-      { turns: 117, candidates: 123, withObject: 111, forbidding: 14 },
+      // 123 → 124 when the generative-media verbs were added: `저장해줘` in one
+      // of the scenario turns had produced nothing and now produces a
+      // requirement.
+      { turns: 117, candidates: 124, withObject: 112, forbidding: 14 },
       "말뭉치가 달라졌습니다 — 의도한 변경이면 이 숫자를 갱신하십시오",
     );
   });
