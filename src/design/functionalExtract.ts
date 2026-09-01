@@ -727,6 +727,10 @@ function objectParticle(object: string): string {
   }
   const letter = object.slice(-1).toLowerCase();
   if (/[a-z]/.test(letter)) return "lmn".includes(letter) ? "을" : "를";
+  // Digits are read as their Korean names, so the same rule decides: 일, 삼, 육,
+  // 칠, 팔 and 영 close their syllable; 이, 사, 오 and 구 do not. `mp4` was
+  // coming out as `mp4을` because everything non-Latin fell to the default.
+  if (/\d/.test(letter)) return "013678".includes(letter) ? "을" : "를";
   return "을";
 }
 

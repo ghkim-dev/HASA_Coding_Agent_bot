@@ -272,6 +272,25 @@ describe("무엇이 대상이고 무엇이 대상이 아닌가", () => {
     assert.deepEqual(texts("결과를 미리보기로 보여줘."), ["결과를 미리보기로 살펴본다"]);
   });
 
+  test("목적어 표시가 없으면 `-로` 구가 유일한 명사다", () => {
+    // The other side of the rule above, and the shape no corpus contained: with
+    // nothing marked by `을`/`를`, the instrumental phrase is not competing with
+    // an object — it *is* the only noun in the sentence. Dropping it would leave
+    // the request with no target at all, so it stays, and the particle strip at
+    // the end of the phrase is then the only thing standing between the user and
+    // `동영상으`.
+    assert.deepEqual(texts("동영상으로 만들어줘."), ["동영상을 추가한다"]);
+    assert.deepEqual(texts("기본값으로 되돌려줘."), ["기본값을 수정한다"]);
+    assert.deepEqual(texts("한국어로 번역해줘."), ["한국어를 번역한다"]);
+  });
+
+  test("숫자로 끝나는 대상에 조사를 올바르게 붙인다", () => {
+    // `mp4을` — digits were falling to the consonant-final default. They are read
+    // as their Korean names, and 사 ends in a vowel.
+    assert.deepEqual(texts("mp4로 내보내줘."), ["mp4를 내보낸다"]);
+    assert.deepEqual(texts("결과 영상을 mp4로 내보내줘."), ["결과 영상을 mp4로 내보낸다"]);
+  });
+
   test("`-도` 로 끝나는 측정 명사에서 조사를 떼지 않는다", () => {
     // The length guard passed `해상도` because `해상` is two syllables and looks
     // like a word. `-도` builds measure nouns and they are exactly what a
