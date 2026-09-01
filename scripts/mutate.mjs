@@ -105,6 +105,10 @@ const FILES = [
   // C4.14: what crosses from the designer to the agent. Every defence here is
   // against the handoff saying something the design did not.
   "src/design/harnessHandoff.ts",
+  // C4.20: what the panel is told. Lifted out of `designerHost.ts` so the
+  // judgements in it — grounded, baseline, forbidden, how many models were
+  // really dropped — can be loaded, tested and mutated.
+  "src/design/designerPayload.ts",
 ];
 /**
  * Which suite is run for a mutation.
@@ -146,6 +150,7 @@ const SUITES = {
   // Every regex in the source, checked for the escape that eats itself.
   hygiene: ["src/design/sourceHygiene.test.ts"],
   handoff: ["src/design/harnessHandoff.test.ts"],
+  payload: ["src/design/designerPayload.test.ts"],
   recall: [
     "src/design/functionalExtract.test.ts",
     "src/design/evalScenarioRecall.test.ts",
@@ -827,6 +832,28 @@ const MUTATIONS = [
   ["M216", "`translate` 를 다시 놓침", "src/design/functionalExtract.ts",
     "  { pattern: /\\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\\s+up|tidy|convert|transform|configure|translate|localis|localiz|set)\\b/i, action: \"modify\" },",
     "  { pattern: /\\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\\s+up|tidy|convert|transform|configure|set)\\b/i, action: \"modify\" },", "conversation"],
+  // ---- C4.20: what the panel is told ----------------------------------------
+  ["M217", "baseline 을 사용자 요구사항으로 표시", "src/design/designerPayload.ts",
+    "      baseline: r.status === \"system_added\",",
+    "      baseline: false,", "payload"],
+  ["M218", "근거 없는 것을 근거 있다고 표시", "src/design/designerPayload.ts",
+    "      grounded: r.span !== undefined,",
+    "      grounded: true,", "payload"],
+  ["M219", "금지 표시를 지움", "src/design/designerPayload.ts",
+    "      forbidden: r.polarity === \"forbidden\",",
+    "      forbidden: false,", "payload"],
+  ["M220", "잘라낸 목록의 길이를 전체 개수라고 보고", "src/design/designerPayload.ts",
+    "            filteredOutTotal: rec.filteredOut.length,",
+    "            filteredOutTotal: rec.filteredOut.slice(0, MAX_FILTERED_OUT).length,", "payload"],
+  ["M221", "점수 분해를 버림", "src/design/designerPayload.ts",
+    "                    breakdown: { ...rec.selected.breakdown },",
+    "                    breakdown: {},", "payload"],
+  ["M222", "탈락 사유의 문장을 버림", "src/design/designerPayload.ts",
+    "              detail: f.detail,",
+    "              detail: \"\",", "payload"],
+  ["M223", "핸드오프 경고 개수를 0 으로 고정", "src/design/designerPayload.ts",
+    "      blockerCount: handoff.blockers.length,",
+    "      blockerCount: 0,", "payload"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
