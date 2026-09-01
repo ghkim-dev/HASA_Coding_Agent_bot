@@ -27,3 +27,27 @@ declare function acquireVsCodeApi(): {
  * scoped to it and invisible to `chat.js`.
  */
 type HostMessage = import("../src/agent/chatPanel.ts").HostMessage;
+
+/**
+ * What the designer host may send, on the same terms.
+ *
+ * The designer panel had none of this: its message was `unknown`, so the view
+ * could read `design.recommendations` for a field called `recommendation` and
+ * draw nothing, silently, with the host entirely correct. That is the same
+ * failure this file already guards for the chat panel, and it was unguarded in
+ * the newer one.
+ */
+type DesignerHostMessage = import("../src/design/designerPanel.ts").DesignerHostMessage;
+
+/** The design itself, so the renderer is bound to the shape the host builds. */
+type DesignPayload = import("../../src/design/designerPayload.ts").DesignPayload;
+
+/**
+ * What the Arena host may send. Same reason as the two above.
+ *
+ * Named rather than reusing `HostMessage`: the chat panel and the Arena have
+ * different messages that happen to share a type name in their own files, and
+ * a global that meant one of them depending on which file you read would be
+ * worse than none.
+ */
+type ArenaHostMessage = import("../src/types.ts").HostMessage;

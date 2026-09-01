@@ -174,12 +174,40 @@ describe("the webview cannot execute what it is sent", () => {
     }
   });
 
-  test("the chat panel sets a content security policy with a nonce", () => {
-    const panel = hostFiles.find((f) => f.name.includes("chatPanel"));
-    assert.ok(panel !== undefined);
-    assert.match(panel.text, /Content-Security-Policy/);
-    assert.match(panel.text, /default-src 'none'/);
-    assert.match(panel.text, /nonce-/);
+  test("every panel sets a content security policy with a nonce", () => {
+    // Was `chatPanel` alone, and the designer panel was written afterwards. It
+    // happens to set one; nothing said it had to, and the next panel would have
+    // been the same coin toss.
+    const panels = hostFiles.filter((f) => /Panel\.ts$/.test(f.name));
+    assert.ok(panels.length >= 2, `${panels.length} panels found — the scan may have moved`);
+    for (const panel of panels) {
+      assert.match(panel.text, /Content-Security-Policy/, panel.name);
+      assert.match(panel.text, /default-src 'none'/, panel.name);
+      assert.match(panel.text, /nonce-/, panel.name);
+    }
+  });
+
+  test("no webview reads a host message untyped", () => {
+    // `event.data` is `any`, so a view can read a field the host does not send
+    // and get `undefined` — which renders as nothing, silently, with the host
+    // entirely correct. It happened once: the chat panel read `message.turns`
+    // for a payload carrying `events` and every reopened conversation came back
+    // blank while the conversation restored fine underneath.
+    //
+    // `tsconfig.webview.json` exists because of that, and it only helps where
+    // the value has a type. The designer panel had none — its message was
+    // `unknown` all the way to the view — and the Arena panel read `event.data`
+    // raw. Checked structurally because the compiler cannot flag an `any` that
+    // nobody asked it about.
+    for (const file of webviewFiles) {
+      for (const read of file.text.match(/=\s*[^;\n]*event\.data[^;\n]*/g) ?? []) {
+        assert.match(
+          read,
+          /@type\s*\{/,
+          `${file.name}: a host message is read without a type — ${read.trim()}`,
+        );
+      }
+    }
   });
 });
 

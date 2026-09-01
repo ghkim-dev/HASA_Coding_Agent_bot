@@ -697,7 +697,9 @@
   // ---------- host messages ----------
 
   window.addEventListener("message", (event) => {
-    const message = event.data;
+    // Typed, for the reason the other two panels are: an `any` here lets the
+    // view read a field the host does not send and draw nothing, silently.
+    const message = /** @type {ArenaHostMessage} */ (event.data);
     switch (message.type) {
       case "state":
         model.state = message.state;

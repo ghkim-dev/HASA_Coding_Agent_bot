@@ -112,7 +112,12 @@ el.req.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("message", (event) => {
-  const message = event.data;
+  // Typed, so a field the host does not send is a compile error rather than an
+  // `undefined` that renders as nothing. This was `any`, which is how the chat
+  // panel once read `message.turns` for a payload carrying `events` and drew a
+  // blank screen with the data entirely correct — the failure
+  // `tsconfig.webview.json` exists for, unguarded in the newer panel.
+  const message = /** @type {DesignerHostMessage} */ (event.data);
   if (message.type === "models") {
     el.models.textContent =
       message.source === "gateway"
@@ -156,6 +161,7 @@ function renderDropped(rec) {
   if (hidden > 0) el.rec.appendChild(make("div", "dropped", `외 ${hidden}개 더 제외됨`));
 }
 
+/** @param {DesignPayload} design */
 function render(design) {
   el.out.classList.remove("hidden");
   el.summary.textContent = design.summary;

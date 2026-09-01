@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { DesignPayload } from "../../../src/design/designerPayload.ts";
 
 /**
  * The designer window.
@@ -32,7 +33,16 @@ export type DesignerMessage =
 /** What the host tells the webview. */
 export type DesignerHostMessage =
   | { type: "designing" }
-  | { type: "design"; design: unknown }
+  /**
+   * The design, typed.
+   *
+   * It was `unknown`, which meant the view could read any field name it liked
+   * and get `undefined` — the failure `tsconfig.webview.json` was written for,
+   * where `message.turns` survived a rename to `message.events` and every
+   * reopened conversation drew a blank screen while the data was fine.
+   * `DesignPayload` is where every field is decided, so it is what crosses.
+   */
+  | { type: "design"; design: DesignPayload }
   | { type: "error"; message: string }
   | { type: "models"; count: number; source: "gateway" | "none"; detail: string };
 
