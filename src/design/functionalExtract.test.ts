@@ -556,6 +556,75 @@ describe("경계 입력", () => {
   test("한국어와 영어 식별자가 섞인 문장", () => {
     assert.deepEqual(texts("HASA Coding Agent를 추가해줘."), ["Coding Agent를 추가한다"]);
   });
+
+  test("관계절과 부사구는 영어 목적어의 일부가 아니다", () => {
+    // `that`, `which` and the adjunct prepositions were all missing from the
+    // stop list, so the target was the rest of the sentence: "a project that
+    // turns an uploaded image into a video" instead of the project.
+    assert.equal(of("Build a project that turns an image into a video.")[0]?.object, "project");
+    assert.equal(of("Generate an image from text.")[0]?.object, "image");
+    assert.equal(of("Export the result video as mp4.")[0]?.object, "result video");
+  });
+
+  test("간접 목적어와 보어 표지는 목적어에 남지 않는다", () => {
+    // "show me the result as a preview" targeted `me the result as a preview`.
+    assert.equal(of("Show me the result as a preview.")[0]?.object, "result");
+    assert.equal(of("Check for errors in the log.")[0]?.object, "errors");
+  });
+
+  test("대상이 대명사뿐이거나 부사구뿐이면 대상은 없다", () => {
+    // `it` names nothing this can resolve, and `on the GPU` is where rather than
+    // what. Both used to become the target.
+    assert.equal(of("Fix the login error and test it.")[1]?.object, "");
+    assert.equal(of("Download the model and run it on the GPU.")[1]?.object, "");
+  });
+
+  test("영어 `and` 는 두 행위를 잇기도 하고 두 명사를 잇기도 한다", () => {
+    // Korean has different connectives for the two; English does not, and what
+    // separates them is whether a verb follows. Cutting at every `and` reported
+    // half of what the user asked for.
+    assert.equal(
+      of("Support both image generation and video generation.")[0]?.object,
+      "image generation and video generation",
+    );
+    assert.deepEqual(of("Fix the login error and test it.").map((c) => c.action), [
+      "modify",
+      "verify",
+    ]);
+  });
+
+  test("아는 동사의 분사는 목적어의 일부가 아니다", () => {
+    // The English half of the rule Korean applies to `생성된 영상`. Restricted to
+    // the verbs this file knows, which is what leaves the rest alone.
+    assert.equal(of("Save the generated video.")[0]?.object, "video");
+    assert.equal(of("Review the refactored module.")[0]?.object, "module");
+    assert.equal(of("Fix the broken pipeline.")[0]?.object, "broken pipeline");
+    assert.equal(of("Check the advanced settings.")[0]?.object, "advanced settings");
+  });
+
+  test("영어 요청에는 영어 문장으로 답한다", () => {
+    // An English sentence with no object came back as "테스트를 실행해 결과를
+    // 확인한다" — the right reading, in a language the person who typed it may
+    // not read.
+    assert.deepEqual(texts("Run it."), ["run the requested command"]);
+    assert.deepEqual(texts("Fix the login error and test it."), [
+      "fix the login error",
+      "run the tests and check the result",
+    ]);
+  });
+
+  test("`let me` 도 요청을 여는 말이다", () => {
+    // `let's` was stripped and `let me` was not, so "Let me set the frame count"
+    // read as nothing at all.
+    assert.equal(of("Let me set the frame count.")[0]?.object, "frame count");
+  });
+
+  test("`build a` 는 만드는 것이고 `build` 는 돌리는 것이다", () => {
+    // The English `쓰다`: two verbs sharing a spelling, told apart by the
+    // article, which is what a reader uses.
+    assert.equal(of("Build a tool that generates images.")[0]?.action, "create");
+    assert.equal(of("Build the project.")[0]?.action, "execute");
+  });
 });
 
 describe("span 은 UTF-16 좌표로 정확하다", () => {

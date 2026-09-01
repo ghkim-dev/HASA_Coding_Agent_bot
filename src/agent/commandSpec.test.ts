@@ -181,7 +181,7 @@ describe("E/F/G — the workspace boundary still holds", () => {
 
   // Built with `join` so the separators are the platform's, the way a real
   // workspace root arrives. Hard-coding POSIX paths made these pass on Linux
-  // and compare `\work\project.ts` against `/work/project` on Windows.
+  // and compare `\work\project.ts` against `/work/project` on Windows.
   const ROOT = resolve(join("work", "project"));
 
   test("E — a relative path climbing out is refused", async () => {

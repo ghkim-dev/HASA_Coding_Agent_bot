@@ -222,7 +222,7 @@ multi-root는 **정렬 후** digest한다. 사이드바에서 폴더 순서를 �
 
 ### 한계 — 경로 기반
 
-프로젝트를 옮기면 identity가 바뀐다. `C:\workoo`와 `D:\projectsoo`는 다른 workspace이고, 앞의 대화는 뒤로 따라가지 않는다.
+프로젝트를 옮기면 identity가 바뀐다. `C:\work\foo`와 `D:\projects\foo`는 다른 workspace이고, 앞의 대화는 뒤로 따라가지 않는다.
 
 내용 기반 identity는 "편집을 거쳐도 같은 프로젝트인가"를 판정해야 하는 문제이고, 그것대로 틀린 답을 낸다. 경로는 사용자가 볼 수 있고 틀렸을 때 바로 안다.
 

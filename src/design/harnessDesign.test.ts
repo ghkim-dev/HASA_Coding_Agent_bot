@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { describeDesign, designHarness } from "./harnessDesign.ts";
 import { measure, type Measure, type ModelProfile } from "../router/modelProfile.ts";
 import { prohibitionsIn } from "../agent/statedProhibitions.ts";
+import { looksLikeResearchBan } from "../agent/turnContract.ts";
 
 /**
  * The designer: one request in, one harness design out.
@@ -413,6 +414,38 @@ describe("what the profile is built from, exactly", () => {
       const design = await designHarness({ text });
       assert.ok(!design.intents.includes("research"), `research inferred from: ${text}`);
       assert.equal(design.profile.demands.webResearch ?? 0, 0, text);
+    }
+  });
+
+  test("an English request for the web is one, and an English ban is one", async () => {
+    // Neither half of this worked, and the two hid each other.
+    //
+    // `MENTIONS_WEB` and the English branch of `NEGATIVE_CLAUSE` were both
+    // written with `\b` and both had that backslash eaten before the file was
+    // committed, so the escape became a literal backspace and the alternative
+    // could never match. The effect: an English sentence naming the internet
+    // raised no demand, and an English sentence forbidding it was not read as a
+    // ban. No web tool was granted, so nothing looked wrong — until the demand
+    // side was fixed on its own, at which point the missed ban would have let a
+    // model search the web on a request that said not to.
+    //
+    // Both directions are checked here so neither can be fixed alone again.
+    for (const text of [
+      "Look this up online and summarise it.",
+      "Find the answer on the internet.",
+      "Search the web for the latest models.",
+    ]) {
+      const design = await designHarness({ text });
+      assert.ok(design.intents.includes("research"), `no research demand read from: ${text}`);
+    }
+    for (const text of [
+      "Do not use the web, just read the repository.",
+      "Answer without web access.",
+      "Never browse the internet for this.",
+    ]) {
+      assert.equal(looksLikeResearchBan(text), true, `not read as a ban: ${text}`);
+      const design = await designHarness({ text });
+      assert.ok(!design.intents.includes("research"), `research inferred from a ban: ${text}`);
     }
   });
 

@@ -705,7 +705,7 @@ export function researchAllowed(decision: ResearchDecision): boolean {
  * came to outrank a real prohibition.
  */
 const RESEARCH_DEMAND =
-  /웹\s*검색|웹서치|인터넷\s*(?:검색|조사)|(?:웹|인터넷|온라인)에서[^.!?\n]{0,24}?(?:찾|검색|확인|조사|알아)|검색을\s*통해|검색해서\s*확인|검색\s*이후|검색으로\s*확인|hugging\s*face|허깅\s*페이스|web\s*search|search\s+the\s+web|research\s+(?:this\s+)?online|browse\s+the\s+web|look\s+(?:it\s+)?up\s+online/i;
+  /웹\s*검색|웹서치|인터넷\s*(?:검색|조사)|(?:웹|인터넷|온라인)에서[^.!?\n]{0,24}?(?:찾|검색|확인|조사|알아)|검색을\s*통해|검색해서\s*확인|검색\s*이후|검색으로\s*확인|hugging\s*face|허깅\s*페이스|web\s*search|search\s+the\s+web|research\s+(?:this\s+)?online|browse\s+the\s+web|(?:search|find|look|check|browse|research|read)\s+[^.!?\n]{0,30}?\b(?:online|on\s+the\s+(?:web|internet))\b/i;
 
 /**
  * The user's message, split where a prohibition stops and an instruction starts.
@@ -753,14 +753,14 @@ function demandIn(text: string): string | null {
  * and whatever class it belongs to. A clause carrying one is never a request.
  */
 const NEGATIVE_CLAUSE =
-  /(?:지\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\s*[.!?。]*\s*$|(?:면|서는)\s*안\s*(?:돼|되|된|됩)|(?:without|avoid|instead\s+of|do\s+not|don'?t|never)/i;
+  /(?:지\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\s*[.!?。]*\s*$|(?:면|서는)\s*안\s*(?:돼|되|된|됩)|\b(?:without|avoid|instead\s+of|do\s+not|don'?t|never)\b/i;
 
 function isNegativeClause(clause: string): boolean {
   return NEGATIVE_CLAUSE.test(clause.trim());
 }
 
 /** Any mention of leaving the machine, for the coarse ban-shape check. */
-const MENTIONS_WEB = /웹|인터넷|온라인|허깅\s*페이스|hugging\s*face|web|internet|online/i;
+const MENTIONS_WEB = /웹|인터넷|온라인|허깅\s*페이스|hugging\s*face|\bweb\b|\binternet\b|\bonline\b/i;
 
 /**
  * The user's own words asking for the web, if any clause does.

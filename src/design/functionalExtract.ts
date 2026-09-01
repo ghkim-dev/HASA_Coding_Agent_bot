@@ -238,6 +238,24 @@ const NEGATED =
   /(?:지|진)(?:는|도|를|은)?\s*(?:마|말|않|못|안)|(?:면|서는)\s*안|(?:라|다|자|란)는?\s*(?:게|것이|건|말이)\s*아니/;
 
 /** How an act with no stated target is written down. The target stays open. */
+/**
+ * The same list in English, for a request that was written in English.
+ *
+ * Without it an English sentence with no object came back as "테스트를 실행해
+ * 결과를 확인한다" — the right reading, rendered in a language the person who
+ * typed it may not read. The Korean side of this file renders Korean for the
+ * same reason.
+ */
+const ACT_ONLY_EN: Readonly<Record<ActionKind, string>> = {
+  modify: "make the change",
+  verify: "run the tests and check the result",
+  inspect: "look at what was asked about",
+  create: "add it",
+  remove: "remove it",
+  execute: "run the requested command",
+  preserve: "leave the existing behaviour as it is",
+};
+
 const ACT_ONLY: Readonly<Record<ActionKind, string>> = {
   modify: "수정한다",
   verify: "테스트를 실행해 결과를 확인한다",
@@ -833,16 +851,26 @@ const ENGLISH_VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // Order matters within an action the way it does above: the longer, more
   // specific form is tried first so `look into` is not read as `look`.
   { pattern: /\b(?:re-?implement|reimplement)\b/i, action: "create" },
-  { pattern: /\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\s+up|tidy)\b/i, action: "modify" },
-  { pattern: /\b(?:implement|create|add|write|generate|introduce|set\s+up|scaffold)\b/i, action: "create" },
+  // `convert` and `transform` are `modify` on the argument the Korean `변환`
+  // settled: the sentence's object is the source, not the result. `set` and
+  // `configure` change how something already behaves.
+  { pattern: /\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\s+up|tidy|convert|transform|configure|set)\b/i, action: "modify" },
+  // `export`, `save` and `store` are `create` because a file that did not exist
+  // now does — the same test `add` and `implement` pass.
+  { pattern: /\b(?:implement|create|add|write|generate|introduce|set\s+up|scaffold|export|save|store|support|attach|extract)\b/i, action: "create" },
   { pattern: /\b(?:remove|delete|drop|strip|get\s+rid\s+of)\b/i, action: "remove" },
-  { pattern: /\b(?:run|execute|launch|start|install|build|compile|deploy)\b/i, action: "execute" },
-  { pattern: /\b(?:test|verify|validate|make\s+sure)\b/i, action: "verify" },
+  // `build a`/`build an` before the bare `build`, because English has the same
+  // two verbs Korean has in `쓰다`: "build a tool" makes something and "build
+  // the project" runs a compiler. The article is what a reader uses, and it is
+  // the only thing in the sentence that separates them.
+  { pattern: /\bbuild\s+(?=an?\b)/i, action: "create" },
+  { pattern: /\b(?:run|execute|launch|start|install|build|compile|deploy|render|retry|train|fine-?tune|download|fetch|pull)\b/i, action: "execute" },
+  { pattern: /\b(?:test|verify|validate|make\s+sure|measure|evaluate|benchmark|assess)\b/i, action: "verify" },
   // `search` and `check` are here rather than in a research act because this
   // list reads what the user asked the agent to *do*; where it looks is the
   // research decision's question, and `statedResearchDemand` answers it from
   // the same sentence.
-  { pattern: /\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\s+at|look\s+into|show|list|find|locate|search|check)\b/i, action: "inspect" },
+  { pattern: /\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\s+at|look\s+into|show|list|find|locate|search|check|compare|contrast|preview)\b/i, action: "inspect" },
 ];
 
 /**
@@ -861,7 +889,7 @@ const ENGLISH_NEGATED = /\b(?:do\s+not|don'?t|never|without|avoid|no\s+need\s+to
  * "Please fix the login error" has an object of "the login error", and reading
  * the whole tail including `please` would put the word into the requirement.
  */
-const ENGLISH_LEAD = /^(?:please|kindly|could\s+you|can\s+you|would\s+you|i\s+want\s+you\s+to|i'?d\s+like\s+you\s+to|let'?s|we\s+should|you\s+should)\s+/i;
+const ENGLISH_LEAD = /^(?:please|kindly|could\s+you|can\s+you|would\s+you|i\s+want\s+you\s+to|i'?d\s+like\s+you\s+to|let'?s|let\s+me|we\s+should|you\s+should)\s+/i;
 
 /**
  * Where an English object stops.
@@ -870,8 +898,23 @@ const ENGLISH_LEAD = /^(?:please|kindly|could\s+you|can\s+you|would\s+you|i\s+wa
  * object is capped as well: a runaway match would swallow a paragraph and put
  * it in a requirement, which is the shape of invention this file exists to
  * avoid.
+ *
+ * Two groups were missing, and both produced targets that are not things:
+ *
+ *   · **relative pronouns**. "a project that turns an uploaded image into a
+ *     video" is about the project; without `that` the whole clause became the
+ *     target, and "an API that accepts both an image and text" was cut at
+ *     `and` into `API that accepts both an image`.
+ *   · **adjunct prepositions**. "generate an image from text" is about the
+ *     image, "run it on the GPU" is not about the GPU, and "export the result
+ *     as mp4" is not about mp4.
+ *
+ * `for`, `of` and `about` stay out: those introduce the verb's complement
+ * rather than an adjunct — "check for errors" is about the errors — and `for`
+ * comes off as a leading particle instead.
  */
-const ENGLISH_OBJECT_END = /\s+(?:and|then|but|so|because|after|before|while|to)|[.,;:!?]/;
+const ENGLISH_OBJECT_END =
+  /\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\b|[.,;:!?]/i;
 
 const MAX_ENGLISH_OBJECT = 60;
 
@@ -906,20 +949,149 @@ function isImperativePosition(body: string, at: number): boolean {
 const ENGLISH_QUESTION = /\?\s*$/;
 
 /** Words that are the verb's own particle rather than part of the target. */
-const ENGLISH_PARTICLE = /^(?:up|out|the|a|an|it|this|that|these|those|all|any)\s+/i;
+/**
+ * Words between the verb and its object that are not part of it.
+ *
+ * `me` and `us` are the indirect object — "show me the result" is about the
+ * result, and without them the target was `me the result as a preview`. `for`
+ * marks the complement of a search: "check for errors" is about the errors.
+ */
+/**
+ * Whether a fragment opens with one of the acts above.
+ *
+ * What `and` joins, in English, is either two acts or two nouns, and the word
+ * is the same either way — Korean has different connectives for the two and
+ * this does not. What separates them is what follows: "fix the bug and test
+ * it" continues with a verb, "set the frame count and the resolution" does
+ * not.
+ *
+ * Anchored, so a verb later in the fragment does not count. `slice(0, 24)`
+ * because only the opening matters and a long tail costs time for nothing.
+ */
+function opensWithEnglishVerb(fragment: string): boolean {
+  const head = fragment.trim().slice(0, 24);
+  return ENGLISH_VERBS.some(({ pattern }) => {
+    const match = pattern.exec(head);
+    return match !== null && match.index === 0;
+  });
+}
 
-function englishObject(clause: string, after: number): string {
+/**
+ * The verb words themselves, pulled out of the table above.
+ *
+ * Collected from the patterns rather than written out beside them, for the
+ * reason `STEMS` is on the Korean side: a verb added in one place and
+ * forgotten in the other quietly becomes part of a target. Multi-word and
+ * bracketed entries drop out — `clean up`, `analy[sz]e` — and none of them is
+ * a participle base that matters.
+ */
+const ENGLISH_STEMS: ReadonlySet<string> = new Set(
+  ENGLISH_VERBS.flatMap(({ pattern }) =>
+    pattern.source
+      .split("|")
+      // The longest run of letters in the alternative.
+      //
+      // Trimming the ends does not work and looked like it did: the first word
+      // of every group arrives as `\b(?:refactor`, and `\b` *contains a letter*,
+      // so a leading `[^a-z]+` strips the backslash and stops. That left
+      // `b(?:refactor`, which the filter then dropped — silently losing the
+      // first verb of each group while the tests kept passing on the ones in the
+      // middle.
+      //
+      // The longest run is right for every entry here and wrong for none:
+      // `\b(?:refactor` → refactor, `scaffold)\b` → scaffold, `look\s+at` →
+      // look. Multi-word and bracketed entries contribute their first word or a
+      // fragment — `summari` out of `summari[sz]e` — and a fragment that is not
+      // a word can never be the stem of a participle, so it costs nothing.
+      .map((word) => (word.toLowerCase().match(/[a-z]+/g) ?? []).sort((a, b) => b.length - a.length)[0] ?? "")
+      .filter((word) => word.length > 1),
+  ),
+);
+
+/**
+ * A participle built on one of those verbs, standing in front of its noun.
+ *
+ * The English half of the rule the Korean side calls `VERB_ADNOMINAL`: "the
+ * generated video" is about the video, exactly as "생성된 영상" is about the
+ * 영상. Restricted to verbs this file knows, which is what leaves "the broken
+ * pipeline" and "the advanced settings" alone — `break` and `advance` are not
+ * acts here, and their modifiers carry content.
+ */
+function isEnglishParticiple(word: string): boolean {
+  const lower = word.toLowerCase();
+  if (lower.endsWith("ed")) {
+    // `fixed` → fix, `generated` → generate: the silent `e` may or may not be
+    // part of the stem, so both readings are tried.
+    if (ENGLISH_STEMS.has(lower.slice(0, -2)) || ENGLISH_STEMS.has(lower.slice(0, -1))) return true;
+  }
+  if (lower.endsWith("ing")) {
+    const stem = lower.slice(0, -3);
+    if (ENGLISH_STEMS.has(stem) || ENGLISH_STEMS.has(`${stem}e`)) return true;
+  }
+  return false;
+}
+
+/** A leftover that begins with an adjunct: `on the GPU`, `from text`, `as mp4`. */
+const ENGLISH_ADJUNCT_HEAD = /^(?:on|in|at|into|onto|as|from|with|by|via|using)\b/i;
+
+/** Nothing but a pronoun, with or without its full stop. */
+const ENGLISH_PRONOUN_ONLY = /^(?:it|them|this|that|these|those|one)\b[.!?]?\s*$/i;
+const ENGLISH_PARTICLE = /^(?:up|out|for|it|this|that|these|those|all|any|me|us|both)\s+/i;
+
+/**
+ * The article, which the target drops and the sentence keeps.
+ *
+ * The same split the Korean side makes between `object` and the words it
+ * renders. A run is bound to `login error`; a person reads "fix the login
+ * error". Dropping it from both gave "fix login error", which is a telegram.
+ */
+const ENGLISH_ARTICLE = /^(?:the|a|an)\s+/i;
+
+function englishObject(clause: string, after: number): { target: string; shown: string } {
   let rest = clause.slice(after).trim();
   // Drop a leading particle, then a leading article — "clean up the imports"
   // has an object of "imports", not "up the imports".
   for (let i = 0; i < 2; i += 1) rest = rest.replace(ENGLISH_PARTICLE, "");
-  const stop = ENGLISH_OBJECT_END.exec(rest);
+  // Held aside rather than dropped — see `ENGLISH_ARTICLE`.
+  const article = ENGLISH_ARTICLE.exec(rest)?.[0] ?? "";
+  rest = rest.slice(article.length);
+  // Then the participle, which sits between the article and the noun.
+  const lead = /^([A-Za-z]+)\s+(?=\S)/.exec(rest);
+  if (lead !== null && isEnglishParticiple(lead[1] ?? "")) rest = rest.slice(lead[0].length);
+  // The first stop that is really a stop.
+  //
+  // `and`, `then`, `but` and `or` end the object when the next act begins and
+  // not otherwise: "support both image generation and video generation" is one
+  // list, and cutting it at `and` reported half of what the user asked for.
+  let stop: { index: number } | null = null;
+  for (let from = 0; from < rest.length; ) {
+    const found = ENGLISH_OBJECT_END.exec(rest.slice(from));
+    if (found === null) break;
+    const at = from + found.index;
+    const joins = /^\s+(?:and|then|but|or)\b/i.test(found[0]);
+    if (!joins || opensWithEnglishVerb(rest.slice(at + found[0].length))) {
+      stop = { index: at };
+      break;
+    }
+    from = at + found[0].length;
+  }
+  // Nothing but an adjunct left, or nothing but a pronoun.
+  //
+  // "run it on the GPU" strips the `it` and leaves `on the GPU`, which the stop
+  // list cannot catch because the preposition is now at the front with no space
+  // in front of it. "test it" leaves a bare `it`, which names nothing this can
+  // resolve — the honest answer is no target, the same one Korean gives for an
+  // omitted object.
+  if (ENGLISH_ADJUNCT_HEAD.test(rest) || ENGLISH_PRONOUN_ONLY.test(rest)) {
+    return { target: "", shown: "" };
+  }
   const object = (stop === null ? rest : rest.slice(0, stop.index))
     // The clause split keeps the conjunction it broke on, so a trailing `and`
     // rides along into the object: "fix the bug and" rather than "fix the bug".
     .replace(/\s+(?:and|then|but|or)\s*$/i, "")
     .trim();
-  return object.length > MAX_ENGLISH_OBJECT ? "" : object;
+  if (object.length === 0 || object.length > MAX_ENGLISH_OBJECT) return { target: "", shown: "" };
+  return { target: object, shown: `${article}${object}` };
 }
 
 /** Whether this text is worth running the English pass over at all. */
@@ -942,7 +1114,7 @@ function englishCandidates(input: { turnId: string; text: string }): FunctionalC
   const seen = new Set<string>();
   let offset = 0;
 
-  for (const clause of input.text.split(ENGLISH_BOUNDARIES)) {
+  for (const clause of englishClauses(input.text)) {
     const at = input.text.indexOf(clause, offset);
     if (at === -1) continue;
     offset = at + clause.length;
@@ -961,11 +1133,14 @@ function englishCandidates(input: { turnId: string; text: string }): FunctionalC
       // ("the previous run"), a subordinate clause, a report about the past.
       if (!isImperativePosition(body, match.index)) continue;
 
-      const object = englishObject(body, match.index + match[0].length);
+      const { target: object, shown } = englishObject(body, match.index + match[0].length);
       if (object.length === 0 && !ACT_IS_ENOUGH.has(action)) continue;
 
       const verb = match[0].toLowerCase();
-      const text = object.length === 0 ? ACT_ONLY[action] : `${verb} ${object}`;
+      // Collapsed, because `build\s+(?=an?\b)` matches its own trailing space
+      // and the article strip takes the next one: "build  project".
+      const text =
+        object.length === 0 ? ACT_ONLY_EN[action] : `${verb} ${shown}`.replace(/\s{2,}/g, " ");
       const key = `${action}:${object.toLowerCase()}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1046,6 +1221,27 @@ export function negatedActs(input: { turnId: string; text: string }): ActionKind
     }
   }
   return [...out];
+}
+
+/**
+ * English clauses, with a noun list left whole.
+ *
+ * `ENGLISH_BOUNDARIES` breaks on ` and `, which is right when it joins two
+ * acts and wrong when it joins two nouns. Splitting first and re-joining is
+ * how the distinction gets made, because a lookahead cannot ask whether what
+ * follows is one of the verbs.
+ */
+function englishClauses(text: string): string[] {
+  const out: string[] = [];
+  for (const piece of text.split(ENGLISH_BOUNDARIES)) {
+    const previous = out[out.length - 1];
+    if (previous !== undefined && /\b(?:and|then|but|or)\s*$/i.test(previous) && !opensWithEnglishVerb(piece)) {
+      out[out.length - 1] = previous + piece;
+      continue;
+    }
+    out.push(piece);
+  }
+  return out;
 }
 
 export function functionalCandidates(input: { turnId: string; text: string }): FunctionalCandidate[] {

@@ -137,6 +137,14 @@ const SUITES = {
     "src/design/functionalExtract.fuzz.test.ts",
   ],
   adoptconv: ["src/agent/conversationAdoption.test.ts"],
+  // The English pass, which had six hand-written cases and no denominator
+  // until the three project topics were asked in English.
+  english: [
+    "src/design/mediaCasesEnglish.test.ts",
+    "src/design/functionalExtract.test.ts",
+  ],
+  // Every regex in the source, checked for the escape that eats itself.
+  hygiene: ["src/design/sourceHygiene.test.ts"],
   handoff: ["src/design/harnessHandoff.test.ts"],
   recall: [
     "src/design/functionalExtract.test.ts",
@@ -177,6 +185,9 @@ const SUITES = {
     "src/agent/statedProhibitions.fuzz.test.ts",
   ],
   prohibit: [
+    // The English research path lives in the designer test, and the two
+    // mutations that cover it are only visible from there.
+    "src/design/harnessDesign.test.ts",
     "src/agent/statedProhibitions.test.ts",
     "src/agent/contractAdoption.test.ts",
     "src/agent/statedProhibitions.fuzz.test.ts",
@@ -775,6 +786,28 @@ const MUTATIONS = [
   ["M203", "부정칭 대명사를 대상으로 삼음", "src/design/functionalExtract.ts",
     "  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|뭔가|무언가|누군가|언젠가|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|걸|거|바|줄|뿐|때문|따름|아니|아니라|것이|말이)$/;",
     "  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|걸|거|바|줄|뿐|때문|따름|아니|아니라|것이|말이)$/;", "recall"],
+  // ---- C4.18: the English pass, and the escape that eats itself -------------
+  ["M204", "영어 관계절과 부사구를 목적어에 다시 붙임", "src/design/functionalExtract.ts",
+    "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\\b|[.,;:!?]/i;",
+    "  /\\s+(?:and|then|but|so|because|after|before|while|to)\\b|[.,;:!?]/i;", "english"],
+  ["M205", "영어 `and` 를 언제나 절 경계로 봄", "src/design/functionalExtract.ts",
+    "    if (!joins || opensWithEnglishVerb(rest.slice(at + found[0].length))) {",
+    "    if (true) {", "english"],
+  ["M206", "아는 동사의 분사를 목적어의 일부로 봄", "src/design/functionalExtract.ts",
+    "  if (lead !== null && isEnglishParticiple(lead[1] ?? \"\")) rest = rest.slice(lead[0].length);",
+    "  if (false) rest = rest.slice(0);", "english"],
+  ["M207", "홑 대명사와 부사구를 대상으로 삼음", "src/design/functionalExtract.ts",
+    "  if (ENGLISH_ADJUNCT_HEAD.test(rest) || ENGLISH_PRONOUN_ONLY.test(rest)) {",
+    "  if (false) {", "english"],
+  ["M208", "`build a` 를 다시 실행으로 읽음", "src/design/functionalExtract.ts",
+    "  { pattern: /\\bbuild\\s+(?=an?\\b)/i, action: \"create\" },",
+    "  { pattern: /\\bnever-matches-anything\\b/i, action: \"create\" },", "english"],
+  ["M209", "영어 웹 언급을 다시 놓침 (연구 금지 판정 불능)", "src/agent/turnContract.ts",
+    "const MENTIONS_WEB = /웹|인터넷|온라인|허깅\\s*페이스|hugging\\s*face|\\bweb\\b|\\binternet\\b|\\bonline\\b/i;",
+    "const MENTIONS_WEB = /웹|인터넷|온라인|허깅\\s*페이스|hugging\\s*face/i;", "prohibit"],
+  ["M210", "영어 부정절을 다시 놓침", "src/agent/turnContract.ts",
+    "  /(?:지\\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\\s*[.!?。]*\\s*$|(?:면|서는)\\s*안\\s*(?:돼|되|된|됩)|\\b(?:without|avoid|instead\\s+of|do\\s+not|don'?t|never)\\b/i;",
+    "  /(?:지\\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\\s*[.!?。]*\\s*$|(?:면|서는)\\s*안\\s*(?:돼|되|된|됩)/i;", "prohibit"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
