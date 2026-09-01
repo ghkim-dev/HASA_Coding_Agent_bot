@@ -142,7 +142,12 @@ export function relationOf(text: string, isFirst: boolean): TurnRelation {
     // correction, and it was not read as one. Anchored to the start and
     // followed by a break, so "아니면 이렇게 해줘" — which is an alternative,
     // not a correction — is untouched.
-    /^\s*아니[,\s]/u.test(text)
+    /^\s*아니[,\s]/u.test(text) ||
+    // The English `아니,`. Anchored and followed by a break for the same reason:
+    // "no longer needed" and "no web access" open with the word without
+    // correcting anything.
+    /^\s*no[,.]/i.test(text) ||
+    /^\s*not\s+(?:that|this|quite)\b/i.test(text)
   ) {
     return "correct";
   }
@@ -153,7 +158,15 @@ export function relationOf(text: string, isFirst: boolean): TurnRelation {
   // against all of them, changed nothing, and was deleted. The forms it would
   // add (`아닌데`, `아님`) are speculation until a sentence turns up using one.
   if (/이어서|계속(?:해|하)|아까 하던|continue/i.test(text)) return "continue";
-  if (/\?|무엇|뭐(?:야|예요|니)|어떻게|왜|알려줄래|which\b|what\b|how\b/i.test(text)) return "question";
+  // `\bhow\b`, not `how\b`. Without the opening boundary the pattern matched the
+  // tail of **show**, so every English sentence containing it was filed as a
+  // question — and `question` carries what is standing without adding anything,
+  // so "just show me the design" contributed no requirement at all. `what\b`
+  // did the same to `somewhat`; `which\b` was saved only by `sandwich` ending
+  // in `wich`.
+  if (/\?|무엇|뭐(?:야|예요|니)|어떻게|왜|알려줄래|\bwhich\b|\bwhat\b|\bhow\b/i.test(text)) {
+    return "question";
+  }
   if (/추가로|그리고|또한|한 가지 더|also\b|and also/i.test(text)) return "refine";
 
   // A follow-up starts a new task only when it says so.
@@ -177,7 +190,14 @@ export function relationOf(text: string, isFirst: boolean): TurnRelation {
   // corpora that a reader called a genuine new task announces itself: "이제
   // 완전히 다른 걸 하자". Nothing here reads a topic change out of the subject
   // matter — that would be the runtime deciding the user had finished.
-  if (/이제\s*(?:완전히\s*)?다른|다른\s*걸|새로운?\s*(?:작업|일|주제)|그건\s*됐고|잊(?:어|고)|forget (?:that|it)|new task|different task|instead,? let'?s/i.test(text)) {
+  if (
+    /이제\s*(?:완전히\s*)?다른|다른\s*걸|새로운?\s*(?:작업|일|주제)|그건\s*됐고|잊(?:어|고)/u.test(text) ||
+    // The English half. `something completely different` is how a person
+    // actually says it; `different task` alone matched nothing anybody writes.
+    /forget\s+(?:that|it)|new\s+task|different\s+task|something\s+(?:completely\s+|entirely\s+)?(?:different|else)|move\s+on\s+to|instead,?\s+let'?s/i.test(
+      text,
+    )
+  ) {
     return "new_task";
   }
   return "refine";

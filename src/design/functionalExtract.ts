@@ -854,7 +854,7 @@ const ENGLISH_VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // `convert` and `transform` are `modify` on the argument the Korean `변환`
   // settled: the sentence's object is the source, not the result. `set` and
   // `configure` change how something already behaves.
-  { pattern: /\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\s+up|tidy|convert|transform|configure|set)\b/i, action: "modify" },
+  { pattern: /\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\s+up|tidy|convert|transform|configure|translate|localis|localiz|set)\b/i, action: "modify" },
   // `export`, `save` and `store` are `create` because a file that did not exist
   // now does — the same test `add` and `implement` pass.
   { pattern: /\b(?:implement|create|add|write|generate|introduce|set\s+up|scaffold|export|save|store|support|attach|extract)\b/i, action: "create" },
@@ -1157,8 +1157,18 @@ function englishCandidates(input: { turnId: string; text: string }): FunctionalC
   return out;
 }
 
-/** Where an English clause ends. Conjunctions and sentence punctuation. */
-const ENGLISH_BOUNDARIES = /(?<=[.!?])(?=\s|$)|(?<=,\s)|\s+(?=and\s+then\s+)|(?<=\sand\s)|(?<=\sthen\s)/i;
+/**
+ * Where an English clause ends. Conjunctions and sentence punctuation.
+ *
+ * The dash and the semicolon are here for the shape Korean handles with `-말고`:
+ * a prohibition and the request that replaces it, in one sentence. "do not
+ * generate it yet — compare the models first" left the comparison unread,
+ * because the negation suppressed the first verb and the second was then too
+ * far into the sentence to be an imperative. Splitting there makes the request
+ * a clause of its own, which is what it is.
+ */
+const ENGLISH_BOUNDARIES =
+  /(?<=[.!?])(?=\s|$)|(?<=,\s)|\s*[—–;]\s*|\s+(?=and\s+then\s+)|(?<=\sand\s)|(?<=\sthen\s)/i;
 
 /**
  * `-ㄹ 수 있게 해줘` and `-게 해줘`, rewritten as the plain imperative.
@@ -1220,6 +1230,26 @@ export function negatedActs(input: { turnId: string; text: string }): ActionKind
       break; // The same one-verb-per-clause rule the reader uses.
     }
   }
+
+  // The English side, and it is not an else-branch.
+  //
+  // `functionalCandidates` runs the English pass only when the Korean one found
+  // nothing, because a sentence that produced Korean candidates is Korean. This
+  // is the opposite situation: a withdrawal is a fact about the sentence, and a
+  // request written in English inside a Korean conversation still withdraws what
+  // it says it withdraws. Reading both costs nothing — a clause cannot carry a
+  // negated verb in two languages at once.
+  for (const clause of englishClauses(input.text)) {
+    const body = clause.replace(ENGLISH_LEAD, "");
+    if (body.trim().length === 0) continue;
+    for (const { pattern, action } of ENGLISH_VERBS) {
+      const match = pattern.exec(body);
+      if (match === null) continue;
+      if (ENGLISH_NEGATED.test(body.slice(0, match.index))) out.add(action);
+      break;
+    }
+  }
+
   return [...out];
 }
 

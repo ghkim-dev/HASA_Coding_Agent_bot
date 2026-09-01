@@ -808,6 +808,25 @@ const MUTATIONS = [
   ["M210", "영어 부정절을 다시 놓침", "src/agent/turnContract.ts",
     "  /(?:지\\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\\s*[.!?。]*\\s*$|(?:면|서는)\\s*안\\s*(?:돼|되|된|됩)|\\b(?:without|avoid|instead\\s+of|do\\s+not|don'?t|never)\\b/i;",
     "  /(?:지\\s*(?:마|말|않)[가-힣]*|말고|말구|대신(?:에)?|없이|금지|빼고|제외하고)\\s*[.!?。]*\\s*$|(?:면|서는)\\s*안\\s*(?:돼|되|된|됩)/i;", "prohibit"],
+  // ---- C4.19: the same conversations, in English ----------------------------
+  ["M211", "`how` 가 `show` 의 꼬리에 걸려 모든 영어 문장이 질문이 됨", "src/design/preview.ts",
+    "  if (/\\?|무엇|뭐(?:야|예요|니)|어떻게|왜|알려줄래|\\bwhich\\b|\\bwhat\\b|\\bhow\\b/i.test(text)) {",
+    "  if (/\\?|무엇|뭐(?:야|예요|니)|어떻게|왜|알려줄래|which\\b|what\\b|how\\b/i.test(text)) {", "conversation"],
+  ["M212", "`No,` 로 여는 영어 정정을 놓침", "src/design/preview.ts",
+    "    /^\\s*no[,.]/i.test(text) ||",
+    "    false ||", "conversation"],
+  ["M213", "영어 새 작업 표지를 놓침 — 주제를 바꿔도 이어붙임", "src/design/preview.ts",
+    "    /forget\\s+(?:that|it)|new\\s+task|different\\s+task|something\\s+(?:completely\\s+|entirely\\s+)?(?:different|else)|move\\s+on\\s+to|instead,?\\s+let'?s/i.test(",
+    "    /never-matches-anything/i.test(", "conversation"],
+  ["M214", "영어에서 철회된 행위를 보고하지 않음", "src/design/functionalExtract.ts",
+    "      if (ENGLISH_NEGATED.test(body.slice(0, match.index))) out.add(action);",
+    "      void action;", "conversation"],
+  ["M215", "대시로 이어진 절을 나누지 않음 — 금지 뒤의 요청을 잃음", "src/design/functionalExtract.ts",
+    "  /(?<=[.!?])(?=\\s|$)|(?<=,\\s)|\\s*[—–;]\\s*|\\s+(?=and\\s+then\\s+)|(?<=\\sand\\s)|(?<=\\sthen\\s)/i;",
+    "  /(?<=[.!?])(?=\\s|$)|(?<=,\\s)|\\s+(?=and\\s+then\\s+)|(?<=\\sand\\s)|(?<=\\sthen\\s)/i;", "conversation"],
+  ["M216", "`translate` 를 다시 놓침", "src/design/functionalExtract.ts",
+    "  { pattern: /\\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\\s+up|tidy|convert|transform|configure|translate|localis|localiz|set)\\b/i, action: \"modify\" },",
+    "  { pattern: /\\b(?:refactor|rewrite|rename|fix|repair|correct|update|modify|edit|change|adjust|improve|clean\\s+up|tidy|convert|transform|configure|set)\\b/i, action: \"modify\" },", "conversation"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
