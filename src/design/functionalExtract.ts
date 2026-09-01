@@ -267,7 +267,7 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|아니|아니라|것이|말이)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|뭔가|무언가|누군가|언젠가|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|걸|거|바|줄|뿐|때문|따름|아니|아니라|것이|말이)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -352,6 +352,15 @@ function conditionalVerbToken(token: string): boolean {
  * standalone connective is a different rule with a different failure mode.
  */
 const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
+
+/**
+ * Nouns that cannot stand alone, so nothing in front of them can be a target.
+ *
+ * `등` is deliberately absent. It means "and so on" and attaches *after* a real
+ * noun — "파일 등을 만들어줘" is about the files — so treating it like the others
+ * would delete the thing the sentence is about.
+ */
+const BOUND_NOUN = /^(?:것|걸|거|게|건|바|줄|뿐|때문|따름|수|데)$/u;
 
 /** A number word standing in front of its counter: `한 장`, `두 개`, `5초`. */
 const NUMERAL = /^(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇|여러|\d+)$/u;
@@ -569,6 +578,23 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
   // because `안에서만` is a bare particle with no noun in it.
   const trailing = runEndsAt === -1 ? undefined : tokens[runEndsAt + 1];
   if (!runMarked && trailing?.grammar === true && trailing.carriesNoun) run.length = 0;
+
+  // What modifies a bound noun belongs to it, not to the verb.
+  //
+  // "뭔가 좋은 걸 만들어줘" produced `좋은 걸을 추가한다` — a doubled particle on
+  // a bound noun, describing nothing — and the design then reported itself ready
+  // to run. `걸` is 것+을 and is grammar, which leaves `좋은` standing alone: an
+  // adjective with the thing it described taken out from under it.
+  //
+  // Decided on the bound noun rather than on the shape of the modifier. The
+  // morphology does not separate them: `좋은` ends in the adnominal `은`, and so
+  // do `파일` and `설정` in their own way, while `빠른` hides its `ㄴ` inside
+  // `른`. What is unambiguous is the head — a bound noun cannot stand alone and
+  // cannot be a target, so nothing in front of it is one either.
+  //
+  // This module's header says "적당히 잘 좀 해줘" must yield nothing. "뭔가 좋은
+  // 걸 만들어줘" is the same sentence with a verb it happens to know.
+  if (trailing?.grammar === true && BOUND_NOUN.test(trailing.text)) run.length = 0;
 
   // Two of that run, unless the run is a list.
   //

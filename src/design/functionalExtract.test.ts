@@ -343,6 +343,41 @@ describe("무엇이 대상이고 무엇이 대상이 아닌가", () => {
   });
 });
 
+describe("의존명사와 부정칭은 대상이 아니다", () => {
+  test("`걸`, `것`, `거` 는 목적어가 되지 않는다", () => {
+    // "뭔가 좋은 걸 만들어줘" produced `좋은 걸을 추가한다` — a doubled particle
+    // on a bound noun, describing nothing, and the design then reported itself
+    // ready to run. This file's own header says "적당히 잘 좀 해줘" must yield
+    // nothing; that sentence is the same one with a verb it happens to know.
+    assert.deepEqual(texts("뭔가 좋은 걸 만들어줘."), []);
+    assert.deepEqual(texts("좋은 것 좀 추가해줘."), []);
+  });
+
+  test("부정칭 대명사는 대상이 아니다", () => {
+    // Separate from the bound-noun rule and checked on its own, because the two
+    // overlap on "뭔가 좋은 걸 만들어줘" and either alone would look sufficient.
+    // `뭔가` names nothing; a requirement to add it is a requirement to add
+    // something unspecified, which is the invention this file exists against.
+    assert.deepEqual(texts("뭔가를 추가해줘."), []);
+    assert.deepEqual(texts("무언가를 만들어줘."), []);
+  });
+
+  test("의존명사가 빠지면 남은 관형어만으로 대상을 만들지 않는다", () => {
+    // The modifier is left standing when its noun turns out to be grammar. One
+    // token, and an adjective at that, is not something a run can be bound to.
+    assert.deepEqual(texts("빠른 걸 만들어줘."), []);
+  });
+
+  test("명사가 살아 있으면 관형어는 그대로 남는다", () => {
+    // `등` is not a bound noun in this sense — it attaches after a real one.
+    assert.deepEqual(texts("파일 등을 추가해줘."), ["파일을 추가한다"]);
+    // The other direction, and the reason the rule is one token wide: these
+    // still have their noun, and the gold set pinned them.
+    assert.deepEqual(texts("실패한 부분을 수정해줘."), ["실패한 부분을 수정한다"]);
+    assert.deepEqual(texts("낡은 설정을 삭제해줘."), ["낡은 설정을 삭제한다"]);
+  });
+});
+
 describe("정정문은 요청이 아니다", () => {
   test("`-라는 게 아니라` 는 앞의 동사를 부정한다", () => {
     // How a person corrects an agent that did the wrong thing — and it produced

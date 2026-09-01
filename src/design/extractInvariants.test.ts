@@ -165,13 +165,34 @@ describe("추출기 불변식", () => {
   test("조사가 겹쳐 남지 않는다", () => {
     // "결과도를 살펴본다" and "코드를를 수정한다" are what a half-stripped particle
     // looks like in front of a user.
+    //
+    // The contracted forms are here because this check missed one. `걸` is 것+을
+    // and `날` is 나+를, so "좋은 걸을 추가한다" carries the particle twice while
+    // matching none of the pairs above — the whole point of a doubled particle
+    // is that the reader sees it, and this did not.
     const doubled: string[] = [];
     for (const { turn, candidate } of candidates) {
-      if (/(?:을을|를를|도를|도을|은을|는를|의를|만을)/u.test(candidate.text)) {
+      if (/(?:을을|를를|도를|도을|은을|는를|의를|만을|걸을|건을|게를|날)/u.test(candidate.text)) {
         doubled.push(`${turn.id}: ${candidate.text}`);
       }
     }
     assert.deepEqual(doubled, []);
+  });
+
+  test("의존명사를 대상으로 삼지 않는다", () => {
+    // `것`, `걸`, `수`, `바` cannot stand alone, so a target that is one — or
+    // that is only the words in front of one — describes nothing. Checked over
+    // the corpora rather than case by case because the shape is easy to produce
+    // and hard to notice: "좋은 걸을 추가한다" reads like a requirement.
+    const bound: string[] = [];
+    for (const { turn, candidate } of candidates) {
+      for (const word of candidate.object.split(/\s+/)) {
+        if (/^(?:것|걸|거|게|건|바|줄|뿐|수|데)$/u.test(word)) {
+          bound.push(`${turn.id}: "${word}" — ${candidate.text}`);
+        }
+      }
+    }
+    assert.deepEqual(bound, []);
   });
 
   test("목적어는 한 글자로 끝나지 않는다", () => {
