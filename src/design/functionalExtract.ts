@@ -267,7 +267,7 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|아니|아니라|것이|말이)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -318,7 +318,7 @@ const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되�
  * them as part of the target, and none of their stems is one of these verbs.
  * The rule reaches exactly as far as the list of acts and no further.
  */
-const VERB_FORM = /(?:(?:어|아|여)?주는|하는|되는|시키는|받는)$/u;
+const VERB_FORM = /(?:(?:어|아|여)?주는|하는|되는|시키는|받는|(?:라|다|자|냐)는)$/u;
 const VERB_ADNOMINAL = new RegExp(
   // `생성하는`, `생성되는`, `학습시키는` — the light verb is present and settles it.
   `^(?:${STEMS.join("|")})(?:(?:하|되|시키)[는던]` +
@@ -983,6 +983,43 @@ function plainImperative(clause: string): string {
   return clause
     .replace(/([가-힣]{2,})할\s*수\s*있(?:게|도록)\s*(?:해|하)(?:줘|주세요|주라|주)?/gu, "$1해줘")
     .replace(/([가-힣]{2,})하(?:게|도록)\s*(?:해|하)(?:줘|주세요|주라|주)?/gu, "$1해줘");
+}
+
+/**
+ * The acts this turn takes back.
+ *
+ * `functionalCandidates` already finds the verb and then refuses to make a
+ * requirement out of it when `NEGATED` matches — which is right, and until now
+ * that was the end of it. The information was thrown away, and a correction
+ * could only retire a standing requirement through `statedProhibitions`, which
+ * covers running and editing and nothing else. So "아니, 생성하라는 게 아니라
+ * 먼저 비교해줘" added the comparison and left the generation standing beside
+ * it: two requirements, one of which the user had just withdrawn, and no sign
+ * in the panel that they disagreed.
+ *
+ * Reported rather than acted on here. What a withdrawal *does* is a question
+ * about the conversation, and `mergeRequirements` is where the conversation
+ * lives — this only says which acts the sentence pushed away.
+ *
+ * Only the negated ones. A turn that says "생성하지 말고 비교해줘" withdraws
+ * generation; a turn that merely does not mention it withdraws nothing, which
+ * is the difference between a correction and a change of subject.
+ */
+export function negatedActs(input: { turnId: string; text: string }): ActionKind[] {
+  const out = new Set<ActionKind>();
+  for (const source of input.text.split(BOUNDARIES)) {
+    if (source.trim().length === 0) continue;
+    const clause = plainImperative(source);
+    for (const { pattern, action } of VERBS) {
+      const match = pattern.exec(clause);
+      if (match === null) continue;
+      if (NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8))) {
+        out.add(action);
+      }
+      break; // The same one-verb-per-clause rule the reader uses.
+    }
+  }
+  return [...out];
 }
 
 export function functionalCandidates(input: { turnId: string; text: string }): FunctionalCandidate[] {

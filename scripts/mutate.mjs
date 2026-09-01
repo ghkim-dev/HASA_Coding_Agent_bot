@@ -117,6 +117,14 @@ const FILES = [
 const SUITES = {
   demos: ["src/design/demos.test.ts"],
   preview: ["src/design/preview.test.ts"],
+  // What is still standing when the conversation stops. A different failure
+  // surface from extraction: every turn can be read perfectly while a
+  // requirement quietly falls out between two of them.
+  conversation: [
+    "src/design/mediaConversations.test.ts",
+    "src/design/preview.test.ts",
+    "src/design/holdoutCases.test.ts",
+  ],
   parse: ["src/design/proposalParse.test.ts", "src/design/preview.test.ts"],
   permission: ["src/design/modelPermission.test.ts"],
   extract: [
@@ -743,6 +751,22 @@ const MUTATIONS = [
   ["M195", "맨 수식어를 대상으로 삼음", "src/design/functionalExtract.ts",
     "  if (!runMarked && trailing?.grammar === true && trailing.carriesNoun) run.length = 0;",
     "  if (false) run.length = 0;", "recall"],
+  // ---- C4.16: what survives the conversation --------------------------------
+  ["M196", "표지 없는 후속 턴을 다시 새 작업으로 (앞 요구사항 전부 폐기)", "src/design/preview.ts",
+    "  return \"refine\";\r",
+    "  return \"new_task\";", "conversation"],
+  ["M197", "새 작업 표지를 무시 — 주제를 바꿔도 이어붙임", "src/design/preview.ts",
+    "  if (/이제\\s*(?:완전히\\s*)?다른|다른\\s*걸|새로운?\\s*(?:작업|일|주제)|그건\\s*됐고|잊(?:어|고)|forget (?:that|it)|new task|different task|instead,? let'?s/i.test(text)) {\r",
+    "  if (false) {", "conversation"],
+  ["M198", "`아니,` 로 시작하는 정정을 놓침", "src/design/preview.ts",
+    "    /^\\s*아니[,\\s]/u.test(text)\r",
+    "    false", "conversation"],
+  ["M200", "철회된 행위가 서 있는 요구사항을 물러나게 하지 못함", "src/design/requirementSpec.ts",
+    "      (spec.act !== undefined && withdrawn.has(spec.act));",
+    "      false;", "conversation"],
+  ["M201", "부정된 동사를 철회로 보고하지 않음", "src/design/functionalExtract.ts",
+    "        out.add(action);",
+    "        void action;", "conversation"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

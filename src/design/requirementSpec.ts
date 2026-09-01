@@ -491,15 +491,30 @@ export function mergeRequirements(input: {
   incoming: readonly RequirementSpec[];
   relation: TurnRelation;
   turnId: string;
+  /**
+   * Acts this turn took back, from `negatedActs`.
+   *
+   * Read only on a correction. `subjectOf` below knows two classes — running
+   * and editing — because those are the two `statedProhibitions` covers, and a
+   * correction that withdrew anything else could not retire it: "생성하라는 게
+   * 아니라 먼저 비교해줘" left the generation standing next to the comparison.
+   * A withdrawal named in the user's own words settles that without widening
+   * the prohibition classes, which exist to gate tools rather than to describe
+   * conversations.
+   */
+  withdrawn?: readonly ActionKind[];
 }): RequirementSpec[] {
   const { standing, incoming, relation, turnId } = input;
+  const withdrawn = new Set(input.withdrawn ?? []);
 
   if (relation === "new_task") return [...incoming];
   if (relation === "question" || relation === "continue") return carry(standing);
   if (relation === "refine") return [...carry(standing), ...incoming];
 
   const superseded = standing.map((spec) => {
-    const contradicted = incoming.some((next) => contradicts(spec, next) || sameSubject(spec, next));
+    const contradicted =
+      incoming.some((next) => contradicts(spec, next) || sameSubject(spec, next)) ||
+      (spec.act !== undefined && withdrawn.has(spec.act));
     return contradicted ? { ...spec, supersededBy: turnId } : spec;
   });
   return [...carry(superseded), ...incoming];

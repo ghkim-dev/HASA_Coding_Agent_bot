@@ -121,8 +121,29 @@ describe("요구사항 정확성 — 분모를 함께", () => {
     assert.deepEqual(score.spanGrounding, { hit: 61, of: 61, value: 1 });
   });
 
-  test("relation 48/48", () => {
-    assert.deepEqual(score.relationAccuracy, { hit: 48, of: 48, value: 1 });
+  test("relation 47/48", () => {
+    // Was 48/48, and the one it now misses is recorded rather than fixed by
+    // editing the answer.
+    //
+    // `past-failure-retry` turn 2 — "실행했는데 실패했어. 다시 실행해줘." after
+    // "테스트를 실행해줘." — is annotated `new_task`. `relationOf` now reads an
+    // unmarked follow-up as `refine`, because the fallback it replaced was
+    // `new_task` and `new_task` discards everything standing. Measured against
+    // the scenario corpus the old fallback was wrong four times in thirty-one
+    // and every error ran the destructive way: "좋은 오픈소스 모델하고 HASA
+    // 모델도 추가해줘" reset the conversation it was adding to, in the scenario
+    // whose title is "Refine adds without losing".
+    //
+    // Whether this turn is a new task is genuinely arguable — nothing in it
+    // starts a new subject, and a reader could as easily have called it
+    // `continue`. What is not arguable is that the answer stays as the person
+    // who wrote it wrote it; a gold edited to agree with the code measures the
+    // code's memory of itself.
+    //
+    // Nothing is lost by the disagreement here: both turns ask for the same
+    // work, so the conversation stands at ["테스트를 실행한다", "요청한 명령을
+    // 실행한다"] either way.
+    assert.deepEqual(score.relationAccuracy, { hit: 47, of: 48, value: 0.979 });
   });
 
   test("대상이 없는 요청은 대상을 만들어내지 않는다", () => {

@@ -10,6 +10,7 @@ import {
   type RequirementProposal,
   type RequirementSpec,
 } from "./requirementSpec.ts";
+import { negatedActs } from "./functionalExtract.ts";
 import { designScenarios, type ScenarioBlueprint } from "./scenarioBlueprint.ts";
 import { auditCoverage, type AuditResult } from "./coverageAudit.ts";
 import { closeCoverage, type ClosureResult } from "./coverageClosure.ts";
@@ -135,11 +136,51 @@ export interface PreviewResult {
  */
 export function relationOf(text: string, isFirst: boolean): TurnRelation {
   if (isFirst) return "new_task";
-  if (/정정|아니(?:야|요|라)|틀렸|취소할게|그게 아니라|correction|actually,? no/i.test(text)) return "correct";
+  if (
+    /정정|아니(?:야|요|라)|틀렸|취소할게|그게 아니라|correction|actually,? no/i.test(text) ||
+    // "아니, 그게 아니라 …" — the commonest way a Korean speaker opens a
+    // correction, and it was not read as one. Anchored to the start and
+    // followed by a break, so "아니면 이렇게 해줘" — which is an alternative,
+    // not a correction — is untouched.
+    /^\s*아니[,\s]/u.test(text)
+  ) {
+    return "correct";
+  }
+  // "실행하라는 게 아니라 보여달라는 말이야" needs no rule of its own, which is
+  // worth writing down because it looks like it should. `아니(?:야|요|라)` above
+  // already matches the `아니라` that ends the construction, in every phrasing
+  // any of the three corpora contain — a pattern for it was written, measured
+  // against all of them, changed nothing, and was deleted. The forms it would
+  // add (`아닌데`, `아님`) are speculation until a sentence turns up using one.
   if (/이어서|계속(?:해|하)|아까 하던|continue/i.test(text)) return "continue";
   if (/\?|무엇|뭐(?:야|예요|니)|어떻게|왜|알려줄래|which\b|what\b|how\b/i.test(text)) return "question";
   if (/추가로|그리고|또한|한 가지 더|also\b|and also/i.test(text)) return "refine";
-  return "new_task";
+
+  // A follow-up starts a new task only when it says so.
+  //
+  // This used to be the fallback, and the fallback is where the damage was:
+  // `new_task` discards everything standing, so any second sentence without a
+  // connective silently threw away every requirement the user had already
+  // given. Measured against the scenario corpus it was wrong four times out of
+  // thirty-one, and all four errors ran that way — "좋은 오픈소스 모델하고 HASA
+  // 모델도 추가해줘" and "https://…에 있는 모델도 후보에 넣어줘" both reset the
+  // conversation they were adding to. The scenario that pins the first is
+  // called "Refine adds without losing", which is what it was written for.
+  //
+  // The two directions are not symmetric. Carrying a requirement the user has
+  // moved on from shows them something stale, which they can see and say so
+  // about. Dropping one shows them nothing, and the requirement they stated is
+  // simply gone — from the panel, from the plan, and from anything that would
+  // have checked the work against it.
+  //
+  // So the marked case is the one that resets. Every follow-up in all three
+  // corpora that a reader called a genuine new task announces itself: "이제
+  // 완전히 다른 걸 하자". Nothing here reads a topic change out of the subject
+  // matter — that would be the runtime deciding the user had finished.
+  if (/이제\s*(?:완전히\s*)?다른|다른\s*걸|새로운?\s*(?:작업|일|주제)|그건\s*됐고|잊(?:어|고)|forget (?:that|it)|new task|different task|instead,? let'?s/i.test(text)) {
+    return "new_task";
+  }
+  return "refine";
 }
 
 /** Asks a model for candidates. Injected so offline and tests supply their own. */
@@ -220,6 +261,9 @@ export async function previewDesign(input: {
       incoming,
       relation: turn.relation,
       turnId: turn.turnId,
+      // What this turn took back, in the user's own words. Read every turn and
+      // used only on a correction, so the reading and the policy stay apart.
+      withdrawn: negatedActs({ turnId: turn.turnId, text: turn.text }),
     });
   }
 
