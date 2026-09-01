@@ -75,7 +75,7 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 
 | 무엇을 | 얼마나 | 어디서 |
 |---|---|---|
-| 사용자가 말한 낱말이 살아남는 비율 | **35/47** | `evalScenarioRecall.test.ts` |
+| 사용자가 말한 낱말이 살아남는 비율 | **37/47** | `evalScenarioRecall.test.ts` |
 | 미디어 요청을 읽는 비율 (한국어) | **23/24** · 행위 25/26 · 대상 25/26 | `mediaCases.test.ts` |
 | 미디어 요청을 읽는 비율 (영어) | **20/20** · 행위 23/23 · 대상 23/23 | `mediaCasesEnglish.test.ts` |
 | 모델 추천 정확도 | **14/14** | `recommendationCases.test.ts` |
@@ -88,13 +88,13 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 | 불변식 — 지어내지 않음, 근거 일치, 금지 일관성 | 117턴 / 후보 124개 | `extractInvariants.test.ts` |
 | 생성된 문장에 대한 같은 불변식 | 매 실행 수천 건 | `*.fuzz.test.ts` |
 | 패널이 사용자에게 말하는 것 | 10개 검사 | `designerPayload.test.ts` |
-| 방어선이 실제로 지탱하는지 | 변이 **211개**, 예상 밖 무반응 0 | `pnpm design:mutate` |
-| 치환 문자열이 코드와 어긋나지 않았는지 | 211/211 | `pnpm design:anchors` |
+| 방어선이 실제로 지탱하는지 | 변이 **214개**, 예상 밖 무반응 0 | `pnpm design:mutate` |
+| 치환 문자열이 코드와 어긋나지 않았는지 | 214/214 | `pnpm design:anchors` |
 | 정규식이 자기 이스케이프를 먹지 않았는지 | 소스 전체 | `sourceHygiene.test.ts` |
 
 아직 재지 않은 것은 재지 않았다고 말한다 — `goldRequirements.ts`의 `UNMEASURED`가 그 목록이고, 0으로 채우지 않는다.
 일부러 읽지 않기로 한 것도 테스트로 고정해 둔다: `쓰다`(쓰기와 사용하기를 가릴 수 없음),
-`고르다`(어떤 행위인지 정할 수 없음), 이름으로만 부른 출처(URL이 아닌 `Hugging Face`).
+`고르다`(어떤 행위인지 정할 수 없음).
 
 ## 현재 상태
 

@@ -43,7 +43,7 @@ import {
   type TurnContract,
 } from "./turnContract.ts";
 import { createBlockedTool, type BlockedReport } from "./tools/blockedTool.ts";
-import { exactSourcesIn, type SourceRequirement } from "./sourceProvenance.ts";
+import { exactSourcesIn, namedSourcesIn, type SourceRequirement } from "./sourceProvenance.ts";
 import { SourceLedger } from "./sourceFacts.ts";
 import { createSourceFactTool } from "./tools/sourceFactTool.ts";
 import { ToolRegistry } from "./tools/registry.ts";
@@ -644,7 +644,24 @@ export class AgentSession {
     // sentence. Recomputed if the worker records a contract mid-turn.
     this.researchDecision = decideResearch(this.contract, { userText: prompt });
 
-    for (const source of exactSourcesIn(prompt)) {
+    // Linked and named, on the same terms.
+    //
+    // `namedSources` feeds the claim gate, and the gate keys on `hostname` — it
+    // asks whether a sentence claiming something about a service is supported by
+    // something actually read from that service. A name is exactly as good as a
+    // link for that question, and `sourceProvenance.ts` opens with the failure
+    // it answers: "Hugging Face와 open.hasa.re.kr에서 …", one link and one name,
+    // and only the link was ever held.
+    //
+    // Deliberately *not* wired into `taskReducer`'s source list, which is the
+    // other consumer. That list decides when a task may be called done, and an
+    // unread source blocks it — so a named source there would mean a request
+    // that mentions Hugging Face can never finish until Hugging Face is
+    // fetched. The claim gate only fires on a sentence that makes a claim, so
+    // its false positive costs a repair prompt; the completion gate's costs the
+    // whole run. That half needs measuring before it is wired, and this comment
+    // is the record that it is not.
+    for (const source of [...exactSourcesIn(prompt), ...namedSourcesIn(prompt)]) {
       if (!this.namedSources.some((s) => s.url === source.url)) this.namedSources.push(source);
     }
 

@@ -1,5 +1,5 @@
 import { prohibitionsIn, type ProhibitedClass } from "../agent/statedProhibitions.ts";
-import { exactSourcesIn } from "../agent/sourceProvenance.ts";
+import { exactSourcesIn, namedSourcesIn } from "../agent/sourceProvenance.ts";
 import type { TurnRelation } from "../agent/turnContract.ts";
 import { checkSpan, sentenceAround, type SourceSpan, type SpanProblem } from "./sourceSpan.ts";
 import { checkAlignment, conditionIn, priorityFrom, scopeIn, type Alignment } from "./semanticAlignment.ts";
@@ -309,13 +309,24 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
     });
   }
 
-  for (const source of exactSourcesIn(input.text)) {
+  // Linked and named sources, on the same terms.
+  //
+  // The named half was missing, and `sourceProvenance.ts` opens with the failure
+  // that makes it matter: a question about one service answered from another. In
+  // that sentence — "Hugging Face와 open.hasa.re.kr에서 …" — one source was a
+  // link and one was a name, and only the link was ever held. `namedSourcesIn`
+  // requires the sentence to point at the name, so a passing mention still
+  // raises nothing.
+  for (const source of [...exactSourcesIn(input.text), ...namedSourcesIn(input.text)]) {
+    // The name if they used one, so the requirement quotes them rather than
+    // resolving their words to a hostname they did not type.
+    const shown = source.name ?? source.hostname;
     const span =
-      sentenceSpan(input.text, new RegExp(escapeRegExp(source.hostname), "i"), input.turnId) ??
+      sentenceSpan(input.text, new RegExp(escapeRegExp(source.name ?? source.hostname), "i"), input.turnId) ??
       ({ turnId: input.turnId, start: 0, end: input.text.length } as SourceSpan);
     out.push({
       id: `${input.turnId}-source-${source.hostname}`,
-      text: `${source.hostname} 을(를) 실제로 읽고, 거기서 확인한 것만 그 출처로 보고한다`,
+      text: `${shown} 을(를) 실제로 읽고, 거기서 확인한 것만 그 출처로 보고한다`,
       sourceText: input.text.slice(span.start, span.end).trim(),
       span,
       sourceTurnId: input.turnId,

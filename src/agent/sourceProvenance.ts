@@ -258,9 +258,91 @@ export function describeLevel(level: AvailabilityLevel): string {
  * a search engine thinks about the subject.
  */
 export interface SourceRequirement {
-  kind: "exact_url";
+  /**
+   * How the user gave it.
+   *
+   * `exact_url` is a link they typed. `named_source` is a service they called by
+   * name — "Hugging Face" — which this file's opening example is *about*: the
+   * failure it was written for is a question about one service answered from
+   * another, and in that sentence one of the two was a name and only the link
+   * was ever held.
+   *
+   * Kept apart rather than flattened, because a name is a weaker thing to hold
+   * somebody to than a link. Everything downstream keys on `hostname` and does
+   * not care; what cares is a reader deciding whether the runtime is entitled to
+   * insist.
+   */
+  kind: "exact_url" | "named_source";
+  /** For a named source, the service's own origin rather than a page. */
   url: string;
   hostname: string;
+  /** The words the user used, when they used a name. */
+  name?: string;
+}
+
+/**
+ * Services common enough to name without a link, and their one hostname.
+ *
+ * Short and closed on purpose. Every entry is a place people fetch models or
+ * code from, spelled the several ways they spell it, and resolving to a host
+ * nobody could argue about. A service whose name is ambiguous — or whose host
+ * depends on a deployment — does not belong here, because the whole value is
+ * that `Hugging Face` and `huggingface.co` are the same source and the runtime
+ * can say so.
+ */
+const NAMED_SOURCES: ReadonlyArray<{ pattern: RegExp; hostname: string; name: string }> = [
+  { pattern: /허깅\s*페이스|hugging\s*face|huggingface/iu, hostname: "huggingface.co", name: "Hugging Face" },
+  { pattern: /\bkaggle\b|캐글/iu, hostname: "kaggle.com", name: "Kaggle" },
+  { pattern: /\bgithub\b|깃허브/iu, hostname: "github.com", name: "GitHub" },
+  { pattern: /\bpypi\b/iu, hostname: "pypi.org", name: "PyPI" },
+  { pattern: /\bmodel\s*scope|모델\s*스코프/iu, hostname: "modelscope.cn", name: "ModelScope" },
+];
+
+/**
+ * Services the user named without linking them.
+ *
+ * ## Why this is not `exactSourcesIn` with a lookup table
+ *
+ * A link is unambiguous: writing one is asking for that page. A name is not —
+ * "이건 Hugging Face 방식이랑 비슷해" mentions a service and asks for nothing. So
+ * two things have to be true, and they are true of different parts of the
+ * sentence:
+ *
+ *   · the name carries a marker that makes it a place — `-에서`, `-의`, `-도`, a
+ *     list comma, or an English `on`/`from` in front of it, and
+ *   · the sentence asks to *look at something*.
+ *
+ * Either alone is not enough, and requiring both is what let the markers widen.
+ * "Hugging Face도 좋아" has a marker and asks for nothing; "Hugging Face와
+ * 비슷해" has one of the markers this used to accept on its own. Meanwhile
+ * "웹과 Hugging Face, HASA도 참고하고" is plainly asking to consult it and was
+ * refused for a comma.
+ *
+ * The direction of the error decides the shape. A name missed is a source
+ * requirement the runtime does not raise — the state this replaced, where the
+ * URL half of "Hugging Face와 https://…에서 찾아줘" was held and the named half
+ * was not. A name over-read holds the agent to fetching a page for a sentence
+ * that was only reminiscing, which is worse.
+ */
+const SOURCE_MARKER = /^\s*(?:에서|에게|에|의|와|과|랑|도|은|는|을|를|,)/u;
+const SOURCE_MARKER_BEFORE = /\b(?:on|from|in|at)\s+$/i;
+
+/** A sentence that asks to go and look. Never a bare noun — see `RESEARCH_DEMAND`. */
+const LOOKUP_VERB =
+  /찾|검색|조사|확인|참고|검토|살펴|읽|가져오|받아|둘러보|\b(?:find|search|look|check|read|browse|fetch|download|consult|see)\b/iu;
+
+export function namedSourcesIn(text: string): SourceRequirement[] {
+  if (!LOOKUP_VERB.test(text)) return [];
+  const out: SourceRequirement[] = [];
+  for (const { pattern, hostname, name } of NAMED_SOURCES) {
+    const match = pattern.exec(text);
+    if (match === null) continue;
+    const after = text.slice(match.index + match[0].length);
+    const before = text.slice(Math.max(0, match.index - 12), match.index);
+    if (!SOURCE_MARKER.test(after) && !SOURCE_MARKER_BEFORE.test(before)) continue;
+    out.push({ kind: "named_source", url: `https://${hostname}`, hostname, name });
+  }
+  return out;
 }
 
 /**

@@ -106,6 +106,9 @@ const FILES = [
   // of `agentHost.ts` for the same reason, and its asymmetry is the kind a
   // reader gets backwards without anything looking wrong.
   "src/agent/modelRevisit.ts",
+  // C4.22: a service the user named rather than linked. The failure this file
+  // opens with had one of each in the sentence, and only the link was held.
+  "src/agent/sourceProvenance.ts",
   // C4.14: what crosses from the designer to the agent. Every defence here is
   // against the handoff saying something the design did not.
   "src/design/harnessHandoff.ts",
@@ -146,6 +149,7 @@ const SUITES = {
   ],
   adoptconv: ["src/agent/conversationAdoption.test.ts"],
   revisit: ["src/agent/modelRevisit.test.ts"],
+  namedsrc: ["src/agent/namedSources.test.ts", "src/design/evalScenarioRecall.test.ts"],
   // The English pass, which had six hand-written cases and no denominator
   // until the three project topics were asked in English.
   english: [
@@ -869,6 +873,16 @@ const MUTATIONS = [
   ["M226", "세션이 없어도 다시 고르지 않음", "src/agent/modelRevisit.ts",
     "  if (sessionChoice === null || modeAtSession === null) return true;",
     "  if (sessionChoice === null || modeAtSession === null) return false;", "revisit"],
+  // ---- C4.22: a source named rather than linked ------------------------------
+  ["M227", "이름으로 부른 출처를 다시 놓침", "src/agent/sourceProvenance.ts",
+    "  if (!LOOKUP_VERB.test(text)) return [];",
+    "  if (true) return [];", "namedsrc"],
+  ["M228", "가리키는 표지 없이도 출처로 읽음 — 지나가는 언급이 요구사항이 됨", "src/agent/sourceProvenance.ts",
+    "    if (!SOURCE_MARKER.test(after) && !SOURCE_MARKER_BEFORE.test(before)) continue;",
+    "    if (false) continue;", "namedsrc"],
+  ["M229", "조회 동사 없이도 출처로 읽음", "src/agent/sourceProvenance.ts",
+    "const LOOKUP_VERB =",
+    "const LOOKUP_VERB = /(?:)/u;", "namedsrc"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
