@@ -705,8 +705,8 @@ const MUTATIONS = [
     "      ? token.replace(/(?:안에서만|에서만|에서|안에)$/u, \"\")",
     "      ? token.replace(/(?:안에서만|에서만|에서|안에|까지|부터)$/u, \"\")", "recall"],
   ["M174", "사용자 동사를 버리고 분류 대표어로 씀", "src/design/functionalExtract.ts",
-    "          : `${shown}${objectParticle(shown)} ${manner === \"\" ? \"\" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`;",
-    "          : `${shown}${objectParticle(shown)} ${manner === \"\" ? \"\" : `${manner} `}${ACTION_TEXT[action]}`;", "recall"],
+    "          ? `${shown}${objectParticle(shown)} ${manner === \"\" ? \"\" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`",
+    "          ? `${shown}${objectParticle(shown)} ${manner === \"\" ? \"\" : `${manner} `}${ACTION_TEXT[action]}`", "recall"],
   ["M175", "`-라는 게 아니라` 정정을 요청으로 읽음", "src/design/functionalExtract.ts",
     "  /(?:지|진)(?:는|도|를|은)?\\s*(?:마|말|않|못|안)|(?:면|서는)\\s*안|(?:라|다|자|란)는?\\s*(?:게|것이|건|말이)\\s*아니/;",
     "  /(?:지|진)(?:는|도|를|은)?\\s*(?:마|말|않|못|안)|(?:면|서는)\\s*안/;", "extract"],
@@ -916,6 +916,16 @@ const MUTATIONS = [
   ["M239", "쉼표가 붙은 부사를 낱말로 보지 않음 — `먼저,` 가 목적어가 됨", "src/design/functionalExtract.ts",
     "    const bare = out.replace(/,$/u, \"\").replace(/[은는만이가]$/u, \"\");",
     "    const bare = out.replace(/[은는만이가]$/u, \"\");", "recall"],
+  // ---- C4.26: a clause that is about a question, not about a thing -------------
+  ["M240", "물음을 다시 못 읽음 — `실제로 호출되는지` 가 통째로 사라짐", "src/design/functionalExtract.ts",
+    "  if (!questionEnding(bare, false)) return \"\";",
+    "  if (true) return \"\";", "recall"],
+  ["M242", "`-ㄴ지` 를 명사로 읽음 — `느린지를 살펴본다`", "src/design/functionalExtract.ts",
+    "        questionEnding(out, carriesObjectMark) ||",
+    "        false ||", "recall"],
+  ["M243", "물음이 열쇠에 들어가지 않음 — 한 턴의 두 물음이 하나로 합쳐짐", "src/design/functionalExtract.ts",
+    "      const key = `${action}:${object}${asked === \"\" ? \"\" : `?${asked}`}`;",
+    "      const key = `${action}:${object}`;", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

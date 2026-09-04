@@ -91,8 +91,8 @@ describe("the designer on project-scale requests", () => {
     assert.equal(score.turnsRead, 24);
   });
 
-  test("keyword fidelity 42/47", () => {
-    // 14 → 22 → 35 → 37 → 40 → 41 → 42. The 22 was target extraction: an enumeration lost every
+  test("keyword fidelity 43/47", () => {
+    // 14 → 22 → 35 → 37 → 40 → 41 → 42 → 43. The 22 was target extraction: an enumeration lost every
     // member but the last ("CNN과 ViT로 분류기를 만들고" → "ViT로 분류기"), a
     // range lost both ends, and the renderer replaced the user's verb with a
     // representative of its class, so 번역 came back as 수정 and 비교 as 살펴봄.
@@ -110,16 +110,17 @@ describe("the designer on project-scale requests", () => {
     //     writing and "CNN을 쓰고" is using, and the object cannot tell them
     //     apart. A missed request is a gap; a request turned into the wrong act
     //     is an invention.
-    //   · 마무리, 호출 and 오픈소스 are each a verb or a noun the lexicon does
-    //     not carry. "모델 목록" was a fourth until `-어서` became a boundary
-    //     for the halves that name their own target, and 웹 a fifth until a
-    //     comma-cut piece with no verb was folded into the clause it belongs to.
+    //   · 마무리 and 오픈소스 are a verb and a noun the lexicon does not carry.
+    //     "모델 목록" was a third until `-어서` became a boundary for the halves
+    //     that name their own target; 웹 a fourth until a comma-cut piece with
+    //     no verb was folded into the clause it belongs to; 호출 a fifth until a
+    //     clause could say it is about a question rather than about a thing.
     //
     // A source named without a URL and the light verb used to be on this list.
     // `namedSourcesIn` took it from 35 to 37; the light verb from 37 to 40.
     assert.deepEqual(
       { hit: score.keywordHit, of: score.keywordTotal },
-      { hit: 42, of: 47 },
+      { hit: 43, of: 47 },
       "keyword fidelity moved — a rise is a result worth recording, a drop is a regression",
     );
   });

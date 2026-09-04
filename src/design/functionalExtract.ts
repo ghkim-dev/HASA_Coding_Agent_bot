@@ -572,6 +572,7 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
         located !== token ||
         CLAUSE_ENDING.test(out) ||
         CLAUSE_ENDING.test(bare) ||
+        questionEnding(out, carriesObjectMark) ||
         conditionalVerbToken(out) ||
         // A relative clause's verb, tested on `token` rather than `out`: the
         // `[은는만이가]` strip above would turn `생성하는` into `생성하` and
@@ -864,6 +865,55 @@ function mannerBefore(clause: string, verbStart: number): string {
   const last = before.split(/\s+/).at(-1) ?? "";
   if (NOT_AN_OBJECT.test(last)) return "";
   return /(?:(?<=[가-힣]{2,})으?로|(?<=[A-Za-z0-9]{2,})로)$/u.test(last) ? last : "";
+}
+
+/**
+ * A verb or adjective wearing `-ㄴ지`, which is a question and never a noun.
+ *
+ * `CLAUSE_ENDING` spells out `는지`, `은지`, `을지` and `인지`, and Korean writes
+ * the same ending inside the syllable when the stem ends in a vowel: 느린지,
+ * 빠른지, 클지. Those fell through and became targets — "어디가 느린지 알려줘"
+ * produced **느린지를 살펴본다**, a noun that does not exist wearing a particle
+ * the user did not type.
+ *
+ * The syllable before `지` decides it: `-ㄴ지` and `-ㄹ지` are the endings, and a
+ * Hangul syllable carries its final consonant in the code point. That does catch
+ * ordinary nouns — 편지, 먼지, 반지 — so it applies only where the sentence did
+ * *not* mark the token as its object. "편지를 보내줘" keeps its 편지; "편지 보내줘"
+ * loses it, and that is a gap rather than an invention.
+ */
+function questionEnding(token: string, carriesObjectMark: boolean): boolean {
+  if (carriesObjectMark || !token.endsWith("지")) return false;
+  const previous = token.codePointAt(token.length - 2) ?? 0;
+  if (previous < 0xac00 || previous > 0xd7a3) return false;
+  const final = (previous - 0xac00) % 28;
+  return final === 4 || final === 8;
+}
+
+/**
+ * An embedded question standing where the object would be.
+ *
+ * "실제로 호출되는지도 알려줘" asks for one thing and the design said "요청한
+ * 내용을 살펴본다" — every word the user chose gone, including the only one that
+ * says what to look at. `-는지` is not a noun, so the object scan is right to
+ * refuse it as a target; what was missing is that a clause can say what it is
+ * about without naming a thing.
+ *
+ * It stays out of `target`: nothing here resolves to a file or a symbol, and the
+ * binding is left unresolved exactly as it was. This decides only what the
+ * requirement *reads* as, which is the part a person checks.
+ *
+ * A clause that marks an object of its own never reaches here — the caller asks
+ * only when the object scan came back empty — so "프롬프트를 바꾸면 결과가
+ * 어떻게 달라지는지 비교해줘" stays about 결과 without a rule here saying so. It
+ * had one, and mutation testing showed that deleting it changed nothing.
+ */
+function embeddedQuestionBefore(clause: string, verbStart: number): string {
+  const before = clause.slice(0, verbStart).trim();
+  const last = before.split(/\s+/).at(-1) ?? "";
+  const bare = last.replace(/[도만]$/u, "");
+  if (!questionEnding(bare, false)) return "";
+  return before.replace(/[도만]$/u, "");
 }
 
 /**
@@ -1516,13 +1566,21 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
       // Kept out of the target and put back into the sentence — see
       // `mannerBefore`. Only where there is a target to keep it out of.
       const manner = object.length === 0 ? "" : mannerBefore(clause, match.index);
+      // What the clause is about when it is about a question rather than a
+      // thing — see `embeddedQuestionBefore`. It changes what the requirement
+      // reads as and nothing else; the target stays unnamed, because it is.
+      const asked = object.length === 0 ? embeddedQuestionBefore(clause, match.index) : "";
       const text =
-        object.length === 0
-          ? actOnlyText(action, own)
-          : `${shown}${objectParticle(shown)} ${manner === "" ? "" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`;
+        object.length > 0
+          ? `${shown}${objectParticle(shown)} ${manner === "" ? "" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`
+          : asked !== ""
+            ? `${asked} ${phrase ?? ACTION_TEXT[action]}`
+            : actOnlyText(action, own);
       // Keyed on the act and its target, not the rendered sentence, so a
-      // rewording never silently merges two different asks.
-      const key = `${action}:${object}`;
+      // rewording never silently merges two different asks. An embedded
+      // question has no target, so it joins the key — two of them in one turn
+      // are two different asks and the empty target would have merged them.
+      const key = `${action}:${object}${asked === "" ? "" : `?${asked}`}`;
       if (seen.has(key)) continue;
       seen.add(key);
 
