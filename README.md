@@ -68,7 +68,7 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 | Holdout | 33개 사례, sha256 고정 | 구현이 한 번도 맞춰본 적 없다 |
 | 평가기 시나리오 | 20개 대화 / 31턴 | 키워드 정답이 손으로 붙어 있다 |
 | 생성형 미디어 (한국어) | 24문장 / 요구사항 26 | 사용자가 준 세 가지 주제 |
-| 생성형 미디어 (영어) | 20문장 / 요구사항 23 | 같은 주제, 다른 언어 |
+| 생성형 미디어 (영어) | 25문장 / 요구사항 30 | 같은 주제, 다른 언어 + 적대적 5문장 |
 | 여러 턴 대화 | 13개 (한국어 8 · 영어 5) | 마지막 턴에 무엇이 살아 있는가 |
 
 **점수**
@@ -77,7 +77,7 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 |---|---|---|
 | 사용자가 말한 낱말이 살아남는 비율 | **43/47** | `evalScenarioRecall.test.ts` |
 | 미디어 요청을 읽는 비율 (한국어) | **23/24** · 행위 25/26 · 대상 25/26 | `mediaCases.test.ts` |
-| 미디어 요청을 읽는 비율 (영어) | **20/20** · 행위 23/23 · 대상 23/23 | `mediaCasesEnglish.test.ts` |
+| 미디어 요청을 읽는 비율 (영어) | **25/25** · 행위 30/30 · 대상 30/30 | `mediaCasesEnglish.test.ts` |
 | 모델 추천 정확도 | **14/14** | `recommendationCases.test.ts` |
 | 관계 분류 (새 작업·정정·이어감) | **29/31** | 시나리오 정답 대비 |
 
@@ -88,8 +88,8 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 | 불변식 — 지어내지 않음, 근거 일치, 금지 일관성 | 117턴 / 후보 129개 | `extractInvariants.test.ts` |
 | 생성된 문장에 대한 같은 불변식 | 매 실행 수천 건 | `*.fuzz.test.ts` |
 | 패널이 사용자에게 말하는 것 | 10개 검사 | `designerPayload.test.ts` |
-| 방어선이 실제로 지탱하는지 | 변이 **227개**, 예상 밖 무반응 0 | `pnpm design:mutate` |
-| 치환 문자열이 코드와 어긋나지 않았는지 | 227/227 | `pnpm design:anchors` |
+| 방어선이 실제로 지탱하는지 | 변이 **233개**, 예상 밖 무반응 0 | `pnpm design:mutate` |
+| 치환 문자열이 코드와 어긋나지 않았는지 | 233/233 | `pnpm design:anchors` |
 | 정규식이 자기 이스케이프를 먹지 않았는지 | 소스 전체 | `sourceHygiene.test.ts` |
 
 아직 재지 않은 것은 재지 않았다고 말한다 — `goldRequirements.ts`의 `UNMEASURED`가 그 목록이고, 0으로 채우지 않는다.
@@ -177,7 +177,7 @@ pnpm typecheck      # src + extension 타입 검사
 pnpm build:extension # VS Code 확장 컴파일 → extension/out
 
 pnpm design:anchors  # 변이 치환 문자열이 코드와 어긋나지 않았는지 (몇 초)
-pnpm design:mutate   # 방어선 227개를 하나씩 지우고 테스트가 잡는지 (수십 분)
+pnpm design:mutate   # 방어선 233개를 하나씩 지우고 테스트가 잡는지 (수십 분)
 ```
 
 속성 테스트는 시드 기반이라 실패가 항상 재현됩니다. 기본 반복 횟수는 CI가 몇 초에 끝나도록 작게 잡혀 있고, 필요하면 얼마든지 늘릴 수 있습니다.

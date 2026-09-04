@@ -73,8 +73,8 @@ before(() => {
 
 describe("영어로 물은 생성형 미디어 프로젝트", () => {
   test("말뭉치 자체", () => {
-    assert.equal(score.turns, 20);
-    assert.equal(score.goldTotal, 23);
+    assert.equal(score.turns, 25);
+    assert.equal(score.goldTotal, 30);
     for (const media of ENGLISH_MEDIA_CASES) {
       assert.ok(media.why.length > 15, `${media.id}: 이유가 없습니다`);
       assert.ok(media.requirements.length > 0, `${media.id}: 정답이 비어 있습니다`);
@@ -83,15 +83,18 @@ describe("영어로 물은 생성형 미디어 프로젝트", () => {
 
   test("모든 문장에서 최소 한 개는 읽는다", () => {
     // Was 11/20 when this corpus was written — nine ordinary English sentences
-    // produced nothing at all.
+    // produced nothing at all. Five more sentences joined it later, aimed at
+    // the defects the Korean pass had just been made to give up; two of those
+    // five were read as nothing and three produced a target the sentence does
+    // not contain, which is what a 23/23 on the first twenty had been hiding.
     assert.deepEqual(score.unread, []);
-    assert.equal(score.read, 20);
+    assert.equal(score.read, 25);
   });
 
   test("행위 정확도", () => {
     assert.deepEqual(
       { hit: score.actHit, of: score.goldTotal },
-      { hit: 23, of: 23 },
+      { hit: 30, of: 30 },
       "행위 정확도가 움직였습니다",
     );
   });
@@ -100,7 +103,7 @@ describe("영어로 물은 생성형 미디어 프로젝트", () => {
     assert.deepEqual(score.wrongTarget, []);
     assert.deepEqual(
       { hit: score.targetHit, of: score.goldTotal },
-      { hit: 23, of: 23 },
+      { hit: 30, of: 30 },
       "대상 정확도가 움직였습니다",
     );
   });

@@ -216,4 +216,58 @@ export const ENGLISH_MEDIA_CASES: readonly EnglishMediaCase[] = [
     why: "`train` 은 이 도메인의 중심 동사인데 없었다. `on the dataset` 은 장소다.",
     requirements: [{ action: "execute", target: "model" }],
   },
+
+  // --- 한국어 쪽에서 드러난 결함 부류를 영어에도 겨눈 것 ------------------------
+  //
+  // 위 20문장에서 이 경로는 행위 23/23, 대상 23/23 이었다. 그 점수가 말한 것은
+  // "영어 경로가 옳다" 가 아니라 "이 말뭉치에 이런 모양이 없다" 였다. 아래는
+  // 한국어에서 방금 고친 결함 부류를 그대로 영어로 물은 것이고, 정답은 코드를
+  // 건드리기 전에 문장에서 썼다. 다섯 중 셋이 **없는 대상을 지어내고** 있었다.
+  {
+    id: "e-coordinated-verbs",
+    topic: "operating",
+    text: "Train and evaluate the model.",
+    why:
+      "접속사 하나만 남았을 때 그것이 목적어가 되어 **train and** 를 내놓았다. " +
+      "앞 동사의 목적어는 뒤에서 생략된 것이고, 없는 것은 없는 것이다.",
+    requirements: [
+      { action: "execute", target: null },
+      { action: "verify", target: "model" },
+    ],
+  },
+  {
+    id: "e-verb-then-question",
+    topic: "operating",
+    text: "Check the model list and tell me which ones are usable.",
+    why:
+      "`tell` 이 동사 목록에 없어 접속사에서 절이 갈리지 않았고, 목적어가 " +
+      "`model list and tell me` 가 되었다. 뒤 절이 묻는 것은 사물이 아니다.",
+    requirements: [
+      { action: "inspect", target: "model list" },
+      { action: "inspect", target: null },
+    ],
+  },
+  {
+    id: "e-question-only",
+    topic: "operating",
+    text: "Tell me whether the video is actually rendered.",
+    why: "물음이 목적어 자리에 서 있다. 종속절을 대상으로 삼는 것은 지어내기다.",
+    requirements: [{ action: "inspect", target: null }],
+  },
+  {
+    id: "e-feature-frame",
+    topic: "prompt_to_media",
+    text: "Make it possible to set the frame rate and the resolution.",
+    why: "한국어 `-ㄹ 수 있게 해줘` 의 영어 짝. 아무것도 읽지 못했다.",
+    requirements: [{ action: "modify", target: "frame rate and the resolution" }],
+  },
+  {
+    id: "e-verb-without-object",
+    topic: "operating",
+    text: "Compare it with the previous result.",
+    why:
+      "`it` 은 풀 수 없으므로 대상은 없다. 그런데 부류 문구가 `compare` 를 " +
+      "`look at what was asked about` 으로 바꿔 불렀다 — 비교와 살펴봄은 다른 결과물이다.",
+    requirements: [{ action: "inspect", target: null }],
+  },
 ];

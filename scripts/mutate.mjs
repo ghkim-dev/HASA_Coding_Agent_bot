@@ -926,6 +926,25 @@ const MUTATIONS = [
   ["M243", "물음이 열쇠에 들어가지 않음 — 한 턴의 두 물음이 하나로 합쳐짐", "src/design/functionalExtract.ts",
     "      const key = `${action}:${object}${asked === \"\" ? \"\" : `?${asked}`}`;",
     "      const key = `${action}:${object}`;", "recall"],
+  // ---- C4.27: the English pass, measured on the shapes Korean just fixed ------
+  ["M244", "홀로 선 접속사를 목적어로 삼음 — `train and` 의 and 가 대상이 됨", "src/design/functionalExtract.ts",
+    "    .replace(/(?:^|\\s+)(?:and|then|but|or)\\s*$/i, \"\")",
+    "    .replace(/(?:\\s+)(?:and|then|but|or)\\s*$/i, \"\")", "english"],
+  ["M245", "목적어 없는 영어 행위를 항상 부류 문구로 읽음 — `compare` 가 사라짐", "src/design/functionalExtract.ts",
+    "            : wide.toLowerCase().includes(verb.trim())",
+    "            : true", "english"],
+  ["M246", "`tell` 을 동사에서 뺌 — 접속사에서 절이 갈리지 않음", "src/design/functionalExtract.ts",
+    "  { pattern: /\\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\\s+at|look\\s+into|show|tell|list|find|locate|search|check|compare|contrast|preview)\\b/i, action: \"inspect\" },",
+    "  { pattern: /\\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\\s+at|look\\s+into|show|list|find|locate|search|check|compare|contrast|preview)\\b/i, action: \"inspect\" },", "english"],
+  ["M247", "영어 물음을 다시 목적어로 읽음 — 종속절이 대상이 됨", "src/design/functionalExtract.ts",
+    "  if (!/^(?:me\\s+|us\\s+)?(?:whether|if|which|what|how|why|when|where)\\b/i.test(rest)) return \"\";",
+    "  if (true) return \"\";", "english"],
+  ["M248", "`make it possible to` 를 다시 못 읽음", "src/design/functionalExtract.ts",
+    "    const body = clause.replace(ENGLISH_LEAD, \"\").replace(ENGLISH_FEATURE_FRAME, \"\");",
+    "    const body = clause.replace(ENGLISH_LEAD, \"\");", "english"],
+  ["M249", "영어 물음이 열쇠에 들어가지 않음 — 두 물음이 하나로 합쳐짐", "src/design/functionalExtract.ts",
+    "      const key = `${action}:${object.toLowerCase()}${asked === \"\" ? \"\" : `?${asked.toLowerCase()}`}`;",
+    "      const key = `${action}:${object.toLowerCase()}`;", "english"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

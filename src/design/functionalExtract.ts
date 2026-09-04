@@ -1036,7 +1036,11 @@ const ENGLISH_VERBS: ReadonlyArray<{ pattern: RegExp; action: ActionKind }> = [
   // list reads what the user asked the agent to *do*; where it looks is the
   // research decision's question, and `statedResearchDemand` answers it from
   // the same sentence.
-  { pattern: /\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\s+at|look\s+into|show|list|find|locate|search|check|compare|contrast|preview)\b/i, action: "inspect" },
+  // `tell` is the commonest way an English request opens and it was absent, so
+  // "check the model list and tell me which ones are usable" never split at the
+  // conjunction — the second verb was not a verb this list knew, so the clause
+  // stayed whole and its target came out as `model list and tell me`.
+  { pattern: /\b(?:read|explain|describe|inspect|analy[sz]e|review|summari[sz]e|look\s+at|look\s+into|show|tell|list|find|locate|search|check|compare|contrast|preview)\b/i, action: "inspect" },
 ];
 
 /**
@@ -1056,6 +1060,22 @@ const ENGLISH_NEGATED = /\b(?:do\s+not|don'?t|never|without|avoid|no\s+need\s+to
  * the whole tail including `please` would put the word into the requirement.
  */
 const ENGLISH_LEAD = /^(?:please|kindly|could\s+you|can\s+you|would\s+you|i\s+want\s+you\s+to|i'?d\s+like\s+you\s+to|let'?s|let\s+me|we\s+should|you\s+should)\s+/i;
+
+/**
+ * A feature request, rewritten as the plain imperative it contains.
+ *
+ * The English half of what `plainImperative` does for `-ㄹ 수 있게 해줘`, and it
+ * failed the same way: "Make it possible to set the frame rate and the
+ * resolution" read as nothing at all, because the verb the request is about sits
+ * too far into the sentence to be an imperative and the words in front of it are
+ * not verbs this list knows.
+ *
+ * Only the frame comes off. Everything from the verb onwards — which is where an
+ * English target comes from — is the sentence the user typed, so nothing here
+ * can invent one.
+ */
+const ENGLISH_FEATURE_FRAME =
+  /^(?:make\s+it\s+possible\s+to|make\s+it\s+so\s+(?:that\s+)?(?:i|we|you|users?)\s+can|add\s+(?:the\s+|an?\s+)?(?:ability|option)\s+to|allow\s+(?:the\s+)?(?:users?|me|us|people)\s+to|enable\s+(?:the\s+)?(?:users?|me|us|people)\s+to)\s+/i;
 
 /**
  * Where an English object stops.
@@ -1213,6 +1233,32 @@ const ENGLISH_PARTICLE = /^(?:up|out|for|it|this|that|these|those|all|any|me|us|
  */
 const ENGLISH_ARTICLE = /^(?:the|a|an)\s+/i;
 
+/**
+ * An English clause that is about a question rather than about a thing.
+ *
+ * The mirror of `embeddedQuestionBefore`, on the side of the verb where English
+ * puts its object. "Tell me whether it is actually called" has no noun to point
+ * at, and the object scan handed back `me whether it is actually called` — a
+ * target made out of a subordinate clause, which is the shape of invention this
+ * file exists to avoid. "Show me what changes if I change the prompt" did the
+ * same thing at greater length.
+ *
+ * The question word is what marks it, and the requirement then reads as the
+ * sentence did: the verb and the question, with the target left unnamed because
+ * there is not one. Capped like the object is, so a long tail cannot ride in.
+ */
+function englishQuestionAfter(clause: string, after: number): string {
+  const rest = clause.slice(after).trim();
+  if (!/^(?:me\s+|us\s+)?(?:whether|if|which|what|how|why|when|where)\b/i.test(rest)) return "";
+  // The clause split keeps the conjunction it broke on, exactly as the object
+  // scan has to allow for.
+  const asked = rest
+    .replace(/[.!?]+\s*$/u, "")
+    .replace(/(?:^|\s+)(?:and|then|but|or)\s*$/i, "")
+    .trim();
+  return asked.length > MAX_ENGLISH_OBJECT ? "" : asked;
+}
+
 function englishObject(clause: string, after: number): { target: string; shown: string } {
   let rest = clause.slice(after).trim();
   // Drop a leading particle, then a leading article — "clean up the imports"
@@ -1254,7 +1300,13 @@ function englishObject(clause: string, after: number): { target: string; shown: 
   const object = (stop === null ? rest : rest.slice(0, stop.index))
     // The clause split keeps the conjunction it broke on, so a trailing `and`
     // rides along into the object: "fix the bug and" rather than "fix the bug".
-    .replace(/\s+(?:and|then|but|or)\s*$/i, "")
+    //
+    // `(?:^|\s+)`, not `\s+`: when the verb has no object of its own the
+    // conjunction is *all* that is left, and with nothing in front of it the
+    // strip did not fire. "Train and evaluate the model" then reported a
+    // requirement to train **and** — the word itself, offered as the thing to
+    // train.
+    .replace(/(?:^|\s+)(?:and|then|but|or)\s*$/i, "")
     .trim();
   if (object.length === 0 || object.length > MAX_ENGLISH_OBJECT) return { target: "", shown: "" };
   return { target: object, shown: `${article}${object}` };
@@ -1284,7 +1336,7 @@ function englishCandidates(input: { turnId: string; text: string }): FunctionalC
     const at = input.text.indexOf(clause, offset);
     if (at === -1) continue;
     offset = at + clause.length;
-    const body = clause.replace(ENGLISH_LEAD, "");
+    const body = clause.replace(ENGLISH_LEAD, "").replace(ENGLISH_FEATURE_FRAME, "");
     if (body.trim().length === 0) continue;
     if (ENGLISH_QUESTION.test(body)) continue;
 
@@ -1299,15 +1351,37 @@ function englishCandidates(input: { turnId: string; text: string }): FunctionalC
       // ("the previous run"), a subordinate clause, a report about the past.
       if (!isImperativePosition(body, match.index)) continue;
 
-      const { target: object, shown } = englishObject(body, match.index + match[0].length);
-      if (object.length === 0 && !ACT_IS_ENOUGH.has(action)) continue;
+      // A question standing where the object would be — see
+      // `englishQuestionAfter`. Asked before the object scan, because that scan
+      // is what turns the question into a target.
+      const asked = englishQuestionAfter(body, match.index + match[0].length);
+      const { target: object, shown } = asked === ""
+        ? englishObject(body, match.index + match[0].length)
+        : { target: "", shown: "" };
+      if (object.length === 0 && asked === "" && !ACT_IS_ENOUGH.has(action)) continue;
 
       const verb = match[0].toLowerCase();
       // Collapsed, because `build\s+(?=an?\b)` matches its own trailing space
       // and the article strip takes the next one: "build  project".
+      //
+      // With no object the class phrase stands only while it still says the
+      // word the user said — the same rule `actOnlyText` applies on the Korean
+      // side, and for the same reason. "Compare it with the previous result"
+      // was coming back as "look at what was asked about": comparing is not
+      // looking, and the one verb the sentence chose was the word thrown away.
+      const wide = ACT_ONLY_EN[action];
       const text =
-        object.length === 0 ? ACT_ONLY_EN[action] : `${verb} ${shown}`.replace(/\s{2,}/g, " ");
-      const key = `${action}:${object.toLowerCase()}`;
+        object.length > 0
+          ? `${verb} ${shown}`.replace(/\s{2,}/g, " ")
+          : asked !== ""
+            ? `${verb} ${asked}`
+            : wide.toLowerCase().includes(verb.trim())
+              ? wide
+              : verb.trim();
+      // The question joins the key for the reason it does on the Korean side:
+      // two questions in one turn are two asks, and their targets are equally
+      // empty.
+      const key = `${action}:${object.toLowerCase()}${asked === "" ? "" : `?${asked.toLowerCase()}`}`;
       if (seen.has(key)) continue;
       seen.add(key);
 

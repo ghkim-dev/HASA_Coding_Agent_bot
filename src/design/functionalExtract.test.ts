@@ -806,6 +806,64 @@ describe("경계 입력", () => {
     assert.equal(of("Build a tool that generates images.")[0]?.action, "create");
     assert.equal(of("Build the project.")[0]?.action, "execute");
   });
+
+  test("접속사 하나만 남았을 때 그것은 목적어가 아니다", () => {
+    // "Train and evaluate the model" 은 **train and** 를 내놓았다 — 접속사
+    // 그 자체가, 학습할 대상으로. 붙어 있던 제거 규칙은 앞에 공백이 있을 때만
+    // 걸렸고, 목적어가 아예 없을 때는 접속사가 문두에 홀로 선다.
+    const got = of("Train and evaluate the model.");
+    assert.deepEqual(got.map((c) => c.text), ["train", "evaluate the model"]);
+    assert.equal(got[0]?.object, "");
+  });
+
+  test("목적어가 없으면 사용자가 쓴 동사로 읽는다", () => {
+    // 부류 문구가 그 낱말을 이미 담고 있으면 그대로 두고, 아니면 동사가 이긴다.
+    // "Compare it with the previous result" 는 "look at what was asked about"
+    // 이었다 — 비교는 살펴봄이 아니고, 문장이 고른 단 하나의 동사가 버려졌다.
+    assert.deepEqual(texts("Compare it with the previous result."), ["compare"]);
+    assert.deepEqual(texts("Don't run it, just explain."), ["explain"]);
+    assert.deepEqual(texts("Run it."), ["run the requested command"]);
+  });
+
+  test("`tell` 도 동사이고, 물음은 목적어가 아니다", () => {
+    // `tell` 이 목록에 없어서 접속사에서 절이 갈리지 않았고, 목적어는
+    // `model list and tell me` 가 되었다.
+    assert.deepEqual(texts("Check the model list and tell me which ones are usable."), [
+      "check the model list",
+      "tell me which ones are usable",
+    ]);
+    assert.deepEqual(texts("Tell me whether it is actually called."), [
+      "tell me whether it is actually called",
+    ]);
+    assert.equal(of("Show me what changes if I change the prompt.")[0]?.object, "");
+  });
+
+  test("한 턴의 두 물음은 두 요청이다", () => {
+    // 대상이 둘 다 비어 있으므로, 물음이 열쇠에 들어가지 않으면 하나로 합쳐진다.
+    assert.deepEqual(texts("Tell me which model is fastest and tell me why it fails."), [
+      "tell me which model is fastest",
+      "tell me why it fails",
+    ]);
+  });
+
+  test("`make it possible to` 는 기능 요청이다", () => {
+    // 한국어 `-ㄹ 수 있게 해줘` 의 영어 짝이고, 같은 이유로 아무것도 읽지
+    // 못했다: 요청이 말하는 동사가 명령문 자리에서 너무 뒤에 있다.
+    assert.deepEqual(texts("Make it possible to set the frame rate and the resolution."), [
+      "set the frame rate and the resolution",
+    ]);
+    // 틀은 `ability|option to` 를 요구하므로 평범한 `add` 요청은 건드리지 않는다.
+    assert.deepEqual(texts("Add the login button."), ["add the login button"]);
+  });
+
+  test("쉼표로 이어진 목록은 아직 첫 항목만 읽는다", () => {
+    // 아직 맞지 않는 것에 이름을 준다. 영어 목적어 스캔은 쉼표에서 멈추고,
+    // 한국어 쪽에서 목록을 잇는 규칙에 해당하는 것이 영어에는 없다. 지어내지는
+    // 않지만 사용자가 셋을 말했는데 하나만 읽는다.
+    assert.deepEqual(texts("Download the dataset, the weights, and the config."), [
+      "download the dataset",
+    ]);
+  });
 });
 
 describe("span 은 UTF-16 좌표로 정확하다", () => {
