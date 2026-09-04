@@ -66,6 +66,9 @@ const FILES = [
   "src/agent/textTools.ts",
   "src/agent/finalClaims.ts",
   "src/agent/taskReducer.ts",
+  // C4.29: `sourcesAreLive` lives here, and it is the guard that bounds what a
+  // misread source name can cost.
+  "src/agent/taskState.ts",
   "src/agent/session.ts",
   "src/agent/tools/requestTool.ts",
   "src/agent/turnContract.ts",
@@ -150,6 +153,7 @@ const SUITES = {
   adoptconv: ["src/agent/conversationAdoption.test.ts"],
   revisit: ["src/agent/modelRevisit.test.ts"],
   namedsrc: ["src/agent/namedSources.test.ts", "src/design/evalScenarioRecall.test.ts"],
+  namedgate: ["src/agent/claimGrounding.test.ts"],
   // The English pass, which had six hand-written cases and no denominator
   // until the three project topics were asked in English.
   english: [
@@ -958,6 +962,13 @@ const MUTATIONS = [
   ["M253", "뒤에 접속사가 남았는지 보지 않음 — 두 번째 생각을 목록으로 읽음", "src/design/functionalExtract.ts",
     "      /\\b(?:and|or)\\b/i.test(tail);",
     "      true;", "english"],
+  // ---- C4.29: the completion gate, and what bounds its cost --------------------
+  ["M254", "완료 게이트가 이름으로 부른 출처를 다시 놓침", "src/agent/taskReducer.ts",
+    "        for (const source of [...exactSourcesIn(event.text), ...namedSourcesIn(event.text)]) {",
+    "        for (const source of exactSourcesIn(event.text)) {", "namedgate"],
+  ["M255", "웹에 가지 않은 턴도 못 읽은 출처로 막음 — 이름을 잘못 읽은 값이 실행 전체가 됨", "src/agent/taskState.ts",
+    "  return task.evidence.some((e) => e.kind === \"web_source\");",
+    "  return true;", "namedgate"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

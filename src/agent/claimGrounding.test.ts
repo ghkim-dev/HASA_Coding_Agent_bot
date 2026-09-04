@@ -452,18 +452,28 @@ describe("16 — an exact source requirement is settled by reading it, and only 
     ]);
     assert.ok(task !== null);
 
-    // Only the URL is a source. "Hugging Face" written as words is a topic the
-    // model has to interpret, and the runtime does not guess at it — see
-    // `exactSourcesIn`.
+    // Both halves of the sentence are sources now. This used to assert that
+    // only the URL was one — "Hugging Face" written as words was a topic the
+    // runtime refused to guess at — and that refusal was the whole of the
+    // failure §16 is named for: two sources in one sentence, one written as a
+    // link and one as a name, and only the link ever held. `namedSourcesIn`
+    // asks for a pointing marker *and* a lookup verb, and this sentence has
+    // both (`Hugging Face와 … 에서 … 찾아서`).
+    //
+    // The search returned a Hugging Face result and that leaves it `pending`
+    // too, which is the point: a search engine listing a page is not the page.
     assert.deepEqual(
       task.sources.map((s) => [s.hostname, s.status]),
-      [[HASA, "pending"]],
+      [
+        [HASA, "pending"],
+        [HF, "pending"],
+      ],
     );
     // The bug in one assertion. `찾기` matches the web keyword group, the search
     // succeeded, and before this slice that marked the requirement passed.
     assert.equal(task.requirements[0]?.status, "pending", "a search is not the page they named");
     assert.equal(assessCompletion(task).complete, false);
-    assert.equal(assessCompletion(task).unreadSources.length, 1);
+    assert.equal(assessCompletion(task).unreadSources.length, 2);
   });
 
   test("fetching the page settles it", () => {
@@ -475,7 +485,10 @@ describe("16 — an exact source requirement is settled by reading it, and only 
       ...toolRun("web_fetch", "HF 읽기", { sources: [fetched(HF, "vit-base")] }),
     ]);
     assert.ok(task !== null);
-    assert.deepEqual(task.sources.map((s) => s.status), ["fetched"]);
+    // Both, and each by its own page. Reading HASA does not settle Hugging Face
+    // and reading Hugging Face does not settle HASA — `settleSources` matches
+    // on the hostname, so the two cannot stand in for each other.
+    assert.deepEqual(task.sources.map((s) => s.status), ["fetched", "fetched"]);
     assert.equal(assessCompletion(task).unreadSources.length, 0);
     assert.equal(task.requirements[0]?.status, "passed");
   });
@@ -500,6 +513,23 @@ describe("16 — an exact source requirement is settled by reading it, and only 
     const claims = unsupportedClaims(task.evidence, `${HASA} 에서 qwen-x를 사용할 수 있습니다.`, task.sources);
     assert.equal(claims.length, 1);
     assert.equal(claims[0]?.have, "discovered");
+  });
+
+  test("a named source holds nothing open until the turn goes to the web", () => {
+    // The cost of reading a name wrongly, bounded. `sourcesAreLive` is what
+    // bounds it: an unread source counts against completeness only once the
+    // turn has actually been to the web, so a run that never searched cannot be
+    // held open by a service the sentence mentioned. That guard is what made it
+    // safe to take named sources here at all, and it is measured rather than
+    // assumed.
+    const local = reduceTask([
+      userMessage("Hugging Face에서 쓸 만한 모델을 찾아서 config에 넣어줘."),
+      plan("설정 수정"),
+      ...toolRun("apply_patch", "config 수정"),
+    ]);
+    assert.ok(local !== null);
+    assert.deepEqual(local.sources.map((s) => [s.hostname, s.status]), [[HF, "pending"]]);
+    assert.deepEqual(assessCompletion(local).unreadSources, [], "it never went looking");
   });
 
   test("fetching a lookalike host does not", () => {

@@ -7,7 +7,7 @@ import {
   type RuntimeIssue,
   type TaskState,
 } from "./taskState.ts";
-import { exactSourcesIn, hostMatches } from "./sourceProvenance.ts";
+import { exactSourcesIn, hostMatches, namedSourcesIn } from "./sourceProvenance.ts";
 import { factKey } from "./sourceFacts.ts";
 
 /**
@@ -81,7 +81,19 @@ export function reduceTask(events: readonly SessionEvent[], taskId = "task"): Ta
         // the few the runtime can read without interpreting anything. What it
         // means — whether it must be opened — is decided in `assessCompletion`,
         // from what the turn went on to do.
-        for (const source of exactSourcesIn(event.text)) {
+        //
+        // A service they *named* joins it, which it did not when named sources
+        // were first read: the claim gate took them and this did not, on the
+        // argument that a false positive costs a whole run here and only a
+        // repair prompt there. That argument was made without looking at
+        // `sourcesAreLive`, which already bounds this one — an unread source
+        // counts against completeness only once the turn has actually been to
+        // the web. So the cost is not "the run is held open for a passing
+        // mention"; it is "the run is held open when the agent went looking on
+        // the web while the user had already said where to look", which is the
+        // failure `sourceProvenance.ts` opens with, in the half of that sentence
+        // this could not see.
+        for (const source of [...exactSourcesIn(event.text), ...namedSourcesIn(event.text)]) {
           if (task.sources.some((s) => s.url === source.url)) continue;
           task.sources.push({ ...source, status: "pending", evidence: [] });
         }

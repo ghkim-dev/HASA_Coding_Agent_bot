@@ -653,14 +653,19 @@ export class AgentSession {
     // it answers: "Hugging Face와 open.hasa.re.kr에서 …", one link and one name,
     // and only the link was ever held.
     //
-    // Deliberately *not* wired into `taskReducer`'s source list, which is the
-    // other consumer. That list decides when a task may be called done, and an
-    // unread source blocks it — so a named source there would mean a request
-    // that mentions Hugging Face can never finish until Hugging Face is
-    // fetched. The claim gate only fires on a sentence that makes a claim, so
-    // its false positive costs a repair prompt; the completion gate's costs the
-    // whole run. That half needs measuring before it is wired, and this comment
-    // is the record that it is not.
+    // `taskReducer`'s source list — the other consumer, and the one that
+    // decides when a task may be called done — takes them too now. This comment
+    // used to say it deliberately did not, on the argument that a false
+    // positive costs a repair prompt here and a whole run there.
+    //
+    // The argument was sound and the premise was wrong. `sourcesAreLive` in
+    // `taskState.ts` already bounds the completion gate: an unread source
+    // counts against completeness only once the turn has actually been to the
+    // web, so a request that merely mentions Hugging Face cannot be held open
+    // by it. What is held open is a turn that went searching while the user had
+    // already said where to look — which is the failure, not a false positive.
+    // Measured rather than argued: `claimGrounding.test.ts` §16 has the case
+    // where it holds and the case where it must not.
     for (const source of [...exactSourcesIn(prompt), ...namedSourcesIn(prompt)]) {
       if (!this.namedSources.some((s) => s.url === source.url)) this.namedSources.push(source);
     }
