@@ -573,6 +573,26 @@ describe("읽지 않기로 한 것들", () => {
     assert.deepEqual(texts("보고서를 쓰고 공유해줘."), []);
   });
 
+  test("`마무리` 는 행위를 정하지 않는다", () => {
+    // "프로젝트를 마무리하고" 는 남은 일을 하라는 말이고, 그 남은 일이 고치는
+    // 것인지 돌리는 것인지 만드는 것인지 문장이 말하지 않는다. 행위 부류는
+    // 어느 능력이 중요한지를 정하므로(`INTENT_DEMAND`), 하나를 고르는 것은
+    // 문장이 하지 않은 주장을 하는 것이다. 이어감은 `relationOf` 의 일이다.
+    assert.deepEqual(texts("프로젝트를 마무리하고 완료를 확인해줘."), ["완료를 확인한다"]);
+  });
+
+  test("명사를 잇는 `하고` 는 동사 어미와 구별되지 않는다", () => {
+    // "좋은 오픈소스 모델하고 HASA 모델도" 의 `하고` 는 접속이고,
+    // "전처리하고 학습해줘" 의 `하고` 는 동사 어미다. 둘을 가르려면 앞말이
+    // 동사인지 알아야 하는데, 그것이 바로 이 파일이 갖지 못한 것이다. 접속으로
+    // 읽으면 두 번째 문장이 `전처리하고를 학습한다` 가 된다.
+    assert.deepEqual(texts("좋은 오픈소스 모델하고 HASA 모델도 추가해줘."), [
+      "HASA 모델을 추가한다",
+    ]);
+    const got = texts("전처리하고 학습해줘.");
+    assert.ok(!got.some((t) => t.includes("전처리하고")), got.join(", "));
+  });
+
   test("`실제로` 는 목적어가 아니다", () => {
     // It became one: "실제를 살펴본다" named a target the sentence does not have.
     // 대상은 여전히 없다 — `-는지` 는 명사가 아니고, 여기서 재는 것은 `실제` 가
@@ -856,12 +876,35 @@ describe("경계 입력", () => {
     assert.deepEqual(texts("Add the login button."), ["add the login button"]);
   });
 
-  test("쉼표로 이어진 목록은 아직 첫 항목만 읽는다", () => {
-    // 아직 맞지 않는 것에 이름을 준다. 영어 목적어 스캔은 쉼표에서 멈추고,
-    // 한국어 쪽에서 목록을 잇는 규칙에 해당하는 것이 영어에는 없다. 지어내지는
-    // 않지만 사용자가 셋을 말했는데 하나만 읽는다.
+  test("쉼표로 이어진 목록은 하나의 목적어다", () => {
+    // 사용자가 셋을 말했는데 하나만 읽고 있었다. 한국어 쪽에서 쉼표로 잘린
+    // 조각을 접어 넣는 규칙의 영어판이고, 방향만 반대다 — 한국어는 목록 뒤에,
+    // 영어는 목록 앞에 동사를 둔다.
     assert.deepEqual(texts("Download the dataset, the weights, and the config."), [
-      "download the dataset",
+      "download the dataset, the weights, and the config",
+    ]);
+    assert.deepEqual(texts("Generate an image, a video, and a thumbnail."), [
+      "generate an image, a video, and a thumbnail",
+    ]);
+  });
+
+  test("쉼표 뒤에 온 것이 목록이 아니면 목적어가 아니다", () => {
+    // 세 가지가 모두 성립해야 목록이다. 하나씩 빼면 아래 문장들이 각각
+    // 없는 대상을 만들어낸다.
+    //
+    //   · 관사로 시작하는 명사구가 아님   → `button, and make it blue`
+    //   · 그 안에 계사·조동사가 없음       → `bug, the tests are failing`
+    //   · 뒤에 접속사가 아직 남아 있음     → 두 번째 생각을 목록으로 읽음
+    assert.deepEqual(texts("Add a button, and make it blue."), ["add a button"]);
+    assert.deepEqual(texts("Fix the bug, the tests are failing."), ["fix the bug"]);
+    assert.deepEqual(texts("Fix the bug, the tests are failing and the build is red."), [
+      "fix the bug",
+    ]);
+    // 계사도 조동사도 없고 관사로 시작하지만, 뒤에 접속사가 없다 — 목록이
+    // 아니라 덧붙인 설명이다. 세 번째 조건이 없으면 이 문장이 대상을
+    // `logs, the error appeared yesterday` 로 만든다.
+    assert.deepEqual(texts("Check the logs, the error appeared yesterday."), [
+      "check the logs",
     ]);
   });
 });

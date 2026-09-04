@@ -1280,8 +1280,26 @@ function englishObject(clause: string, after: number): { target: string; shown: 
     const found = ENGLISH_OBJECT_END.exec(rest.slice(from));
     if (found === null) break;
     const at = from + found.index;
+    const tail = rest.slice(at + found[0].length);
     const joins = /^\s+(?:and|then|but|or)\b/i.test(found[0]);
-    if (!joins || opensWithEnglishVerb(rest.slice(at + found[0].length))) {
+    // A comma inside a list is not the end of the object either. Three things
+    // have to hold, and each one is a sentence that goes wrong without it:
+    //
+    //   · the next member is an **article-led noun phrase** — "and make it
+    //     blue" is not one, and reading it as one gave the target `button, and
+    //     make it blue`;
+    //   · that member carries **no copula or auxiliary** — "the tests are
+    //     failing" is a clause wearing an article, and it became part of the
+    //     bug being fixed;
+    //   · a **coordinator is still ahead**, which is what a list has and a
+    //     second thought does not.
+    const member = /^\s*(?:and\s+|or\s+)?(?:the|a|an|its|their|our)\s+[^,.;:!?]*/i.exec(tail)?.[0] ?? "";
+    const listComma =
+      found[0] === "," &&
+      member.trim().length > 0 &&
+      !/\b(?:is|are|was|were|be|been|has|have|had|will|would|can|could|should|do|does|did)\b/i.test(member) &&
+      /\b(?:and|or)\b/i.test(tail);
+    if ((!joins && !listComma) || opensWithEnglishVerb(tail)) {
       stop = { index: at };
       break;
     }
@@ -1506,6 +1524,30 @@ function englishClauses(text: string): string[] {
   for (const piece of text.split(ENGLISH_BOUNDARIES)) {
     const previous = out[out.length - 1];
     if (previous !== undefined && /\b(?:and|then|but|or)\s*$/i.test(previous) && !opensWithEnglishVerb(piece)) {
+      out[out.length - 1] = previous + piece;
+      continue;
+    }
+    // A list member the comma cut off from the verb it belongs to.
+    //
+    // "Download the dataset, the weights, and the config" is one act naming
+    // three things, and the boundary left two of them in pieces with no verb —
+    // so the requirement said `download the dataset` and the other two were
+    // gone. This is the same fold `koreanClauses` does, in the direction English
+    // needs it: Korean puts the verb after the list, English before it.
+    //
+    // A noun phrase, or the coordinator that introduces the last member — not
+    // merely something with no verb in front. "add a button, and make it blue"
+    // also splits into verbless pieces, and it folds back the same way; what
+    // keeps it from becoming the target `button, and make it blue` is the
+    // article test in `englishObject`, which `and make` fails and every list
+    // member passes. `make` is not in the verb list and cannot be, since
+    // "make a video" and "make it blue" are two different acts.
+    if (
+      previous !== undefined &&
+      /,\s*$/u.test(previous) &&
+      !opensWithEnglishVerb(piece) &&
+      /^\s*(?:(?:and|or)\s*$|(?:and\s+|or\s+)?(?:the|a|an|its|their|our)\s+\S)/i.test(piece)
+    ) {
       out[out.length - 1] = previous + piece;
       continue;
     }

@@ -805,7 +805,7 @@ const MUTATIONS = [
     "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\\b|[.,;:!?]/i;",
     "  /\\s+(?:and|then|but|so|because|after|before|while|to)\\b|[.,;:!?]/i;", "english"],
   ["M205", "영어 `and` 를 언제나 절 경계로 봄", "src/design/functionalExtract.ts",
-    "    if (!joins || opensWithEnglishVerb(rest.slice(at + found[0].length))) {",
+    "    if ((!joins && !listComma) || opensWithEnglishVerb(tail)) {",
     "    if (true) {", "english"],
   ["M206", "아는 동사의 분사를 목적어의 일부로 봄", "src/design/functionalExtract.ts",
     "  if (lead !== null && isEnglishParticiple(lead[1] ?? \"\")) rest = rest.slice(lead[0].length);",
@@ -945,6 +945,19 @@ const MUTATIONS = [
   ["M249", "영어 물음이 열쇠에 들어가지 않음 — 두 물음이 하나로 합쳐짐", "src/design/functionalExtract.ts",
     "      const key = `${action}:${object.toLowerCase()}${asked === \"\" ? \"\" : `?${asked.toLowerCase()}`}`;",
     "      const key = `${action}:${object.toLowerCase()}`;", "english"],
+  // ---- C4.28: an English list the comma cut off from its verb -----------------
+  ["M250", "쉼표로 잘린 목록 항목을 절에 접어 넣지 않음 — 셋 중 하나만 읽음", "src/design/functionalExtract.ts",
+    "      /^\\s*(?:(?:and|or)\\s*$|(?:and\\s+|or\\s+)?(?:the|a|an|its|their|our)\\s+\\S)/i.test(piece)",
+    "      false", "english"],
+  ["M251", "쉼표 뒤가 관사로 시작하는 명사구인지 보지 않음 — `and make it blue` 가 대상이 됨", "src/design/functionalExtract.ts",
+    "    const member = /^\\s*(?:and\\s+|or\\s+)?(?:the|a|an|its|their|our)\\s+[^,.;:!?]*/i.exec(tail)?.[0] ?? \"\";",
+    "    const member = tail;", "english"],
+  ["M252", "계사·조동사를 보지 않음 — `the tests are failing` 이 대상이 됨", "src/design/functionalExtract.ts",
+    "      !/\\b(?:is|are|was|were|be|been|has|have|had|will|would|can|could|should|do|does|did)\\b/i.test(member) &&",
+    "      true &&", "english"],
+  ["M253", "뒤에 접속사가 남았는지 보지 않음 — 두 번째 생각을 목록으로 읽음", "src/design/functionalExtract.ts",
+    "      /\\b(?:and|or)\\b/i.test(tail);",
+    "      true;", "english"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
