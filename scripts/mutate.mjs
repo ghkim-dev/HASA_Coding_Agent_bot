@@ -976,6 +976,19 @@ const MUTATIONS = [
   ["M257", "요구사항이 없으면 이어가는 턴도 추천하지 않음 — 기준선과 구별하지 않음", "src/design/harnessDesign.ts",
     "  const characterised = understood || intents.includes(\"continue\");",
     "  const characterised = understood;", "recommend"],
+  // ---- C4.31: how a person actually says "keep going" --------------------------
+  ["M258", "`계속 진행해줘` 를 다시 이어감으로 읽지 못함", "src/design/preview.ts",
+    "    /이어서|계속\\s*(?:해|하|진행|이어|가|해서)|아까\\s*하던|하던\\s*(?:거|것|일|작업)|마저\\s*(?:해|하|끝)/u.test(text) ||",
+    "    /이어서|계속(?:해|하)|아까 하던/u.test(text) ||", "metrics"],
+  ["M259", "`Keep going` 을 다시 이어감으로 읽지 못함", "src/design/preview.ts",
+    "    /\\bcontinue\\b|\\bkeep\\s+going\\b|\\bcarry\\s+on\\b|\\bresume\\b|\\bpick\\s+up\\s+where\\b|\\bgo\\s+on\\b/i.test(text)",
+    "    /continue/i.test(text)", "metrics"],
+  ["M260", "문장 가운데의 `다시` 도 이어감으로 읽음 — `로그를 다시 확인해줘` 가 이어감이 됨", "src/design/preview.ts",
+    "    /^\\s*다시\\s*(?:해|시도|한번|한\\s*번)/u.test(text) ||",
+    "    /다시/u.test(text) ||", "metrics"],
+  ["M261", "앞 턴을 가리키는 무시를 정정으로 읽지 못함", "src/design/preview.ts",
+    "    /(?:방금|아까|이전|직전|앞)\\s*(?:것|건|거|말|요청|턴)?\\s*[은는을를]?\\s*무시/u.test(text) ||",
+    "    false ||", "metrics"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
@@ -1220,6 +1233,25 @@ try {
       result = suite(SUITES[suiteKey ?? "demos"]);
     } finally {
       restore();
+    }
+
+    // A mutation that stops the file parsing is not a caught mutation.
+    //
+    // It looks exactly like one from here: the suite reports failures, the
+    // number is non-zero, and the line reads as a defence doing its job. It
+    // happened — a replacement ending in `||` landed on the last condition of an
+    // `if`, left a dangling operator, and every test in the suite failed to load.
+    // The report said the defence held; what it had measured was a syntax error.
+    //
+    // `pass === 0` is the signal, and it cannot be confused with a real result:
+    // the baseline above refuses to start unless the whole suite is green, so a
+    // mutation of one line that leaves *nothing* passing has broken the file
+    // rather than tripped an assertion. Counted with the unapplied ones, because
+    // that is what it is — the mutation never ran.
+    if (result.pass === 0) {
+      say(`${id} ${label.padEnd(34)} !! 통과한 테스트가 0 — 문법이 깨졌을 뿐, 물린 것이 아님`);
+      notApplied += 1;
+      continue;
     }
 
     const silent = result.fail === 0;

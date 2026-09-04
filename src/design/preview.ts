@@ -147,7 +147,13 @@ export function relationOf(text: string, isFirst: boolean): TurnRelation {
     // "no longer needed" and "no web access" open with the word without
     // correcting anything.
     /^\s*no[,.]/i.test(text) ||
-    /^\s*not\s+(?:that|this|quite)\b/i.test(text)
+    /^\s*not\s+(?:that|this|quite)\b/i.test(text) ||
+    // "방금 건 무시하고 처음 요청대로 해줘" withdraws the turn before it, which
+    // is what a correction is. Tied to a word that points *back at the
+    // conversation* — 방금, 아까, 이전, 앞 — so "경고는 무시하고 진행해줘" is
+    // untouched: ignoring a warning is not withdrawing a request.
+    /(?:방금|아까|이전|직전|앞)\s*(?:것|건|거|말|요청|턴)?\s*[은는을를]?\s*무시/u.test(text) ||
+    /\b(?:ignore|disregard|scratch)\s+(?:that|what\s+i\s+(?:just\s+)?said|the\s+last)\b/i.test(text)
   ) {
     return "correct";
   }
@@ -157,7 +163,27 @@ export function relationOf(text: string, isFirst: boolean): TurnRelation {
   // any of the three corpora contain — a pattern for it was written, measured
   // against all of them, changed nothing, and was deleted. The forms it would
   // add (`아닌데`, `아님`) are speculation until a sentence turns up using one.
-  if (/이어서|계속(?:해|하)|아까 하던|continue/i.test(text)) return "continue";
+  // The phrasings people actually use to say "keep going", which is more than
+  // the four this had. `계속(?:해|하)` wanted the verb welded to the adverb, so
+  // "계속 진행해줘" — a space — was read as a refinement; `아까 하던` wanted the
+  // 아까, so "하던 거 마저 해줘" was too; and English had only the bare
+  // `continue`, so "Keep going" was not a continuation at all.
+  //
+  // This became load-bearing beyond the conversation when `harnessDesign` began
+  // asking it what shape of work a turn is: a continuation it does not
+  // recognise is routed as a request to read something, and the capability that
+  // decides whether a continuation works is demanded by nothing.
+  if (
+    /이어서|계속\s*(?:해|하|진행|이어|가|해서)|아까\s*하던|하던\s*(?:거|것|일|작업)|마저\s*(?:해|하|끝)/u.test(text) ||
+    // A bare "다시 해줘" is the same work again, which is a continuation.
+    // Anchored to the start, because 다시 in the middle of a sentence modifies
+    // whatever that sentence asks for: "로그를 다시 확인해줘" names its own act
+    // and is a refinement, not a request to pick something up.
+    /^\s*다시\s*(?:해|시도|한번|한\s*번)/u.test(text) ||
+    /\bcontinue\b|\bkeep\s+going\b|\bcarry\s+on\b|\bresume\b|\bpick\s+up\s+where\b|\bgo\s+on\b/i.test(text)
+  ) {
+    return "continue";
+  }
   // `\bhow\b`, not `how\b`. Without the opening boundary the pattern matched the
   // tail of **show**, so every English sentence containing it was filed as a
   // question — and `question` carries what is standing without adding anything,

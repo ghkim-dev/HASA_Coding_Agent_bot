@@ -189,6 +189,47 @@ describe("여러 턴", () => {
     assert.equal(relationOf("추가로 테스트도 해줘.", false), "refine");
   });
 
+  /**
+   * 사람이 실제로 쓰는 이어감·정정 표현.
+   *
+   * 위 다섯 줄은 각 관계를 한 번씩만 보여 주고, 그 한 번은 패턴이 이미 아는
+   * 표현이었다. 미디어 프로젝트를 다듬는 대화를 상정해 16문장을 적어 보니
+   * 6개가 틀렸고, 그중 넷은 "계속 진행해줘" 처럼 띄어쓰기 하나 때문이었다.
+   *
+   * `harnessDesign` 이 이 함수에게 "이 턴은 어떤 모양의 일인가" 를 묻기
+   * 시작한 뒤로 이것은 대화 밖에서도 지탱한다 — 알아보지 못한 이어감은 읽기
+   * 요청으로 라우팅되고, 이어감을 좌우하는 능력은 아무도 요구하지 않게 된다.
+   */
+  test("이어가자는 말은 여러 가지 모양으로 온다", () => {
+    assert.equal(relationOf("계속 진행해줘.", false), "continue");
+    assert.equal(relationOf("하던 거 마저 해줘.", false), "continue");
+    assert.equal(relationOf("Keep going.", false), "continue");
+    assert.equal(relationOf("Carry on with the render.", false), "continue");
+    // 문두의 `다시` 만 이어감이다. 문장 가운데의 `다시` 는 그 문장이 말하는
+    // 행위를 꾸미므로, 제 행위를 부르는 요청이 된다.
+    assert.equal(relationOf("다시 해줘.", false), "continue");
+    assert.equal(relationOf("로그를 다시 확인해줘.", false), "refine");
+    assert.equal(relationOf("실패하면 다시 시도하게 해줘.", false), "refine");
+  });
+
+  test("앞 턴을 가리키며 무시하라는 말은 정정이다", () => {
+    assert.equal(relationOf("방금 건 무시하고 처음 요청대로 해줘.", false), "correct");
+    assert.equal(relationOf("Ignore what I just said and use the original prompt.", false), "correct");
+    // 경고를 무시하는 것은 요청을 물리는 것이 아니다. 앞 턴을 가리키는 낱말이
+    // 없으면 정정이 아니다.
+    assert.equal(relationOf("경고는 무시하고 진행해줘.", false), "refine");
+  });
+
+  test("답을 찾아 달라는 물음은 물음이 아니라 요청이다", () => {
+    // 처음 이 문장을 적었을 때 정답을 `question` 이라고 썼고, 그것이 틀렸다.
+    // `question` 은 서 있는 것을 그대로 옮기고 아무것도 더하지 않는 관계다.
+    // "어떤 모델이 제일 빠른지 알려줘" 는 에이전트가 나가서 알아내야 하는
+    // 일이므로, 물음으로 분류하면 그 일이 통째로 사라진다.
+    assert.equal(relationOf("어떤 모델이 제일 빠른지 알려줘.", false), "refine");
+    // 대화 자체에 대해 묻는 것은 물음이다.
+    assert.equal(relationOf("왜 이렇게 느려?", false), "question");
+  });
+
   test("정정은 이전 요구사항을 지우지 않고 새 금지를 세운다", async () => {
     const result = await previewDesign({
       turns: ["main.py를 실행해줘.", "정정할게. 실행하지 말고 코드만 보여줘."],
