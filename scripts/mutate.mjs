@@ -430,7 +430,7 @@ const MUTATIONS = [
     "const CLAUSE_ENDING = /(?:[하되지으우이라]면|[해어아여]서|[하되이]며|는지|은지|을지|인지)$/u;",
     "const CLAUSE_ENDING = /(?:면|서|며|지)$/u;", "holdout"],
   ["M70", "관형형 수식어를 다시 버림", "src/design/functionalExtract.ts",
-    '    const bare = out.replace(/[은는만이가]$/u, "");',
+    "    const bare = out.replace(/,$/u, \"\").replace(/[은는만이가]$/u, \"\");",
     '    const bare = out;', "conflict"],
   ["M71", "'가능하면' 을 다시 조건으로", "src/design/semanticAlignment.ts",
     "/(?<!가능)(?:", "/(?:", "holdout"],
@@ -906,6 +906,16 @@ const MUTATIONS = [
   ["M236", "뒤 절이 제 대상을 부르는지 보지 않고 자름 — `찾아서 정리해줘` 가 통째로 사라짐", "src/design/functionalExtract.ts",
     "  /(?<=[.!?。])(?=\\s|$)|(?<=[가-힣]고\\s)|(?<=[가-힣]되\\s)|(?<=한\\s*뒤\\s)|(?<=한\\s*다음\\s)|(?<=면서\\s)|(?<=,\\s)|(?<=[해어아여]서\\s)(?=[^.!?。]*[을를]\\s)/;",
     "  /(?<=[.!?。])(?=\\s|$)|(?<=[가-힣]고\\s)|(?<=[가-힣]되\\s)|(?<=한\\s*뒤\\s)|(?<=한\\s*다음\\s)|(?<=면서\\s)|(?<=,\\s)|(?<=[해어아여]서\\s)/;", "recall"],
+  // ---- C4.25: a comma-cut piece with no verb of its own ------------------------
+  ["M237", "동사 없는 조각을 다시 버림 — `웹과 Hugging Face` 가 사라짐", "src/design/functionalExtract.ts",
+    "    if (!speaks && /,\\s*$/u.test(joined)) {",
+    "    if (false) {", "recall"],
+  ["M238", "동사를 가진 조각까지 접어 넣음 — 읽지 않기로 한 `쓰다` 를 우회함", "src/design/functionalExtract.ts",
+    "    if (!speaks && /,\\s*$/u.test(joined)) {",
+    "    if (!speaks) {", "recall"],
+  ["M239", "쉼표가 붙은 부사를 낱말로 보지 않음 — `먼저,` 가 목적어가 됨", "src/design/functionalExtract.ts",
+    "    const bare = out.replace(/,$/u, \"\").replace(/[은는만이가]$/u, \"\");",
+    "    const bare = out.replace(/[은는만이가]$/u, \"\");", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

@@ -542,7 +542,11 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
     //
     // `이`/`가`/`만` come off for the same reason: "무엇이 문제인지만 알려줘" named no
     // target, and reading `무엇이` as a noun made one up out of the question word.
-    const bare = out.replace(/[은는만이가]$/u, "");
+    // A comma comes off first. It is punctuation, not part of the word, and it
+    // only reaches this scan at all because a verbless piece is now folded into
+    // the clause that follows it — which is how `먼저,` arrived here wearing one
+    // and passed every test `먼저` fails.
+    const bare = out.replace(/,$/u, "").replace(/[은는만이가]$/u, "");
 
     return {
       text: out,
@@ -1386,12 +1390,55 @@ function englishClauses(text: string): string[] {
   return out;
 }
 
+/**
+ * The clauses of a Korean turn, with the pieces that cannot stand alone folded
+ * into the clause they belong to.
+ *
+ * `BOUNDARIES` cuts on `, ` because a comma usually ends a clause. It does not
+ * always: "웹과 Hugging Face, HASA도 참고하고" is one list and one verb, and the
+ * cut left `웹과 Hugging Face` sitting in a piece with no verb in it. A piece
+ * with no verb produces nothing, so 웹 and the service beside it were dropped
+ * from a request that named them — not read wrongly, just gone.
+ *
+ * Such a piece belongs to the verb that follows it, because that is where
+ * Korean puts the verb. Two conditions, and each one is a sentence that broke
+ * without it:
+ *
+ *   · **Only a piece the comma cut.** A piece the `-고` boundary cut ends in a
+ *     verb — "CNN과 Transformer를 쓰고" has one, and this file refuses to read
+ *     `쓰다` on purpose. Folding that forward let the refusal be worked around
+ *     from the outside: the sentence came out as "CNN과 Transformer를 학습한다",
+ *     a target chosen by a rule that had no opinion about it. A piece with no
+ *     verb and a piece with a verb nobody will read are not the same thing.
+ *   · **Not across a sentence end.** What follows a full stop is a new thought.
+ *
+ * The pieces are concatenated back exactly as they were — every boundary here is
+ * a lookaround and consumes nothing — so a span still points into the text the
+ * user typed.
+ */
+function koreanClauses(text: string): string[] {
+  const out: string[] = [];
+  let pending = "";
+  for (const piece of text.split(BOUNDARIES)) {
+    const joined = pending + piece;
+    const speaks = VERBS.some((entry) => entry.pattern.test(plainImperative(joined)));
+    if (!speaks && /,\s*$/u.test(joined)) {
+      pending = joined;
+      continue;
+    }
+    out.push(joined);
+    pending = "";
+  }
+  if (pending !== "") out.push(pending);
+  return out;
+}
+
 export function functionalCandidates(input: { turnId: string; text: string }): FunctionalCandidate[] {
   const out: FunctionalCandidate[] = [];
   const seen = new Set<string>();
 
   let offset = 0;
-  for (const source of input.text.split(BOUNDARIES)) {
+  for (const source of koreanClauses(input.text)) {
     const at = input.text.indexOf(source, offset);
     if (at === -1) continue;
     offset = at + source.length;
