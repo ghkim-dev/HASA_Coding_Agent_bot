@@ -1019,6 +1019,22 @@ const MUTATIONS = [
   ["M270", "표지 없는 부사 목록을 지움 — `일단`, `대충` 이 목적어가 됨", "src/design/functionalExtract.ts",
     "  /^(?:없이|일단|대충|되도록|가급적|웬만하면|빨리|얼른|이미|방금|아까|이제|그냥|차라리|오히려|아무튼|어쨌든|따로|바로|직접)$|^[가-힣]+히$|(?:하게|롭게|럽게|르게|프게|쁘게|잖게|찮게)$|^(?:짧|크|작|쉽|길|좋|얇|넓|높|낮|많|적|늦)게$/u;",
     "  /^[가-힣]+히$|(?:하게|롭게|럽게|르게|프게|쁘게|잖게|찮게)$|^(?:짧|크|작|쉽|길|좋|얇|넓|높|낮|많|적|늦)게$/u;", "recall"],
+  // ---- C4.35: the English half of the two classes that can change a machine ----
+  ["M271", "`Never run the tests` 를 다시 놓침 — 추출기는 억제하고 게이트는 막지 않음", "src/agent/statedProhibitions.ts",
+    "    `${IMPERATIVE_START}never\\\\s+(?:run|execute)\\\\b`,",
+    "    \"(?!)\",", "safety"],
+  ["M272", "`Avoid running commands` 를 다시 놓침", "src/agent/statedProhibitions.ts",
+    "    `${IMPERATIVE_START}avoid\\\\s+(?:running|executing)`,",
+    "    \"(?!)\",", "safety"],
+  ["M273", "`Never modify` 를 다시 놓침", "src/agent/statedProhibitions.ts",
+    "    `${IMPERATIVE_START}never\\\\s+(?:modify|edit|change)\\\\b`,",
+    "    \"(?!)\",", "safety"],
+  ["M274", "`instead of running` 을 금지로 읽지 않음", "src/agent/statedProhibitions.ts",
+    "    \"(?:instead\\\\s+of|rather\\\\s+than)\\\\s+(?:running|executing)\",",
+    "    \"(?!)\",", "safety"],
+  ["M275", "명령문 자리를 보지 않음 — `I never run these locally, but please run them` 이 금지가 됨", "src/agent/statedProhibitions.ts",
+    "const IMPERATIVE_START = \"(?:^|[.!?;:—]\\\\s*|,\\\\s*|\\\\b(?:and|but|so|please|then)\\\\s+)\";",
+    "const IMPERATIVE_START = \"\";", "safety"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
@@ -1166,6 +1182,8 @@ if (withCarriageReturn.length > 0) {
 const netBrackets = (text, open, close) =>
   text.split(open).length - text.split(close).length;
 const DANGLING = /(?:\|\||&&|,|\+)\s*$/;
+/** An array entry that is an empty string, however it is quoted. */
+const EMPTY_ALTERNATIVE = /^\s*(?:""|''|``)\s*,?\s*$/;
 const malformed = [];
 for (const [id, , , from, to] of MUTATIONS) {
   for (const [open, close] of [
@@ -1179,6 +1197,19 @@ for (const [id, , , from, to] of MUTATIONS) {
   }
   if (!DANGLING.test(from) && DANGLING.test(to)) {
     malformed.push(`${id} (연산자가 매달린 채 끝남)`);
+  }
+  // An empty alternative is not a removed alternative.
+  //
+  // These patterns are built by `[...].join("|")`, and replacing one entry with
+  // an empty string leaves `a||b` — which matches at every position, so the
+  // class fires on everything. Four mutations were written that way and all four
+  // "bit": the suite went red, and what it had measured was a gate that now
+  // forbids every sentence, the exact opposite of the defence being removed.
+  //
+  // The way to take one form out of a joined pattern is `(?!)`, an alternative
+  // that can never match, which leaves the rest of the class exactly as it was.
+  if (EMPTY_ALTERNATIVE.test(to)) {
+    malformed.push(`${id} (빈 대안 — 정규식이 모든 것을 매치하게 됨. \`(?!)\` 를 쓰십시오)`);
   }
 }
 if (malformed.length > 0) {

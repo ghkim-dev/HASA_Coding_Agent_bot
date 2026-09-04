@@ -111,6 +111,22 @@ const ASKING_WHETHER = "(?!\\s*(?:아야|아도|까)?\\s*(?:하나요|할까요|
  */
 const WEB = "(?:웹\\s*검색|웹서치|웹\\s*서치|인터넷\\s*검색|인터넷\\s*조사|온라인\\s*검색|웹\\s*조사|웹|인터넷|온라인)";
 
+/**
+ * Where an instruction to the agent can begin.
+ *
+ * `never` and `avoid` are the two English words here that are as often a report
+ * about the speaker as an instruction to the listener. "I never run these
+ * locally, but please run them" raised an execute ban and would have blocked the
+ * request in the same sentence — the user's habit read as their instruction.
+ *
+ * An instruction is imperative, so it opens a clause. This is the set of places
+ * a clause opens: the start of the text, after sentence punctuation, after a
+ * comma, or after one of the words that chain an instruction onto another.
+ * Anything else in front of the word is a subject, and a sentence with a subject
+ * is a report.
+ */
+const IMPERATIVE_START = "(?:^|[.!?;:—]\\s*|,\\s*|\\b(?:and|but|so|please|then)\\s+)";
+
 const RESEARCH_DIRECT = new RegExp(
   [
     // "웹검색하지 마", "웹 검색하지 말아 주세요", "웹검색은 하지 말고".
@@ -136,9 +152,9 @@ const RESEARCH_DIRECT = new RegExp(
     `${WEB}[가-힣]{0,4}하?(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니`,
     "do\\s+not\\s+(?:use\\s+)?(?:web|internet|online|browse|search\\s+the\\s+web|research)",
     "don'?t\\s+(?:use\\s+)?(?:web|internet|online|browse|search\\s+the\\s+web|research)",
-    "never\\s+(?:research|browse|search)\\b",
+    `${IMPERATIVE_START}never\\s+(?:research|browse|search)\\b`,
     "without\\s+(?:web|internet|online|browsing|searching\\s+the\\s+web)",
-    "avoid\\s+web[_\\s]?(?:search|fetch)",
+    `${IMPERATIVE_START}avoid\\s+web[_\\s]?(?:search|fetch)`,
     "no\\s+web\\s+(?:search|access)",
   ].join("|"),
   "i",
@@ -161,9 +177,23 @@ const EXECUTE_DIRECT = new RegExp(
     // "실행하라는 게 아니라" — a correction rather than a prohibition, and the
     // sentence that produced this whole investigation.
     "실행하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
-    "don't\\s+(?:run|execute)",
+    "don'?t\\s+(?:run|execute)",
     "do\\s+not\\s+(?:run|execute)",
     "without\\s+(?:running|executing)",
+    // `never` and `avoid` were in the research class and in neither of the other
+    // two, so "Never run the tests" and "Avoid running commands" raised no ban at
+    // all. `functionalExtract`'s `ENGLISH_NEGATED` reads both words and refuses
+    // to make a requirement out of the verb after them — so the two modules
+    // disagreed about the same sentence, in the direction this file's header
+    // calls the dangerous one: no requirement to run, and nothing stopping it.
+    //
+    // `instead of` and `rather than` join them for the same reason, and because
+    // the Korean side has read that shape since it was written: "실행하라는 게
+    // 아니라" is above, and "instead of running it, show me the code" is the
+    // same sentence.
+    `${IMPERATIVE_START}never\\s+(?:run|execute)\\b`,
+    `${IMPERATIVE_START}avoid\\s+(?:running|executing)`,
+    "(?:instead\\s+of|rather\\s+than)\\s+(?:running|executing)",
   ].join("|"),
   "i",
 );
@@ -181,9 +211,13 @@ const MODIFY_DIRECT = new RegExp(
     `변경[하해]${MYEON_AN}`,
     `건드[리려]${MYEON_AN}`,
     "수정하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
-    "don't\\s+(?:modify|edit|change)",
+    "don'?t\\s+(?:modify|edit|change)",
     "do\\s+not\\s+(?:modify|edit|change)",
     "without\\s+(?:modifying|editing|changing)",
+    // The same three the execute class just gained, for the same reason.
+    `${IMPERATIVE_START}never\\s+(?:modify|edit|change)\\b`,
+    `${IMPERATIVE_START}avoid\\s+(?:modifying|editing|changing)`,
+    "(?:instead\\s+of|rather\\s+than)\\s+(?:modifying|editing|changing)",
   ].join("|"),
   "i",
 );

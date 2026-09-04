@@ -205,3 +205,59 @@ describe("going to the web, as the user forbids it", () => {
     assert.match(describeProhibition("research", "web_search"), /웹 검색/);
   });
 });
+
+/**
+ * The English half, and the two words that were only in one class.
+ *
+ * `never` and `avoid` were read by the research class and by neither of the
+ * other two, so "Never run the tests" and "Avoid running commands" raised no ban
+ * at all — while `functionalExtract`'s `ENGLISH_NEGATED` reads both words and
+ * refuses to make a requirement out of the verb after them. The two modules
+ * disagreed about the same sentence in the direction this file's header calls
+ * the dangerous one: no requirement to run, and nothing stopping it.
+ *
+ * The words then needed a position. "I never run these locally, but please run
+ * them" raised an execute ban, so a habit the user reported would have blocked
+ * the request they made in the same sentence. An instruction is imperative and
+ * opens a clause; anything else in front of the word is a subject, and a
+ * sentence with a subject is a report.
+ */
+describe("영어 금지문", () => {
+  const FORBIDS: ReadonlyArray<[string, string]> = [
+    ["Never run the tests.", "execute"],
+    ["Avoid running commands.", "execute"],
+    ["Instead of running it, show me the code.", "execute"],
+    ["Never modify the config.", "modify"],
+    ["Avoid editing the lockfile.", "modify"],
+    ["Rather than changing it, explain what it does.", "modify"],
+    ["Never search the web.", "research"],
+    ["Avoid web search.", "research"],
+    // The clause openers, so a ban chained onto an instruction still reads.
+    ["First, install. Never run the tests.", "execute"],
+    ["Please never modify the config.", "modify"],
+    ["Read the docs and never browse the web.", "research"],
+    // `dont` without the apostrophe, which the execute and modify classes
+    // required and the research class did not.
+    ["Dont run it.", "execute"],
+  ];
+
+  for (const [text, klass] of FORBIDS) {
+    test(`forbids ${klass}: ${text}`, () => {
+      assert.deepEqual([...prohibitionsIn(text)], [klass], text);
+    });
+  }
+
+  const REPORTS: readonly string[] = [
+    "I never run these locally, but please run them.",
+    "I avoid editing that file, but go ahead and edit it.",
+    "I never search online for this kind of thing, but search now.",
+    // `never mind` is not a ban on minding anything.
+    "Run the tests and never mind the warnings.",
+  ];
+
+  for (const text of REPORTS) {
+    test(`reports rather than forbids: ${text}`, () => {
+      assert.deepEqual([...prohibitionsIn(text)], [], text);
+    });
+  }
+});
