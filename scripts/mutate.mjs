@@ -890,7 +890,7 @@ const MUTATIONS = [
   // ---- C4.23: one 하다 shared by two acts --------------------------------------
   ["M230", "경동사 조사를 다시 좁힘 — `학습과 추론을 하고` 가 통째로 안 읽힘", "src/design/functionalExtract.ts",
     "const GAP = \"(?:(?:[은는만도을를]*|까지)\\\\s*)?\";",
-    "const GAP = \"(?:([은는만도]*\\\\s*)?\";", "recall"],
+    "const GAP = \"(?:[은는만도]*\\\\s*)?\";", "recall"],
   ["M231", "이어진 낱말이 동사 어간인지 보지 않음 — 이름 못 대는 것도 행위가 됨", "src/design/functionalExtract.ts",
     "    if (entry !== undefined) acts.push({ stem: word, ...entry });",
     "    if (true) acts.push({ stem: word, ...entry });", "recall"],
@@ -1117,6 +1117,50 @@ if (withCarriageReturn.length > 0) {
     `치환 문자열에 캐리지 리턴이 들어 있어 절대 일치하지 않습니다: ${withCarriageReturn
       .map(([id]) => id)
       .join(", ")}`,
+  );
+}
+
+// A replacement that cannot leave the file parsing is not a mutation.
+//
+// Two of these were written and both read as defences doing their job: the run
+// reported failures, the number was non-zero, and what had actually happened was
+// that the module stopped loading. The sweep learned to spot it — a one-line
+// mutation that leaves *nothing* passing has broken the file — but that costs a
+// whole run to find out, and both were structural enough to catch here in a
+// second.
+//
+// Each rule is one of the two incidents:
+//
+//   · M230 replaced `(?:(?:[…]|까지)` with `(?:([…]` — one parenthesis too many,
+//     and `new RegExp` threw at module load.
+//   · M259 replaced the last condition of an `if` with one ending in `||`,
+//     leaving a dangling operator.
+//
+// The bracket rule is *relative*: a replacement may legitimately be shorter or
+// longer, but it must not change how many brackets it leaves open, because the
+// code around it is unchanged. Verified against all 247 entries before it was
+// turned on, and it flagged none of them.
+const netBrackets = (text, open, close) =>
+  text.split(open).length - text.split(close).length;
+const DANGLING = /(?:\|\||&&|,|\+)\s*$/;
+const malformed = [];
+for (const [id, , , from, to] of MUTATIONS) {
+  for (const [open, close] of [
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+  ]) {
+    if (netBrackets(from, open, close) !== netBrackets(to, open, close)) {
+      malformed.push(`${id} (${open}${close} 짝이 맞지 않음)`);
+    }
+  }
+  if (!DANGLING.test(from) && DANGLING.test(to)) {
+    malformed.push(`${id} (연산자가 매달린 채 끝남)`);
+  }
+}
+if (malformed.length > 0) {
+  throw new Error(
+    `치환 결과가 파싱될 수 없습니다. 이런 변이는 물린 것이 아니라 깨진 것입니다: ${malformed.join(", ")}`,
   );
 }
 
