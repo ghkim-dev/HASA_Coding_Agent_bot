@@ -30,9 +30,15 @@ describe("동사와 목적어", () => {
   });
 
   test("목적어 생략이 허용되는 테스트·실행·설명", () => {
+    // The class phrase stays where it still says the user's word — 테스트 and
+    // 실행 are both inside their own — and steps aside where it does not.
+    // "설명해줘" used to come back as "요청한 내용을 살펴본다", which is a
+    // different act: explaining is not inspecting, and the same file already
+    // says so for the case with an object ("결과를 설명한다", below). The two
+    // now agree.
     assert.deepEqual(texts("테스트해줘"), ["테스트를 실행해 결과를 확인한다"]);
     assert.deepEqual(texts("실행해줘"), ["요청한 명령을 실행한다"]);
-    assert.deepEqual(texts("설명해줘"), ["요청한 내용을 살펴본다"]);
+    assert.deepEqual(texts("설명해줘"), ["설명한다"]);
   });
 
   test("생략된 목적어는 unresolved 로 기록되고 지어내지 않는다", () => {
@@ -63,7 +69,7 @@ describe("부정문", () => {
   });
 
   test("`-지 말고` 뒤의 긍정 요청은 살린다", () => {
-    assert.deepEqual(texts("수정하지 말고 설명만 해줘."), ["요청한 내용을 살펴본다"]);
+    assert.deepEqual(texts("수정하지 말고 설명만 해줘."), ["설명한다"]);
     assert.deepEqual(texts("실행하지 말고 코드만 보여줘."), ["코드를 살펴본다"]);
   });
 
@@ -321,7 +327,11 @@ describe("무엇이 대상이고 무엇이 대상이 아닌가", () => {
     assert.deepEqual(texts("프레임 수와 해상도를 설정할 수 있게 해줘."), [
       "프레임 수와 해상도를 설정한다",
     ]);
-    assert.deepEqual(texts("실패하면 다시 시도하게 해줘."), ["요청한 명령을 실행한다"]);
+    // "시도한다", not "요청한 명령을 실행한다". Neither says 다시 or 실패하면 —
+    // that is a real limit and it is unchanged. What changed is which word the
+    // requirement is built from, and the user's own 시도 beats a class phrase
+    // that names a different act.
+    assert.deepEqual(texts("실패하면 다시 시도하게 해줘."), ["시도한다"]);
   });
 
   test("조건절의 동사는 요청이 아니고, 대상도 아니다", () => {
@@ -388,12 +398,92 @@ describe("정정문은 요청이 아니다", () => {
   });
 });
 
+/**
+ * 하나의 하다를 나눠 쓰는 두 행위.
+ *
+ * "학습과 추론을 하고" 는 두 가지를 요청한 문장이고, 조사 간격을 넓혀 `추론을
+ * 하-` 를 동사로 읽게 만든 순간 목적어 스캔이 앞 낱말을 집어 **학습과를
+ * 추론한다** 를 내놓았다. 사용자가 부른 적 없는 대상에, 요청한 적 없는 행위가
+ * 묶인 문장이다.
+ *
+ * 그래서 여기서 재는 것은 두 낱말이 살아남았는지가 아니라 **무엇이 대상이
+ * 되었는지** 다. 첫 번째 테스트가 지어낸 대상을 직접 막고, 두 번째가 같은
+ * 모양의 평범한 명사 나열은 건드리지 않는다는 것을 막는다 — 어휘 목록이 유일한
+ * 판정 근거이므로, 그 목록을 보지 않게 되면 두 번째가 먼저 깨진다.
+ */
+describe("경동사 하나에 묶인 여러 행위", () => {
+  test("`A와 B를 하다` 는 두 행위이고, A 는 B 의 목적어가 아니다", () => {
+    const got = texts("학습과 추론을 하고, 결과를 비교해줘.");
+    assert.deepEqual(got, ["학습한다", "추론한다", "결과를 비교한다"]);
+    assert.ok(!got.some((t) => t.includes("학습과를")), got.join(", "));
+  });
+
+  test("동사가 아닌 명사 나열은 그대로 목적어다", () => {
+    // 같은 `X와 Y를 …` 모양이지만 개 와 고양이 는 동사 어간이 아니다. 어휘를
+    // 보지 않고 모양만 보면 이 문장이 먼저 부서진다.
+    assert.deepEqual(texts("개와 고양이를 분류하는 프로젝트를 만들어줘."), [
+      "개와 고양이를 분류하는 프로젝트를 추가한다",
+    ]);
+  });
+
+  test("이름을 댈 수 없는 것과 묶여 있어도 목적어로 삼지 않는다", () => {
+    // 전처리 는 이 파일이 아는 동사가 아니다. 그렇다고 학습 의 대상은 아니므로,
+    // 조사 간격만 넓혔을 때 나오던 "전처리와를 학습한다" 는 없는 대상을 지어낸
+    // 문장이었다. 읽지 못한 것은 구멍이고, 지어낸 것은 그보다 나쁘다.
+    const got = texts("전처리와 학습을 해줘.");
+    assert.deepEqual(got, ["학습한다"]);
+    assert.ok(!got.some((t) => t.includes("전처리와를")), got.join(", "));
+  });
+
+  test("과·와 로 끝나는 두 음절 낱말은 쪼개지 않는다", () => {
+    // 결과, 성과, 효과 는 접속조사가 아니라 낱말의 끝 음절이다. 앞이 한 음절뿐일
+    // 때는 접속으로 읽지 않는다 — 그러지 않으면 이 문장이 대상을 통째로 잃는다.
+    assert.deepEqual(texts("결과 확인을 해줘."), ["결과를 확인한다"]);
+    assert.deepEqual(texts("성과를 확인해줘."), ["성과를 확인한다"]);
+  });
+
+  test("시점을 말하는 구는 대상이 아니다", () => {
+    // "전처리 후를 학습한다" — 시각 하나를, 학습할 대상이라고 내놓고 있었다.
+    const got = texts("전처리 후 학습을 해줘.");
+    assert.deepEqual(got, ["학습한다"]);
+    assert.ok(!got.some((t) => t.includes("후")), got.join(", "));
+  });
+
+  test("`와` 가 붙은 비교 상대는 대상이 아니다", () => {
+    // "이미지와를 비교한다" 는 조사 두 개가 겹친, 존재하지 않는 대상이었다.
+    // 비교 상대를 문장에 되살리는 것은 아직 하지 못한다 — 그것은 구멍이고,
+    // 여기서 막는 것은 지어내기다.
+    const got = texts("기존 결과와 비교해줘.");
+    assert.deepEqual(got, ["비교한다"]);
+    assert.ok(!got.some((t) => t.includes("와를")), got.join(", "));
+  });
+
+  test("혼자 선 경동사도 사용자가 쓴 낱말로 읽는다", () => {
+    // `execute` 의 부류 문구는 "요청한 명령을 실행한다" 라서, 목적어가 없다는
+    // 이유로 학습 이라는 단 하나의 낱말이 사라지고 있었다.
+    assert.deepEqual(texts("학습까지 해줘."), ["학습한다"]);
+    assert.deepEqual(texts("배포를 해줘."), ["배포한다"]);
+    // 부류 문구가 이미 그 낱말을 담고 있으면 그대로 둔다. "테스트를 실행해
+    // 결과를 확인한다" 는 "테스트한다" 보다 많은 것을 말하고, 잃는 것은 없다.
+    assert.deepEqual(texts("테스트를 해줘."), ["테스트를 실행해 결과를 확인한다"]);
+    // 목적어 없는 `modify` 는 여전히 요구사항이 아니다. 무엇을 바꾸라는 것인지
+    // 문장이 말하지 않았고, 정하는 것은 지어내는 것이다.
+    assert.deepEqual(texts("번역을 해줘."), []);
+  });
+});
+
 describe("읽지 않기로 한 것들", () => {
   // Pinned so the gaps stay visible. Asserting that nothing is produced is the
   // only way a deliberate omission stays a decision instead of decaying into an
   // oversight nobody remembers making.
   test("`쓰다` 는 읽지 않는다 — 쓰기와 사용하기를 가릴 수 없다", () => {
-    assert.deepEqual(texts("CNN과 Transformer를 쓰고 학습까지 해줘."), []);
+    // The claim is about `쓰다`, and it used to be written as "the whole
+    // sentence yields nothing" — which was true only because the rest of the
+    // sentence was unread too. "학습까지 해줘" is a light verb and is now read,
+    // so the assertion says what it always meant: the 쓰기 clause contributes
+    // nothing, and nothing the extractor emits pretends to know what was 쓰였다.
+    const used = texts("CNN과 Transformer를 쓰고 학습까지 해줘.");
+    assert.deepEqual(used, ["학습한다"]);
     assert.deepEqual(texts("보고서를 쓰고 공유해줘."), []);
   });
 

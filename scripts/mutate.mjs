@@ -883,6 +883,22 @@ const MUTATIONS = [
   ["M229", "조회 동사 없이도 출처로 읽음", "src/agent/sourceProvenance.ts",
     "const LOOKUP_VERB =",
     "const LOOKUP_VERB = /(?:)/u;", "namedsrc"],
+  // ---- C4.23: one 하다 shared by two acts --------------------------------------
+  ["M230", "경동사 조사를 다시 좁힘 — `학습과 추론을 하고` 가 통째로 안 읽힘", "src/design/functionalExtract.ts",
+    "const GAP = \"(?:(?:[은는만도을를]*|까지)\\\\s*)?\";",
+    "const GAP = \"(?:([은는만도]*\\\\s*)?\";", "recall"],
+  ["M231", "이어진 낱말이 동사 어간인지 보지 않음 — 이름 못 대는 것도 행위가 됨", "src/design/functionalExtract.ts",
+    "    if (entry !== undefined) acts.push({ stem: word, ...entry });",
+    "    if (true) acts.push({ stem: word, ...entry });", "recall"],
+  ["M233", "과·와 로 끝나는 두 음절 낱말을 쪼갬 — `결과 확인을 해줘` 가 대상을 잃음", "src/design/functionalExtract.ts",
+    "    const match = /(?:^|[\\s,(])([가-힣]{2,})\\s*(?:와|과|및|,)\\s*$/u.exec(head);",
+    "    const match = /(?:^|[\\s,(])([가-힣]+)\\s*(?:와|과|및|,)\\s*$/u.exec(head);", "recall"],
+  ["M234", "시점을 말하는 구를 대상으로 삼음 — `전처리 후를 학습한다`", "src/design/functionalExtract.ts",
+    "  if (TIME_HEAD.test(run.at(-1) ?? \"\")) run.length = 0;",
+    "  if (false) run.length = 0;", "recall"],
+  ["M232", "목적어 없는 행위를 항상 부류 문구로 읽음 — 사용자가 쓴 낱말이 사라짐", "src/design/functionalExtract.ts",
+    "  if (stem === \"\" || wide.includes(stem)) return wide;",
+    "  return wide;", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

@@ -68,7 +68,7 @@ export interface FunctionalCandidate {
  * Prohibitions are `statedProhibitions`'s job. This must not duplicate or
  * contradict it, which is what `NEGATED` below enforces.
  */
-const GAP = "(?:[은는만도]*\\s*)?";
+const GAP = "(?:(?:[은는만도을를]*|까지)\\s*)?";
 
 interface VerbEntry {
   pattern: RegExp;
@@ -100,8 +100,19 @@ interface VerbEntry {
  */
 const STEMS: string[] = [];
 
+/**
+ * What each noun-verb stem means, for the light-verb reading below.
+ *
+ * `STEMS` alone says a word is a verb somewhere; this says which act it is
+ * and how it reads. Filled by the same call, for the same reason `STEMS` is:
+ * a stem added in one place and forgotten in another is the bug this file
+ * keeps finding.
+ */
+const STEM_ENTRY = new Map<string, { action: ActionKind; phrase: string }>();
+
 const verb = (stem: string, tail: string, action: ActionKind, render?: string): VerbEntry => {
   STEMS.push(stem);
+  STEM_ENTRY.set(stem, { action, phrase: render ?? `${stem}한다` });
   return {
     pattern: new RegExp(`${stem}${GAP}${tail}`),
     action,
@@ -380,6 +391,14 @@ const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
  */
 const BOUND_NOUN = /^(?:것|걸|거|게|건|바|줄|뿐|때문|따름|수|데)$/u;
 
+/**
+ * A noun that says only *when*: `전처리 후`, `배포 전`, `학습 중`.
+ *
+ * The clause splitter already takes "…한 뒤" and "…한 다음" out of the sentence;
+ * these are the same words standing after a plain noun, which it cannot see.
+ */
+const TIME_HEAD = /^(?:후|뒤|전|중|다음|이후|이전|동안|사이)$/u;
+
 /** A number word standing in front of its counter: `한 장`, `두 개`, `5초`. */
 const NUMERAL = /^(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇|여러|\d+)$/u;
 
@@ -614,6 +633,14 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
   // 걸 만들어줘" is the same sentence with a verb it happens to know.
   if (trailing?.grammar === true && BOUND_NOUN.test(trailing.text)) run.length = 0;
 
+  // A phrase that ends in a time word is a *when*, not a *what*.
+  //
+  // "전처리 후 학습을 해줘" gave the target `전처리 후` — a moment in time,
+  // offered as the thing to train. The noun in front of 후/뒤/전/중 belongs to
+  // the time phrase, so neither of them is the target and taking only the head
+  // off would leave `전처리` standing as one.
+  if (TIME_HEAD.test(run.at(-1) ?? "")) run.length = 0;
+
   // Two of that run, unless the run is a list.
   //
   // A coordinated list is one noun phrase however many members it has, and
@@ -726,6 +753,86 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
       : target;
 
   return { target, shown: described };
+}
+
+/**
+ * How an act with no target reads.
+ *
+ * The class phrase is the default and usually the better sentence: "테스트해줘"
+ * with nothing to test means "테스트를 실행해 결과를 확인한다", which says more
+ * than the verb alone did and says it in the user's word.
+ *
+ * It stops being the better sentence when the class phrase no longer contains
+ * that word. "학습까지 해줘" is an `execute`, and `execute` reads "요청한 명령을
+ * 실행한다" — a requirement that has quietly dropped the only thing the user
+ * named. So the class phrase stands while it still says what they said, and the
+ * stem takes over when it does not.
+ */
+function actOnlyText(action: ActionKind, stem: string): string {
+  const wide = ACT_ONLY[action];
+  if (stem === "" || wide.includes(stem)) return wide;
+  return STEM_ENTRY.get(stem)?.phrase ?? wide;
+}
+
+/** One act, named by the word the user wrote for it. */
+interface NamedAct {
+  readonly stem: string;
+  readonly action: ActionKind;
+  readonly phrase: string;
+}
+
+/** A run of nouns conjoined in front of a verb, and which of them name acts. */
+interface CoordinatedRun {
+  /** Every conjoined word, in the order the sentence gave them. */
+  readonly words: readonly string[];
+  /** Those this file can name an act for, with the act. */
+  readonly acts: readonly NamedAct[];
+}
+
+const NO_RUN: CoordinatedRun = { words: [], acts: [] };
+
+/**
+ * Nouns conjoined immediately in front of a verb.
+ *
+ * Korean says "학습과 추론을 하고" for "train and infer": two acts sharing one
+ * 하다. The particle gap above is what lets `추론을 하고` be read as a verb at
+ * all — and the moment it was, the object scan did what it always does and took
+ * the word in front, producing **학습과를 추론한다**: a target nobody named,
+ * bound to an act nobody asked for, out of a sentence that had said two
+ * perfectly ordinary things.
+ *
+ * Two rules keep it from firing on ordinary sentences, and both are load-bearing:
+ *
+ *   · **Two syllables at least.** 와/과 is also the last syllable of ordinary
+ *     nouns — 결과, 성과, 효과, 사과 — and "결과 확인을 해줘" would otherwise be
+ *     read as `결`-conjoined-with-확인 and lose its target entirely. A Korean
+ *     content noun of one syllable is rare enough, and the damage of splitting a
+ *     two-syllable word is certain enough, that the trade is worth making in
+ *     this direction. It also keeps "개와 고양이를" whole.
+ *   · **The lexicon decides what is an act**, not the grammar. `words` is what
+ *     the sentence conjoined; `acts` is the part this file can name. A conjoined
+ *     word it cannot name is left unread — but it is still not the target, so
+ *     the caller drops the object rather than rendering "전처리와를 학습한다".
+ *     A missed request is a gap; a request bound to an invented target is worse.
+ */
+function coordinatedBefore(clause: string, verbStart: number): CoordinatedRun {
+  const words: string[] = [];
+  let head = clause.slice(0, verbStart);
+  for (;;) {
+    const match = /(?:^|[\s,(])([가-힣]{2,})\s*(?:와|과|및|,)\s*$/u.exec(head);
+    if (match === null) break;
+    words.unshift(match[1]);
+    head = head.slice(0, match.index + match[0].indexOf(match[1]));
+  }
+  // The one place the lexicon is consulted for this run. The caller takes these
+  // as given rather than looking each word up a second time — two guards for one
+  // question is how a guard stops being load-bearing without anyone noticing.
+  const acts: NamedAct[] = [];
+  for (const word of words) {
+    const entry = STEM_ENTRY.get(word);
+    if (entry !== undefined) acts.push({ stem: word, ...entry });
+  }
+  return { words, acts };
 }
 
 /**
@@ -1318,6 +1425,37 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
       // reading the very same words.
       if (NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8))) continue;
 
+      // Which noun-verb this was, when it was one. `phrase` says how the act
+      // reads; this says which word of the user's it was built from, and both
+      // the light-verb branch and the act-only rendering below need the word.
+      const own = STEMS.find((stem) => match[0].startsWith(stem)) ?? "";
+
+      // "학습과 추론을 하고" — see `coordinatedBefore`. What is conjoined in
+      // front of a noun-verb is not its target: this clause spent its noun
+      // phrase on the verbs. The words it could name become acts of their own,
+      // the words it could not are left unread, and either way the object scan
+      // below never sees them.
+      const run = own === "" ? NO_RUN : coordinatedBefore(clause, match.index);
+      if (run.words.length > 0) {
+        // `own` came out of `STEMS`, so the map has it. The target of each act
+        // is the noun the user wrote for it, which is what a light verb makes
+        // of a noun-verb — and it is also what keeps two conjoined acts from
+        // collapsing into one entry in `seen`.
+        const ownAct = STEM_ENTRY.get(own);
+        for (const act of ownAct === undefined ? run.acts : [...run.acts, { stem: own, ...ownAct }]) {
+          const key = `${act.action}:${act.stem}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({
+            text: act.phrase,
+            action: act.action,
+            object: act.stem,
+            span: { turnId: input.turnId, start: at, end: at + source.replace(/\s+$/, "").length },
+          });
+        }
+        break;
+      }
+
       const { target: object, shown } = objectBefore(clause, match.index);
       // No object and no act that stands alone: the user asked for something
       // this cannot name, and naming it anyway is inventing.
@@ -1328,7 +1466,7 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
       const manner = object.length === 0 ? "" : mannerBefore(clause, match.index);
       const text =
         object.length === 0
-          ? ACT_ONLY[action]
+          ? actOnlyText(action, own)
           : `${shown}${objectParticle(shown)} ${manner === "" ? "" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`;
       // Keyed on the act and its target, not the rendered sentence, so a
       // rewording never silently merges two different asks.
