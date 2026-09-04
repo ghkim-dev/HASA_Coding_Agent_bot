@@ -472,6 +472,35 @@ describe("경동사 하나에 묶인 여러 행위", () => {
   });
 });
 
+/**
+ * `-어서` 는 조건부 절 경계다.
+ *
+ * 무조건 자르면 "웹에서 찾아서 정리해줘" 가 요구사항 하나에서 영으로 떨어진다 —
+ * 한국어는 뒤 절의 목적어를 생략하고, 목적어 없는 `modify` 절은 버려지기
+ * 때문이다. 자르지 않으면 "확인해서 모델 목록을 알려줘" 의 뒤 절이 통째로
+ * 사라진다. 두 문장을 가르는 것은 **뒤 절이 제 대상을 스스로 부르는가** 하나뿐이고,
+ * 그것이 여기서 재는 것이다.
+ */
+describe("`-어서` 는 뒤 절이 제 대상을 부를 때만 경계다", () => {
+  test("뒤 절이 목적어를 부르면 두 요청으로 읽는다", () => {
+    assert.deepEqual(texts("모델 목록을 확인해서 후보를 비교해줘."), [
+      "모델 목록을 확인한다",
+      "후보를 비교한다",
+    ]);
+  });
+
+  test("뒤 절이 목적어를 생략하면 자르지 않는다", () => {
+    // 자르면 "정리해줘" 만 남고, 목적어 없는 `modify` 는 요구사항이 되지 못해
+    // 문장 전체가 사라진다.
+    assert.deepEqual(texts("최신 요약 모델을 웹에서 찾아서 정리해줘."), ["요약 모델을 정리한다"]);
+  });
+
+  test("`서` 로 끝나는 명사는 경계가 아니다", () => {
+    assert.deepEqual(texts("명세서를 갱신해줘."), ["명세서를 갱신한다"]);
+    assert.deepEqual(texts("src 폴더에서 로그를 추가해줘."), ["로그를 추가한다"]);
+  });
+});
+
 describe("읽지 않기로 한 것들", () => {
   // Pinned so the gaps stay visible. Asserting that nothing is produced is the
   // only way a deliberate omission stays a decision instead of decaying into an

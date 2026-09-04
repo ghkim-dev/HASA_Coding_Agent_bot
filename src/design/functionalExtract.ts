@@ -902,13 +902,18 @@ function objectParticle(object: string): string {
  * the positive request the user actually made. It had a dedicated branch until
  * mutation testing showed that deleting it changed no behaviour at all.
  *
- * `-어서`/`-해서` is **not** here, and was tried. "…를 확인해서 모델 목록을 알려줘"
- * is two acts and only the first is read, which the boundary would fix. It costs
- * more than it recovers: Korean elides the shared object in the second clause,
- * and a `modify`/`create`/`remove` clause with no object is dropped outright, so
- * "최신 요약 모델을 웹에서 찾아서 정리해줘" went from one requirement to none.
- * Splitting a sentence is only safe where each half can still name its own
- * target, and `-어서` is the connective where that is least often true.
+ * `-어서`/`-해서` is here under a condition, and the condition is the sentence
+ * the unconditional version broke. "…를 확인해서 모델 목록을 알려줘" is two acts
+ * and only the first was read; "최신 요약 모델을 웹에서 찾아서 정리해줘" is one,
+ * because Korean elides the shared object in the second clause and a clause with
+ * no object of its own is dropped outright — so splitting it turned one
+ * requirement into none.
+ *
+ * The rule that separates them is the one the failure states: split only where
+ * the second half **names its own target**. The lookahead asks for an object
+ * mark after the connective and before the sentence ends, which "모델 목록을
+ * 알려줘" has and "정리해줘" does not. `[해어아여]서` rather than a bare `서`, so
+ * `문서`, `명세서`, `순서` and the locative `-에서` are untouched.
  *
  * `-되` is here for "이름을 바꾸되 기존 동작은 유지해줘" — "do X but Y", which is
  * two requests and was read as one. Since only the first matching verb in a clause
@@ -917,7 +922,7 @@ function objectParticle(object: string): string {
  * after a Hangul syllable is required, so "안 되" and "적용되었다" are untouched.
  */
 const BOUNDARIES =
-  /(?<=[.!?。])(?=\s|$)|(?<=[가-힣]고\s)|(?<=[가-힣]되\s)|(?<=한\s*뒤\s)|(?<=한\s*다음\s)|(?<=면서\s)|(?<=,\s)/;
+  /(?<=[.!?。])(?=\s|$)|(?<=[가-힣]고\s)|(?<=[가-힣]되\s)|(?<=한\s*뒤\s)|(?<=한\s*다음\s)|(?<=면서\s)|(?<=,\s)|(?<=[해어아여]서\s)(?=[^.!?。]*[을를]\s)/;
 
 /**
  * Functional candidates in one turn.

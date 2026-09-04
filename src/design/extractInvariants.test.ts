@@ -84,8 +84,9 @@ describe("추출기 불변식", () => {
       // requirement. 124 → 127 with the light verb: "학습과 추론을 하고" is two
       // acts sharing one 하다 and was one unread clause, and "학습까지 해줘" was
       // another. Two of the three new candidates name a target, because a
-      // noun-verb in that construction is its own noun.
-      { turns: 117, candidates: 127, withObject: 114, forbidding: 14 },
+      // noun-verb in that construction is its own noun. 127 → 129 when `-어서`
+      // became a clause boundary for the halves that name their own target.
+      { turns: 117, candidates: 129, withObject: 116, forbidding: 14 },
       "말뭉치가 달라졌습니다 — 의도한 변경이면 이 숫자를 갱신하십시오",
     );
   });
