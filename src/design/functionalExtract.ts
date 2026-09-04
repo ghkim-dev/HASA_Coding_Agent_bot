@@ -1172,9 +1172,25 @@ const ENGLISH_FEATURE_FRAME =
  * `for`, `of` and `about` stay out: those introduce the verb's complement
  * rather than an adjunct — "check for errors" is about the errors — and `for`
  * comes off as a leading particle instead.
+ *
+ * A later pass over the same three topics found six more, every one of them a
+ * target the sentence does not contain:
+ *
+ *     show me the plan without editing anything  →  plan without editing anything
+ *     run the tests unless they are slow         →  tests unless they are slow
+ *     fix the bug except for the test file       →  bug except for the test file
+ *     generate an image if the prompt is valid   →  image if the prompt is valid
+ *     export the video only for the demo         →  video only for the demo
+ *     add a button between the two panels        →  button between the two panels
+ *
+ * `without` in particular could not be reached from `with`, because the word
+ * boundary that keeps `within` out keeps it out too. `only` is here as the word
+ * that introduces the restriction; it needs the space in front of it, which is
+ * what leaves "the only file" alone — the article comes off first, so `only`
+ * then opens the remainder and matches nothing.
  */
 const ENGLISH_OBJECT_END =
-  /\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\b|[.,;:!?]/i;
+  /\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|without|by|via|using|unless|except|if|whether|between|among|during|only|within|inside|outside|above|below|beneath|across|around|behind|beyond|near|until|since|throughout|towards?|against|upon)\b|[.,;:!?]/i;
 
 const MAX_ENGLISH_OBJECT = 60;
 

@@ -1074,3 +1074,40 @@ describe("결정론", () => {
     }
   });
 });
+
+/**
+ * 영어 목적어를 끊는 말들.
+ *
+ * 같은 세 주제를 영어로 다시 물었을 때 나온 여섯 문장. 모두 문장에 없는 대상을
+ * 만들어내고 있었고, `without` 은 `with` 에서 닿을 수 없었다 — `within` 을 막는
+ * 낱말 경계가 `without` 도 막는다.
+ */
+describe("영어 부가어는 목적어를 끊는다", () => {
+  const CASES: ReadonlyArray<[string, string]> = [
+    ["Show me the plan without editing anything.", "plan"],
+    ["Run the tests unless they are slow.", "tests"],
+    ["Fix the bug except for the test file.", "bug"],
+    ["Generate an image if the prompt is valid.", "image"],
+    ["Export the video only for the demo.", "video"],
+    ["Add a button between the two panels.", "button"],
+    ["Read the file within the folder.", "file"],
+    ["Run the tests against the staging environment.", "tests"],
+  ];
+  for (const [text, object] of CASES) {
+    test(text, () => {
+      assert.equal(of(text)[0]?.object, object);
+    });
+  }
+
+  test("동사의 보어를 여는 말은 여전히 목적어의 일부다", () => {
+    // `for`, `of`, `about` 은 목록 밖에 있다 — "check for errors" 는 오류에
+    // 대한 요청이다.
+    assert.equal(of("Check for errors in the log.")[0]?.object, "errors");
+  });
+
+  test("`only` 는 관사 뒤에서는 목적어의 일부다", () => {
+    // 앞에 공백을 요구하므로, 관사가 떨어져 나간 뒤 문두에 선 `only` 는
+    // 아무것도 끊지 않는다.
+    assert.equal(of("Fix the only file that fails.")[0]?.object, "only file");
+  });
+});

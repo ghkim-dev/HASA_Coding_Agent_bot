@@ -806,7 +806,7 @@ const MUTATIONS = [
     "  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|걸|거|바|줄|뿐|때문|따름|아니|아니라|것이|말이|하나|둘|셋|넷)$/;", "recall"],
   // ---- C4.18: the English pass, and the escape that eats itself -------------
   ["M204", "영어 관계절과 부사구를 목적어에 다시 붙임", "src/design/functionalExtract.ts",
-    "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\\b|[.,;:!?]/i;",
+    "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|without|by|via|using|unless|except|if|whether|between|among|during|only|within|inside|outside|above|below|beneath|across|around|behind|beyond|near|until|since|throughout|towards?|against|upon)\\b|[.,;:!?]/i;",
     "  /\\s+(?:and|then|but|so|because|after|before|while|to)\\b|[.,;:!?]/i;", "english"],
   ["M205", "영어 `and` 를 언제나 절 경계로 봄", "src/design/functionalExtract.ts",
     "    if ((!joins && !listComma) || opensWithEnglishVerb(tail)) {",
@@ -1035,6 +1035,10 @@ const MUTATIONS = [
   ["M275", "명령문 자리를 보지 않음 — `I never run these locally, but please run them` 이 금지가 됨", "src/agent/statedProhibitions.ts",
     "const IMPERATIVE_START = \"(?:^|[.!?;:—]\\\\s*|,\\\\s*|\\\\b(?:and|but|so|please|then)\\\\s+)\";",
     "const IMPERATIVE_START = \"\";", "safety"],
+  // ---- C4.36: the English adjuncts the stop list did not carry -----------------
+  ["M276", "영어 부가어를 목적어에 다시 붙임 — `plan without editing anything`", "src/design/functionalExtract.ts",
+    "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|without|by|via|using|unless|except|if|whether|between|among|during|only|within|inside|outside|above|below|beneath|across|around|behind|beyond|near|until|since|throughout|towards?|against|upon)\\b|[.,;:!?]/i;",
+    "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\\b|[.,;:!?]/i;", "english"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
