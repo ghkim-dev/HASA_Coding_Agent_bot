@@ -305,9 +305,14 @@ const ACTION_TEXT: Readonly<Record<ActionKind, string>> = {
  * `그리고`, "재현해줘. 그리고 검증해줘." produced the requirement "그리고를
  * 확인한다". The bound-noun fragments (`수`, `있는`, `할`) are here because
  * "사용할 수 있는 모델을 확인해줘" came out as "있 모델을 확인한다".
+ *
+ * `하나`/`둘`/`셋`/`넷` are the standalone number words, which count a list
+ * rather than name a thing: "mp4랑 gif 둘 다 저장해줘" put the 둘 into the
+ * target. Only the standalone forms — the adnominal `한`/`두`/`세`/`네` are in
+ * `NUMERAL`, where they pair with the counter that follows them.
  */
 const NOT_AN_OBJECT =
-  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|뭔가|무언가|누군가|언젠가|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|걸|거|바|줄|뿐|때문|따름|아니|아니라|것이|말이)$/;
+  /^(?:그것|이것|저것|그거|이거|저거|그|이|저|좀|다|전부|모두|잘|적당히|알아서|한번|다시|또|이번|이번에|이번에는|안에서만|여기서|거기서|말고|그리고|또한|하지만|그런데|및|등|수|있는|있을|없는|않는|않은|않을|되는|할|하는|해서|해|그대로|반드시|가능하면|절대|꼭|제대로|계속|미리|먼저|우선|전혀|아직|실제|실제로|맞춰|맞추어|따라|위해|통해|대해|같이|함께|오늘|어제|내일|왜|어떻게|무엇|뭐|뭔가|무언가|누군가|언젠가|어디|언제|누가|얼마나|어떤|어느|무슨|게|것|건|걸|거|바|줄|뿐|때문|따름|아니|아니라|것이|말이|하나|둘|셋|넷)$/;
 
 /**
  * Verbs whose act is the requirement even with no stated target.
@@ -403,12 +408,18 @@ const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
 const BOUND_NOUN = /^(?:것|걸|거|게|건|바|줄|뿐|때문|따름|수|데)$/u;
 
 /**
- * A noun that says only *when*: `전처리 후`, `배포 전`, `학습 중`.
+ * A noun that says only *when*: `전처리 후`, `학습 중`, `생성 이후`.
  *
  * The clause splitter already takes "…한 뒤" and "…한 다음" out of the sentence;
  * these are the same words standing after a plain noun, which it cannot see.
+ *
+ * Only the words that head a time phrase and never modify a noun. `전`, `다음`
+ * and `이전` were here and came out: they are just as often adnominal — "이전
+ * 결과를 비교해줘", "다음 단계를 실행해줘" — and a head rule applied to those
+ * deletes the modifier the user wrote. The ones left cannot stand in front of a
+ * noun in that way.
  */
-const TIME_HEAD = /^(?:후|뒤|전|중|다음|이후|이전|동안|사이)$/u;
+const TIME_HEAD = /^(?:후|뒤|중|이후|동안|사이)$/u;
 
 /** A number word standing in front of its counter: `한 장`, `두 개`, `5초`. */
 const NUMERAL = /^(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|몇|여러|\d+)$/u;
@@ -559,6 +570,24 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
     // and passed every test `먼저` fails.
     const bare = out.replace(/,$/u, "").replace(/[은는만이가]$/u, "");
 
+    // The same token with *any* case particle taken off, for the two lexical
+    // tests that ask what kind of noun this is.
+    //
+    // `bare` above takes off one particle from a closed set, which is right for
+    // separating `오늘은` from `낡은`. It is not enough for a bound noun or a
+    // time word, because those turn up wearing whatever particle the sentence
+    // needed — and each one then walked into a target:
+    //
+    //     그중 제일 나은 걸로 영상을 만들어줘  →  걸로 영상을 만든다
+    //     생성 중에는 진행률을 보여줘          →  중에는 진행률을 살펴본다
+    //
+    // `걸` and `중` are both already in the lists that would have stopped them;
+    // what got past was the `로` and the `에는`. Kept apart from `bare` because
+    // this strip is deliberately greedy and would cut real nouns short — `속도`
+    // becomes `속` — which is harmless for asking "is this a bound noun" and
+    // wrong for anything else.
+    const head = out.replace(/(?:에는|에도|에서|에게|에|으로|로|만|도|은|는|이|가)+$/u, "");
+
     return {
       text: out,
       /** This token was marked as an object by the sentence itself. */
@@ -572,6 +601,16 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
        * the thing being converted produced "5초짜리를 영상으로 변환한다".
        */
       carriesNoun: located !== token && located.length > 0,
+      /**
+       * Nothing to the left of this can be the target.
+       *
+       * Stronger than `grammar`, which is only skipped while the run has not
+       * started — the scan below steps over an adverb to reach the noun behind
+       * it, and that is right for an adverb. It is wrong for a time head: the
+       * noun in front of 후/중/이후 belongs to the time phrase, so stepping over
+       * it made "전처리 후 학습을 해줘" mean training the preprocessing.
+       */
+      closesPhrase: TIME_HEAD.test(head),
       // Not part of a noun phrase, whatever it is next to. Three kinds, and each
       // one was a wrong target in a real sentence: a locative that had its
       // particle taken off ("CI에서 pytest를" → "CI pytest"), a clause ending
@@ -580,6 +619,8 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
         out.length === 0 ||
         NOT_AN_OBJECT.test(out) ||
         NOT_AN_OBJECT.test(bare) ||
+        BOUND_NOUN.test(head) ||
+        TIME_HEAD.test(head) ||
         located !== token ||
         CLAUSE_ENDING.test(out) ||
         CLAUSE_ENDING.test(bare) ||
@@ -608,6 +649,7 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
   for (let i = tokens.length - 1; i >= 0; i -= 1) {
     const token = tokens[i];
     if (token === undefined) continue;
+    if (token.closesPhrase) break;
     if (token.grammar) {
       if (run.length === 0) continue;
       break;
@@ -649,13 +691,6 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
   // 걸 만들어줘" is the same sentence with a verb it happens to know.
   if (trailing?.grammar === true && BOUND_NOUN.test(trailing.text)) run.length = 0;
 
-  // A phrase that ends in a time word is a *when*, not a *what*.
-  //
-  // "전처리 후 학습을 해줘" gave the target `전처리 후` — a moment in time,
-  // offered as the thing to train. The noun in front of 후/뒤/전/중 belongs to
-  // the time phrase, so neither of them is the target and taking only the head
-  // off would leave `전처리` standing as one.
-  if (TIME_HEAD.test(run.at(-1) ?? "")) run.length = 0;
 
   // Two of that run, unless the run is a list.
   //
