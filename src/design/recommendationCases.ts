@@ -289,4 +289,73 @@ export const RECOMMENDATION_CASES: readonly RecommendationCase[] = [
     expectWinner: "measured",
     becauseCapability: "coding",
   },
+
+  // --- the three project topics, which this file had never been asked ------
+  //
+  // Fourteen cases and six requests, every one of them a short coding chore —
+  // the corpus the extractor started from, and the same blind spot. The
+  // designer is now asked generative-media requests all the way through and the
+  // router had never been scored on one, so "14/14" said as much about the
+  // requests as about the ranker.
+  //
+  // Written the same way as everything above: the candidates are synthetic and
+  // the expectation is which axis decides, never which real model wins.
+  {
+    id: "media-build-prefers-coding",
+    request: "업로드한 사진을 5초짜리 영상으로 만들어줘.",
+    why:
+      "프로젝트1의 문장 그대로다. 영상을 만들어달라는 것은 그 일을 하는 코드를 " +
+      "만들어달라는 것이고, 최상위 수요는 coding 으로 나온다.",
+    candidates: pair("coding", "coder", "not-a-coder", EVEN),
+    expectWinner: "coder",
+    becauseCapability: "coding",
+  },
+  {
+    id: "media-feature-prefers-instruction-following",
+    request: "프레임 수와 해상도를 설정할 수 있게 해줘.",
+    why:
+      "사용자가 무엇을 조절할 수 있어야 하는지 두 가지를 명시했다. 둘 중 하나만 " +
+      "만드는 것은 요청을 지키지 않은 것이므로 instructionFollowing 이 걸린다.",
+    candidates: pair("instructionFollowing", "obedient", "wilful", { ...EVEN, coding: 0.7 }),
+    expectWinner: "obedient",
+    becauseCapability: "instructionFollowing",
+  },
+  {
+    id: "media-quality-check-prefers-debugging",
+    request: "렌더링 속도를 측정하고 결과를 비교해줘.",
+    why:
+      "재고 비교하라는 요청이다. 무엇이 느린지 알아내는 일이므로 debugging 이 " +
+      "최상위 수요이고, 코드를 잘 쓰는 것으로는 대신할 수 없다.",
+    candidates: pair("debugging", "debugger", "not-a-debugger", EVEN),
+    expectWinner: "debugger",
+    becauseCapability: "debugging",
+  },
+  {
+    id: "media-model-hunt-prefers-source-grounding",
+    request: "Hugging Face에서 쓸 만한 영상 생성 모델을 찾아줘.",
+    why:
+      "사용자가 어디를 볼지 이미 말했다. 밖에 나가는 능력만으로는 부족하고, 읽은 " +
+      "것을 그 출처와 함께 말하는 능력이 같은 값으로 요구된다.",
+    candidates: pair("sourceGrounding", "cites-sources", "makes-it-up", { ...EVEN, webResearch: 0.7 }),
+    expectWinner: "cites-sources",
+    becauseCapability: "sourceGrounding",
+  },
+  {
+    id: "media-render-prefers-execution",
+    request: "생성한 영상을 mp4로 저장하고 품질을 확인해줘.",
+    why: "저장하고 확인하는 일은 무언가를 돌려야 끝난다. commandExecution 이 요구된다.",
+    candidates: pair("commandExecution", "runner", "talker", { ...EVEN, coding: 0.7, debugging: 0.7 }),
+    expectWinner: "runner",
+    becauseCapability: "commandExecution",
+  },
+  {
+    id: "continue-prefers-continuity",
+    request: "이어서 해줘.",
+    why:
+      "여러 턴에 걸친 작업을 이어가는 것이 이 요청의 전부다. multiTurnContinuity 는 " +
+      "수요 표에 있으면서 한 번도 결정 축이 된 적이 없었다.",
+    candidates: pair("multiTurnContinuity", "remembers", "forgets", EVEN),
+    expectWinner: "remembers",
+    becauseCapability: "multiTurnContinuity",
+  },
 ];

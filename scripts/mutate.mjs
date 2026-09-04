@@ -665,7 +665,7 @@ const MUTATIONS = [
     "  const understood = stated.length > 0;",
     "  const understood = true;", "designer"],
   ["M160", "못 읽은 요청에도 모델을 추천", "src/design/harnessDesign.ts",
-    "    !understood || input.models === undefined || input.models.length === 0",
+    "    !characterised || input.models === undefined || input.models.length === 0",
     "    input.models === undefined || input.models.length === 0", "designer"],
   ["M161", "요약이 못 읽었다는 사실을 숨김", "src/design/harnessDesign.ts",
     "  if (!design.understood) {",
@@ -969,6 +969,13 @@ const MUTATIONS = [
   ["M255", "웹에 가지 않은 턴도 못 읽은 출처로 막음 — 이름을 잘못 읽은 값이 실행 전체가 됨", "src/agent/taskState.ts",
     "  return task.evidence.some((e) => e.kind === \"web_source\");",
     "  return true;", "namedgate"],
+  // ---- C4.30: a continuation is a shape of work ---------------------------------
+  ["M256", "이어가는 턴을 다시 읽기 요청으로 라우팅 — multiTurnContinuity 를 아무도 요구하지 않음", "src/design/harnessDesign.ts",
+    "  if (relationOf(text, false) === \"continue\") intents.add(\"continue\");",
+    "  if (false) intents.add(\"continue\");", "recommend"],
+  ["M257", "요구사항이 없으면 이어가는 턴도 추천하지 않음 — 기준선과 구별하지 않음", "src/design/harnessDesign.ts",
+    "  const characterised = understood || intents.includes(\"continue\");",
+    "  const characterised = understood;", "recommend"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

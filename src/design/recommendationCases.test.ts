@@ -94,6 +94,14 @@ describe("the recommendation, scored", () => {
     // The number this file exists to produce. Pinned rather than bounded: a
     // drop is a regression someone should look at, and a rise is a result
     // someone should record.
+    //
+    // 14/14 → 20/20. The six that joined it are the three project topics this
+    // file had never been asked and the continuation turn — and that last one
+    // failed when it was written, which is what a corpus is for. `continue`
+    // had a row in `INTENT_DEMAND` asking for `multiTurnContinuity` above
+    // everything, and nothing ever reached it: intents came only from the acts
+    // a sentence names, "이어서 해줘" names none, so a continuation was routed
+    // as if it were a request to read something.
     let hit = 0;
     for (const c of RECOMMENDATION_CASES) {
       const rec = designFor(c).recommendation;
@@ -102,7 +110,7 @@ describe("the recommendation, scored", () => {
     }
     assert.deepEqual(
       { hit, of: RECOMMENDATION_CASES.length },
-      { hit: 14, of: 14 },
+      { hit: 20, of: 20 },
       "recommendation accuracy moved",
     );
   });

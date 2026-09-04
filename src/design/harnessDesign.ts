@@ -1,4 +1,4 @@
-import { previewDesign, type PreviewResult, type Proposer } from "./preview.ts";
+import { previewDesign, relationOf, type PreviewResult, type Proposer } from "./preview.ts";
 import { questionsFrom, type Question } from "./previewReport.ts";
 import type { RequirementSpec } from "./requirementSpec.ts";
 import { projectTaskProfile } from "../router/taskProfile.ts";
@@ -213,6 +213,26 @@ function synthesiseContract(
   // reaches the router as `constraints.noModify` and filters rather than scores.
   // The design phase runs nothing, so keeping the intent authorises nothing.
 
+  // Picking up where the last turn stopped is a shape of work of its own.
+  //
+  // `INTENT_DEMAND` has carried a `continue` row since it was written — it asks
+  // for `multiTurnContinuity` above everything — and nothing ever reached it.
+  // Intents came only from the acts a sentence names, and "이어서 해줘" names
+  // none, so it fell through to the `inspect` baseline below: a continuation was
+  // routed as if it were a request to read something, and the one capability
+  // that decides whether a continuation works was demanded by nothing at all.
+  //
+  // `relationOf` already answers this question for the conversation, and it is
+  // the same question. Added rather than substituted: "이어서 하고 테스트해줘"
+  // continues *and* verifies.
+  //
+  // `isFirst: false`, and it is not a guess. The designer sees one message and
+  // has no conversation to be first in; what is being asked here is whether the
+  // *sentence* says it is picking something up, and passing `true` would answer
+  // "new task" without reading it. A person whose first words to the panel are
+  // "이어서 해줘" is continuing something, whatever this process has seen.
+  if (relationOf(text, false) === "continue") intents.add("continue");
+
   // A request that names no act at all is still a request to look at something.
   if (intents.size === 0) intents.add("inspect");
 
@@ -270,8 +290,16 @@ export async function designHarness(input: DesignHarnessInput): Promise<HarnessD
   // "고마워" and for every English sentence — the profile was the same one
   // every unread request gets, so the answer was the same too. Saying nothing
   // was read is the honest output, and the panel prints it.
+  //
+  // The test in that sentence is "the profile is the one every unread request
+  // gets", and `understood` was standing in for it. A continuation parts the
+  // two: "이어서 해줘" states no requirement — `understood` is false and the
+  // panel is right to say so — while its profile is nothing like the baseline,
+  // because the sentence itself said what shape of work this is. Ranking on
+  // that is ranking on something the user wrote.
+  const characterised = understood || intents.includes("continue");
   const recommendation =
-    !understood || input.models === undefined || input.models.length === 0
+    !characterised || input.models === undefined || input.models.length === 0
       ? null
       : await recommendModel(profile, input.models);
 
