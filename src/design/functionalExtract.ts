@@ -408,6 +408,32 @@ const COORDINATOR = /(?:[과와]|랑|이랑)$/u;
 const BOUND_NOUN = /^(?:것|걸|거|게|건|바|줄|뿐|때문|따름|수|데)$/u;
 
 /**
+ * An adverb standing between the modifier position and the object.
+ *
+ * `NOT_AN_OBJECT` already lists a dozen of these — 좀, 잘, 반드시, 먼저 — one at
+ * a time, as each turned up in a wrong target. Asking the three project topics
+ * again turned up six more in ten sentences, every one of them the same shape:
+ *
+ *     음악 없이 영상만 만들어줘      →  없이 영상을 만든다
+ *     가급적 빠르게 영상을 만들어줘  →  빠르게 영상을 만든다
+ *     일단 프로토타입을 만들어줘     →  일단 프로토타입을 만든다
+ *     특히 화질을 확인해줘           →  특히 화질을 확인한다
+ *     대충 결과만 보여줘             →  대충 결과를 살펴본다
+ *
+ * So the productive forms are read rather than listed. `-히` builds an adverb
+ * from almost anything and builds no noun; the `-게` suffixes here are the ones
+ * that attach to an adjective stem — 간단하게, 자연스럽게, 빠르게 — which is
+ * what keeps `가게` and `무게` out of it. The monosyllabic adjectives have no
+ * such marker and are listed, because 짧게 and 가게 have the same shape and only
+ * the lexicon separates them.
+ *
+ * The bare adverbs stay a list for the same reason `NOT_AN_OBJECT` is one:
+ * there is nothing in the shape of `일단` that says it is not a noun.
+ */
+const ADVERB =
+  /^(?:없이|일단|대충|되도록|가급적|웬만하면|빨리|얼른|이미|방금|아까|이제|그냥|차라리|오히려|아무튼|어쨌든|따로|바로|직접)$|^[가-힣]+히$|(?:하게|롭게|럽게|르게|프게|쁘게|잖게|찮게)$|^(?:짧|크|작|쉽|길|좋|얇|넓|높|낮|많|적|늦)게$/u;
+
+/**
  * A noun that says only *when*: `전처리 후`, `학습 중`, `생성 이후`.
  *
  * The clause splitter already takes "…한 뒤" and "…한 다음" out of the sentence;
@@ -621,6 +647,8 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
         NOT_AN_OBJECT.test(bare) ||
         BOUND_NOUN.test(head) ||
         TIME_HEAD.test(head) ||
+        ADVERB.test(out) ||
+        ADVERB.test(bare) ||
         located !== token ||
         CLAUSE_ENDING.test(out) ||
         CLAUSE_ENDING.test(bare) ||
