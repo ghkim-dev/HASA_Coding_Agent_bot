@@ -1715,6 +1715,25 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
       // The user forbade this verb rather than asking for it. Emitting the
       // positive form here would contradict `statedProhibitions`, which is
       // reading the very same words.
+      //
+      // What is dropped along with it, and is not represented anywhere:
+      //
+      //     워터마크는 넣지 말고 영상을 만들어줘  →  영상을 만든다
+      //
+      // The refusal is read correctly — no requirement to add a watermark is
+      // produced — and then it is gone. `statedProhibitions` models three
+      // classes, all of them tool gates (running, editing, going to the web),
+      // and "do not add a watermark" is none of those: it is a constraint on
+      // the deliverable. For the three generative-media topics this designer is
+      // aimed at, that is the commonest constraint there is.
+      //
+      // Not fixed here, and the reason is the sentence above this one. A second
+      // module emitting prohibitions would have to agree with the gate about
+      // every sentence they both read, and the two disagreeing is the failure
+      // `NEGATED` exists to prevent. The bound on the damage is that the
+      // handoff carries the user's text verbatim, so the agent still reads the
+      // words — what is lost is the panel's account of what it understood.
+      // `functionalExtract.test.ts` has the case under its own name.
       if (NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8))) continue;
 
       // Which noun-verb this was, when it was one. `phrase` says how the act

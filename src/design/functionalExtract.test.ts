@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { functionalCandidates, type FunctionalCandidate } from "./functionalExtract.ts";
 import { runtimeRequirements } from "./requirementSpec.ts";
 import { checkSpan } from "./sourceSpan.ts";
+import { prohibitionsIn } from "../agent/statedProhibitions.ts";
 
 /**
  * What the offline extractor reads, and what it refuses to invent.
@@ -667,6 +668,23 @@ describe("읽지 않기로 한 것들", () => {
     // "영상이 나오게 해줘" 의 `나오` 는 하다를 거치지 않는다. 한국어 기능
     // 요청의 흔한 모양이고, 여기서는 아무것도 읽지 못한다.
     assert.deepEqual(texts("사용자가 프롬프트를 입력하면 영상이 나오게 해줘."), []);
+  });
+
+  test("결과물에 대한 금지는 어디에도 남지 않는다", () => {
+    // 거절은 옳게 읽힌다 — 워터마크를 넣으라는 요구사항은 생기지 않는다.
+    // 그리고 사라진다. `statedProhibitions` 가 아는 세 부류는 모두 도구 관문
+    // (실행·수정·웹)이고, "워터마크는 넣지 마" 는 그중 어느 것도 아니다 —
+    // 결과물에 대한 제약이며, 이 설계기가 겨누는 세 가지 생성형 미디어 주제에서
+    // 가장 흔한 제약이다.
+    //
+    // 여기서 고치지 않는 이유는 금지를 내는 모듈이 둘이 되면 둘이 같은 문장에
+    // 대해 반드시 일치해야 하기 때문이다. 손해의 한계: 핸드오프는 사용자의
+    // 문장을 그대로 넘기므로 에이전트는 그 말을 여전히 읽는다. 잃는 것은
+    // 패널이 무엇을 이해했다고 말하는 내용이다.
+    const got = texts("워터마크는 넣지 말고 영상을 만들어줘.");
+    assert.deepEqual(got, ["영상을 만든다"]);
+    assert.ok(!got.some((t) => t.includes("워터마크")), got.join(", "));
+    assert.deepEqual([...prohibitionsIn("워터마크는 넣지 말고 영상을 만들어줘.")], []);
   });
 
   test("`마무리` 는 행위를 정하지 않는다", () => {
