@@ -706,8 +706,8 @@ const MUTATIONS = [
     "  const kept = coordinated ? run : units.slice(-2).join(\" \").split(/\\s+/);",
     "  const kept = units.slice(-2).join(\" \").split(/\\s+/);", "recall"],
   ["M173", "범위 조사를 다시 위치로 읽음", "src/design/functionalExtract.ts",
-    "      ? token.replace(/(?:안에서만|에서만|에서|안에)$/u, \"\")",
-    "      ? token.replace(/(?:안에서만|에서만|에서|안에|까지|부터)$/u, \"\")", "recall"],
+    "      ? token.replace(/(?:안에서만|에서만|에서|안에|[안밖위속앞뒤옆]의)$/u, \"\")",
+    "      ? token.replace(/(?:안에서만|에서만|에서|안에|까지|부터|[안밖위속앞뒤옆]의)$/u, \"\")", "recall"],
   ["M174", "사용자 동사를 버리고 분류 대표어로 씀", "src/design/functionalExtract.ts",
     "          ? `${shown}${objectParticle(shown)} ${manner === \"\" ? \"\" : `${manner} `}${phrase ?? ACTION_TEXT[action]}`",
     "          ? `${shown}${objectParticle(shown)} ${manner === \"\" ? \"\" : `${manner} `}${ACTION_TEXT[action]}`", "recall"],
@@ -1039,6 +1039,19 @@ const MUTATIONS = [
   ["M276", "영어 부가어를 목적어에 다시 붙임 — `plan without editing anything`", "src/design/functionalExtract.ts",
     "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|without|by|via|using|unless|except|if|whether|between|among|during|only|within|inside|outside|above|below|beneath|across|around|behind|beyond|near|until|since|throughout|towards?|against|upon)\\b|[.,;:!?]/i;",
     "  /\\s+(?:and|then|but|so|because|after|before|while|to|that|which|who|whose|on|in|at|into|onto|as|from|with|by|via|using)\\b|[.,;:!?]/i;", "english"],
+  // ---- C4.37: a locative left in the target, and a particle applied twice ------
+  ["M277", "`안의` 를 다시 대상에 붙임 — `안의 main.py를 실행한다`", "src/design/functionalExtract.ts",
+    "      ? token.replace(/(?:안에서만|에서만|에서|안에|[안밖위속앞뒤옆]의)$/u, \"\")",
+    "      ? token.replace(/(?:안에서만|에서만|에서|안에)$/u, \"\")", "recall"],
+  ["M278", "목적어가 표시된 절에서도 `안의` 를 붙임", "src/design/functionalExtract.ts",
+    "          .replace(/(?:안에서만|에서만|에서|안에|에게|[안밖위속앞뒤옆]의|에)$/u, \"\")",
+    "          .replace(/(?:안에서만|에서만|에서|안에|에게|에)$/u, \"\")", "recall"],
+  ["M279", "조사를 이미 단 구에 조사를 하나 더 붙임 — `후보에를`", "src/design/functionalExtract.ts",
+    "  if (/(?<=[가-힣]{2,})(?:에서|에게|으로|에)$/u.test(object)) return \"\";",
+    "  if (false) return \"\";", "recall"],
+  ["M280", "출처 줄이 다시 `을(를)` 로 돌아감 — 같은 패널이 두 표기를 보여 줌", "src/design/requirementSpec.ts",
+    "      text: `${shown}${objectParticle(shown)} 실제로 읽고, 거기서 확인한 것만 그 출처로 보고한다`,",
+    "      text: `${shown} 을(를) 실제로 읽고, 거기서 확인한 것만 그 출처로 보고한다`,", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
@@ -1086,12 +1099,28 @@ class UnreadableTestOutput extends Error {
  * behaves like a real count everywhere downstream: `fail === 0` is false, so a
  * suite that never reported read as "the mutation was caught". A missing verdict
  * is not a verdict.
+ *
+ * ## A cancelled test is a failure here
+ *
+ * `node --test` reports a test whose `before()` hook threw as **cancelled**, and
+ * the summary then says `fail 0`. It is not zero failures — it is tests that
+ * never ran, and the suites this script measures build their corpora in exactly
+ * such a hook: one throw takes 148 tests out of `preview.test.ts` while the line
+ * this function reads still says `fail 0`.
+ *
+ * So a mutation that breaks a corpus build would have been reported as "물지
+ * 않음" — a defence that failed to hold — when what actually happened is that
+ * nothing was measured at all. Counted into `fail`, because the suite did notice
+ * the mutation; kept separate in the return value so the run can say which it
+ * was.
  */
 function parseVerdict(files, out) {
   const pass = /^ℹ pass (\d+)$/m.exec(out);
   const fail = /^ℹ fail (\d+)$/m.exec(out);
+  const cancelled = /^ℹ cancelled (\d+)$/m.exec(out);
   if (pass === null || fail === null) throw new UnreadableTestOutput(files, out);
-  return { pass: Number(pass[1]), fail: Number(fail[1]) };
+  const stopped = cancelled === null ? 0 : Number(cancelled[1]);
+  return { pass: Number(pass[1]), fail: Number(fail[1]) + stopped, cancelled: stopped };
 }
 
 function suite(files = SUITES.demos) {
@@ -1292,7 +1321,10 @@ try {
   process.exit(2);
 }
 
-say(`기준선                                          pass ${baseline.pass}  fail ${baseline.fail}`);
+say(
+  `기준선                                          pass ${baseline.pass}  fail ${baseline.fail}` +
+    (baseline.cancelled > 0 ? `  (그중 취소 ${baseline.cancelled})` : ""),
+);
 if (baseline.fail !== 0 || baseline.pass === 0) {
   say(
     baseline.pass === 0
@@ -1365,7 +1397,7 @@ try {
 
     const silent = result.fail === 0;
     const allowed = EXPECTED_SILENT.has(id);
-    let note = "";
+    let note = result.cancelled > 0 ? `  (취소 ${result.cancelled} — 훅이 깨졌을 뿐, 단언이 진 것이 아님)` : "";
     if (silent && allowed) note = `  (예상된 무반응: ${EXPECTED_SILENT.get(id)})`;
     if (silent && !allowed) {
       note = "  << 물지 않음";
@@ -1422,7 +1454,10 @@ try {
 }
 
 say("-".repeat(78));
-say(`복원 후                                         pass ${after.pass}  fail ${after.fail}`);
+say(
+  `복원 후                                         pass ${after.pass}  fail ${after.fail}` +
+    (after.cancelled > 0 ? `  (그중 취소 ${after.cancelled})` : ""),
+);
 say("");
 say(`변이 적용          : ${MUTATIONS.length - notApplied} / ${MUTATIONS.length}`);
 say(`변이 미적용        : ${notApplied}`);

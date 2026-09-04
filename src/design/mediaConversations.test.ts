@@ -1,6 +1,6 @@
 import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
-import { MEDIA_CONVERSATIONS } from "./mediaConversations.ts";
+import { MEDIA_CONVERSATIONS, type MediaConversation } from "./mediaConversations.ts";
 import { ENGLISH_MEDIA_CONVERSATIONS } from "./mediaConversationsEnglish.ts";
 import { previewDesign, type PreviewResult } from "./preview.ts";
 import { prohibitionsIn } from "../agent/statedProhibitions.ts";
@@ -16,6 +16,17 @@ import { prohibitionsIn } from "../agent/statedProhibitions.ts";
  *
  * Scored per conversation rather than per turn, because that is the claim: after
  * the last thing the user said, this is what the runtime believes it owes them.
+ *
+ * ## 집계와 사례를 함께 둔다
+ *
+ * 축마다 집계 하나와 대화별 테스트가 나란히 선다. 집계는 말뭉치가 사례를 잃으면
+ * 실패하라고 남아 있고, 대화별 테스트는 실패가 "배열이 다르다" 가 아니라
+ * "이 대화의 이 축이 이렇게 틀렸다" 를 말하게 하려고 있다. 둘은 같은 미리 계산된
+ * 결과를 읽으므로, 사례를 쪼갠 값은 대화 하나를 다시 돌리는 비용이 아니다.
+ *
+ * 그래서 집계가 지키는 것은 개수다. 사례별 테스트가 이미 문장 단위로 같은 주장을 하고
+ * 있다면 집계는 그것을 한 번 더 하지 않고, 사례별 테스트가 스스로 할 수 없는 일 —
+ * 사례나 필드가 통째로 사라져서 그것을 검사하던 테스트도 함께 사라지는 것 — 만 막는다.
  */
 
 /**
@@ -30,9 +41,29 @@ const ALL = [...MEDIA_CONVERSATIONS, ...ENGLISH_MEDIA_CONVERSATIONS];
 
 const previews = new Map<string, PreviewResult>();
 
+/**
+ * 말뭉치를 만들다 터진 것. 훅이 던지는 대신 여기 담아 두고, 첫 테스트가 이름을 붙여
+ * 실패시킨다.
+ *
+ * `before()` 가 throw 하면 `node --test` 는 그 아래 테스트를 실행하지 않고
+ * **cancelled** 로 처리하는데, 요약줄은 그것을 `fail 0` 으로 찍는다. 훅 하나가 터지면
+ * 이 파일의 테스트가 통째로 실행되지 않는데도 요약은 초록으로 보인다는 뜻이고, 그때
+ * 요약줄의 `fail 0` 은 거짓말이다. 위에서 사례별로 갈라 놓은 입도가 전부 이 훅 하나에
+ * 매달려 있으므로, 훅은 던지지 않고 기록만 한다.
+ *
+ * 그 대가로 미리보기를 읽는 사례별 테스트들은 빈 맵을 읽고 `live()` 안에서 각자 자기
+ * 대화 이름으로 실패한다. 취소되어 조용히 사라지는 것보다 이름을 가진 실패 N개가
+ * 낫다 — 취소 0, 실패 N.
+ */
+let buildError: Error | null = null;
+
 before(async () => {
-  for (const conversation of ALL) {
-    previews.set(conversation.id, await previewDesign({ turns: [...conversation.turns] }));
+  try {
+    for (const conversation of ALL) {
+      previews.set(conversation.id, await previewDesign({ turns: [...conversation.turns] }));
+    }
+  } catch (err) {
+    buildError = err as Error;
   }
 });
 
@@ -45,58 +76,179 @@ function live(id: string): string[] {
     .map((spec) => spec.text);
 }
 
+/** 정답에 있는데 마지막 턴에 남아 있지 않은 것. */
+function missingIn(conversation: MediaConversation): string[] {
+  const held = live(conversation.id);
+  return conversation.standing.filter((text) => !held.includes(text));
+}
+
+/** 남아 있는데 정답에 없는 것. */
+function extraIn(conversation: MediaConversation): string[] {
+  const held = live(conversation.id);
+  const allowed = new Set(conversation.standing);
+  return held.filter((text) => !allowed.has(text));
+}
+
+/** 사용자가 쓴 문장에서 `statedProhibitions` 가 실제로 읽어낸 금지. */
+function prohibitionsRead(conversation: MediaConversation): Set<string> {
+  const seen = new Set<string>();
+  for (const turn of conversation.turns) {
+    for (const klass of prohibitionsIn(turn)) seen.add(`no_${klass}`);
+  }
+  return seen;
+}
+
 describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
-  test("말뭉치 자체", () => {
-    assert.equal(ALL.length, 13);
+  test("말뭉치가 만들어졌다", () => {
+    assert.equal(buildError, null, `말뭉치를 만들지 못했습니다: ${buildError?.stack}`);
+    assert.ok(ALL.length > 0, "대화가 하나도 없습니다");
+    assert.equal(previews.size, ALL.length, `미리보기 ${previews.size}개 / 대화 ${ALL.length}개`);
+  });
+
+  describe("말뭉치의 형태", () => {
+    /**
+     * 개수만 못 박는다. 이 자리에 있던 루프 본문은 아래 `사례 형태` 테스트와 글자까지
+     * 같았고, 같은 주장을 두 번 하는 대신 어느 대화인지 이름이 붙는 쪽에 맡긴다.
+     * 여기 남은 것은 사례별 테스트가 스스로 할 수 없는 일 — 사례가 말뭉치에서 빠지면
+     * 그 사례의 테스트도 같이 빠져서 아무도 실패하지 않는 것 — 을 막는 핀이다.
+     */
+    test("말뭉치의 사례 수", () => {
+      assert.equal(ALL.length, 13);
+    });
+
+    /**
+     * 필드가 사라지는 것을 잡는 핀.
+     *
+     * `superseded` 를 사례에서 통째로 지우면 그 사례의 `물러났어야 할 …` 테스트는
+     * 아예 생성되지 않고, 집계 쪽 루프도 `?? []` 로 조용히 넘어간다. 검사만 사라지고
+     * 스위트는 초록으로 남는다는 뜻이므로, 필드를 가진 사례 수와 문장 수를 함께
+     * 고정한다 — 사례가 필드를 잃으면 앞엣것이, 여러 문장 중 하나만 빠지면 뒤엣것이
+     * 실패한다.
+     */
+    test("정정을 가진 사례 수", () => {
+      const ids = ALL.filter((conversation) => (conversation.superseded ?? []).length > 0).map(
+        (conversation) => conversation.id,
+      );
+      assert.equal(ids.length, 4, `정정을 가진 사례: ${ids.join(", ")}`);
+      assert.equal(ALL.flatMap((conversation) => conversation.superseded ?? []).length, 4);
+    });
+
+    /**
+     * 같은 이유로 `prohibitions`. 집계 쪽은 비어 있으면 `continue` 로 넘어가므로,
+     * 필드를 지운 사례는 금지 축에서 검사를 통째로 잃고도 초록으로 남는다.
+     */
+    test("금지를 가진 사례 수", () => {
+      const ids = ALL.filter((conversation) => (conversation.prohibitions ?? []).length > 0).map(
+        (conversation) => conversation.id,
+      );
+      assert.equal(ids.length, 3, `금지를 가진 사례: ${ids.join(", ")}`);
+      assert.equal(ALL.flatMap((conversation) => conversation.prohibitions ?? []).length, 3);
+    });
+
     for (const conversation of ALL) {
-      assert.ok(conversation.turns.length >= 2, `${conversation.id}: 한 턴짜리입니다`);
-      assert.ok(conversation.standing.length > 0, `${conversation.id}: 정답이 비어 있습니다`);
-      assert.ok(conversation.why.length > 20, `${conversation.id}: 이유가 없습니다`);
+      test(`${conversation.id} · 사례 형태`, () => {
+        assert.ok(conversation.turns.length >= 2, `${conversation.id}: 한 턴짜리입니다`);
+        assert.ok(conversation.standing.length > 0, `${conversation.id}: 정답이 비어 있습니다`);
+        assert.ok(conversation.why.length > 20, `${conversation.id}: 이유가 없습니다`);
+      });
     }
   });
 
-  test("마지막 턴에 살아 있어야 할 것이 모두 살아 있다", () => {
-    const missing: string[] = [];
-    for (const conversation of ALL) {
-      const held = live(conversation.id);
-      for (const text of conversation.standing) {
-        if (!held.includes(text)) missing.push(`${conversation.id}: "${text}" (남은 것: ${held.join(" / ")})`);
+  describe("마지막 턴에 살아 있어야 할 것", () => {
+    test("마지막 턴에 살아 있어야 할 것이 모두 살아 있다", () => {
+      const missing: string[] = [];
+      for (const conversation of ALL) {
+        const held = live(conversation.id);
+        for (const text of conversation.standing) {
+          if (!held.includes(text)) missing.push(`${conversation.id}: "${text}" (남은 것: ${held.join(" / ")})`);
+        }
       }
+      assert.deepEqual(missing, []);
+    });
+
+    for (const conversation of ALL) {
+      test(`${conversation.id} · 남아 있어야 할 것`, () => {
+        const missing = missingIn(conversation);
+        assert.ok(
+          missing.length === 0,
+          `${conversation.id}: "${missing.join('", "')}" 이(가) 빠졌습니다 (남은 것: ${live(conversation.id).join(" / ")})`,
+        );
+      });
     }
-    assert.deepEqual(missing, []);
   });
 
-  test("살아 있으면 안 되는 것은 남아 있지 않다", () => {
-    // The complete answer, checked from the other side. A conversation that
-    // accumulates requirements correctly and also keeps one the user withdrew
-    // has not understood the correction — it has understood the addition twice.
-    const extra: string[] = [];
-    for (const conversation of ALL) {
-      const held = live(conversation.id);
-      const allowed = new Set(conversation.standing);
-      for (const text of held) {
-        if (!allowed.has(text)) extra.push(`${conversation.id}: "${text}"`);
+  /**
+   * The complete answer, checked from the other side. A conversation that
+   * accumulates requirements correctly and also keeps one the user withdrew
+   * has not understood the correction — it has understood the addition twice.
+   *
+   * 두 축으로 나뉜다. `남으면 안 되는 것` 은 정답 밖의 요구사항이 붙어 있는지를,
+   * `물러났어야 할 것` 은 정정이 지목한 그 문장이 실제로 물러났는지를 본다.
+   * 뒤엣것이 앞엣것의 부분집합이기는 하지만, 어느 쪽으로 틀렸는지를 이름이
+   * 말해주지 않으면 정정 실패와 과잉 축적이 같은 실패로 보인다.
+   */
+  describe("살아 있으면 안 되는 것", () => {
+    test("살아 있으면 안 되는 것은 남아 있지 않다", () => {
+      const extra: string[] = [];
+      for (const conversation of ALL) {
+        const held = live(conversation.id);
+        const allowed = new Set(conversation.standing);
+        for (const text of held) {
+          if (!allowed.has(text)) extra.push(`${conversation.id}: "${text}"`);
+        }
+        for (const text of conversation.superseded ?? []) {
+          if (held.includes(text)) extra.push(`${conversation.id}: 정정됐어야 할 "${text}"`);
+        }
       }
+      assert.deepEqual(extra, []);
+    });
+
+    for (const conversation of ALL) {
+      test(`${conversation.id} · 남으면 안 되는 것`, () => {
+        const extra = extraIn(conversation);
+        assert.ok(
+          extra.length === 0,
+          `${conversation.id}: 정답에 없는 "${extra.join('", "')}" 이(가) 남아 있습니다`,
+        );
+      });
+    }
+
+    for (const conversation of ALL) {
       for (const text of conversation.superseded ?? []) {
-        if (held.includes(text)) extra.push(`${conversation.id}: 정정됐어야 할 "${text}"`);
+        test(`${conversation.id} · 물러났어야 할 "${text}"`, () => {
+          const held = live(conversation.id);
+          assert.ok(
+            !held.includes(text),
+            `${conversation.id}: 정정됐어야 할 "${text}" 이(가) 아직 서 있습니다 (남은 것: ${held.join(" / ")})`,
+          );
+        });
       }
     }
-    assert.deepEqual(extra, []);
   });
 
-  test("대화 도중에 나온 금지를 런타임이 들고 있다", () => {
-    // Read from the user's own text rather than from the design, because that is
-    // the module the tool gate asks. A prohibition the design records but
-    // `statedProhibitions` cannot see is a refusal that will not happen.
-    for (const conversation of ALL) {
-      const wanted = conversation.prohibitions ?? [];
-      if (wanted.length === 0) continue;
-      const seen = new Set<string>();
-      for (const turn of conversation.turns) {
-        for (const klass of prohibitionsIn(turn)) seen.add(`no_${klass}`);
+  /**
+   * Read from the user's own text rather than from the design, because that is
+   * the module the tool gate asks. A prohibition the design records but
+   * `statedProhibitions` cannot see is a refusal that will not happen.
+   */
+  describe("대화 도중에 나온 금지", () => {
+    test("대화 도중에 나온 금지를 런타임이 들고 있다", () => {
+      for (const conversation of ALL) {
+        const wanted = conversation.prohibitions ?? [];
+        if (wanted.length === 0) continue;
+        const seen = prohibitionsRead(conversation);
+        for (const kind of wanted) {
+          assert.ok(seen.has(kind), `${conversation.id}: ${kind} 를 읽지 못했습니다 (${[...seen].join(",")})`);
+        }
       }
-      for (const kind of wanted) {
-        assert.ok(seen.has(kind), `${conversation.id}: ${kind} 를 읽지 못했습니다 (${[...seen].join(",")})`);
+    });
+
+    for (const conversation of ALL) {
+      for (const kind of conversation.prohibitions ?? []) {
+        test(`${conversation.id} · 금지 ${kind}`, () => {
+          const seen = prohibitionsRead(conversation);
+          assert.ok(seen.has(kind), `${conversation.id}: ${kind} 를 읽지 못했습니다 (${[...seen].join(",")})`);
+        });
       }
     }
   });

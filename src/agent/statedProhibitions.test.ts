@@ -1,6 +1,11 @@
-import { test, describe } from "node:test";
+import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
-import { classForbidding, describeProhibition, prohibitionsIn } from "./statedProhibitions.ts";
+import {
+  classForbidding,
+  describeProhibition,
+  prohibitionsIn,
+  type ProhibitedClass,
+} from "./statedProhibitions.ts";
 
 /**
  * The second opinion on what the user forbade.
@@ -14,22 +19,55 @@ import { classForbidding, describeProhibition, prohibitionsIn } from "./statedPr
 
 const forbids = (text: string): string[] => [...prohibitionsIn(text)].sort();
 
+/** 한 사례 = 한 문장, 한 축 = 그 문장이 금지하는 클래스 집합. */
+type Sentence = readonly [text: string, klasses: readonly string[]];
+
+/**
+ * 한 사례 = 미리 읽어 둔 금지 집합 하나, 한 축 = 도구 하나.
+ *
+ * 도구 축 표는 실행·수정·읽기 세 군데와 웹 블록에서 같은 모양을 쓴다. 웹
+ * 블록이 그 모양을 인라인으로 한 번 더 적어 두는 바람에 같은 표가 두 벌
+ * 따로 움직일 수 있었다. 이름은 하나다.
+ */
+type Cover = readonly [tool: string, klass: string | null];
+
+const label = (klasses: readonly string[]): string =>
+  klasses.length === 0 ? "금지 없음" : klasses.join("+");
+
+/**
+ * 미리 읽어 두는 금지 집합은 before() 에서 만들고, 터져도 throw 하지 않는다.
+ *
+ * `node --test` 는 before() 훅이(그리고 describe 본문이) throw 하면 그 아래
+ * 테스트를 전부 **cancelled** 로 처리하면서 요약줄에는 `fail 0` 을 찍는다.
+ * 실제로 확인했다: 훅 하나가 터지면 그 describe 의 테스트가 통째로 실행되지
+ * 않는데 요약은 초록이다 — 요약줄의 `fail 0` 이 거짓말을 한다. 사례별로 갈라
+ * 놓은 입도가 바로 그 훅 하나에 매달려 있으므로, 실패는 던지지 말고
+ * `buildError` 에 담는다.
+ *
+ * 담아 두면 그 describe 의 첫 테스트가 "만들어졌다"를 이름 가진 실패로 말하고,
+ * 축별 테스트들은 빈 집합을 읽어 각자 자기 이름으로 실패한다. 취소 0, 실패 N.
+ * 사례별 테스트가 빈 집합을 읽고 제 이름으로 실패하는 편이, 취소되어 사라지는
+ * 것보다 낫다.
+ */
+const buildFailed = (err: unknown): string =>
+  `금지 집합을 만들지 못했습니다: ${err instanceof Error ? err.stack : String(err)}`;
+
 describe("sentences that forbid, from the fixtures they came from", () => {
-  test("S05 — both classes, chained under one negation", () => {
+  test("S05 — both classes, chained under one negation · execute+modify", () => {
     assert.deepEqual(
       forbids("수정하거나 실행하지 말고 main.py 코드만 분석해줘."),
       ["execute", "modify"],
     );
   });
 
-  test("the live analysis-only prompt — the other chain order", () => {
+  test("the live analysis-only prompt — the other chain order · execute+modify", () => {
     assert.deepEqual(
       forbids("실행하거나 수정하지 말고, src/inventory.py 의 구조적 문제만 분석해서 알려주세요."),
       ["execute", "modify"],
     );
   });
 
-  test("S04 turn two — a correction, which is the sentence this exists for", () => {
+  test("S04 turn two — a correction, which is the sentence this exists for · execute", () => {
     // The gate saw an empty constraint list for this turn in three of six runs.
     assert.deepEqual(
       forbids("아니, 실행하라는 게 아니라 코드 결과물을 대화창에서 보여달라는 말이야."),
@@ -37,15 +75,34 @@ describe("sentences that forbid, from the fixtures they came from", () => {
     );
   });
 
-  test("a bare prohibition", () => {
-    assert.deepEqual(forbids("실행하지 마세요."), ["execute"]);
-    assert.deepEqual(forbids("파일을 고치지 말고 설명만 해주세요."), ["modify"]);
-  });
+  const BARE: readonly Sentence[] = [
+    ["실행하지 마세요.", ["execute"]],
+    ["파일을 고치지 말고 설명만 해주세요.", ["modify"]],
+  ];
 
-  test("English", () => {
-    assert.deepEqual(forbids("Don't run it, just show me the code."), ["execute"]);
-    assert.deepEqual(forbids("Explain it without modifying anything."), ["modify"]);
-    assert.deepEqual(forbids("Do not execute the script."), ["execute"]);
+  for (const [text, klasses] of BARE) {
+    test(`a bare prohibition: ${text} · ${label(klasses)}`, () => {
+      assert.deepEqual(forbids(text), klasses, text);
+    });
+  }
+
+  const ENGLISH: readonly Sentence[] = [
+    ["Don't run it, just show me the code.", ["execute"]],
+    ["Explain it without modifying anything.", ["modify"]],
+    ["Do not execute the script.", ["execute"]],
+  ];
+
+  for (const [text, klasses] of ENGLISH) {
+    test(`English: ${text} · ${label(klasses)}`, () => {
+      assert.deepEqual(forbids(text), klasses, text);
+    });
+  }
+
+  // 길이 핀. 표에서 한 줄을 지우면 테스트 수만 줄고 나머지는 초록으로 남는다.
+  // 사라진 사례는 이 핀에서만 이름을 가진 실패가 된다. 아래 표마다 같은 핀이 붙는다.
+  test("표의 줄 수 · BARE 2 + ENGLISH 3", () => {
+    assert.equal(BARE.length, 2);
+    assert.equal(ENGLISH.length, 3);
   });
 });
 
@@ -71,67 +128,159 @@ describe("sentences that forbid nothing", () => {
     });
   }
 
-  test("a report of failure is not an instruction", () => {
-    // "못" is excluded deliberately. This is the user telling us what happened,
-    // and reading it as a prohibition would refuse the fix they want.
-    assert.deepEqual(forbids("pytest 를 실행하지 못했습니다. 왜 그런지 봐주세요."), []);
-    assert.deepEqual(forbids("파일을 수정하지 못했어요. 대신 해주세요."), []);
+  test("표의 줄 수 · ALLOWED 8", () => {
+    assert.equal(ALLOWED.length, 8);
   });
 
-  test("a past tense is not a prohibition", () => {
+  describe("a report of failure is not an instruction", () => {
+    /**
+     * "못" is excluded deliberately. This is the user telling us what happened,
+     * and reading it as a prohibition would refuse the fix they want.
+     */
+    const REPORTED_FAILURES: readonly Sentence[] = [
+      ["pytest 를 실행하지 못했습니다. 왜 그런지 봐주세요.", []],
+      ["파일을 수정하지 못했어요. 대신 해주세요.", []],
+    ];
+
+    for (const [text, klasses] of REPORTED_FAILURES) {
+      test(`못 — a report: ${text} · ${label(klasses)}`, () => {
+        assert.deepEqual(forbids(text), klasses, text);
+      });
+    }
+
+    test("표의 줄 수 · REPORTED_FAILURES 2", () => {
+      assert.equal(REPORTED_FAILURES.length, 2);
+    });
+  });
+
+  test("a past tense is not a prohibition · 아직 실행하지 않았습니다. 실행해 주세요. · 금지 없음", () => {
     assert.deepEqual(forbids("아직 실행하지 않았습니다. 실행해 주세요."), []);
   });
 
-  test("empty text forbids nothing", () => {
+  test("empty text forbids nothing · (빈 문자열) · 금지 없음", () => {
     assert.deepEqual(forbids(""), []);
   });
 });
 
 describe("mapping a prohibition to the tools it covers", () => {
-  test("execution covers run_command and nothing else", () => {
-    const p = prohibitionsIn("실행하지 말고 보여줘.");
-    assert.equal(classForbidding(p, "run_command"), "execute");
-    assert.equal(classForbidding(p, "write_file"), null);
-    assert.equal(classForbidding(p, "read_file"), null);
-  });
+  // 문장마다 한 번만 읽는다. 아래 축별 테스트는 이 결과를 다시 계산하지 않고 읽기만 한다.
+  // 읽는 자리는 before() 이고, 터져도 던지지 않는다 — 위 `buildFailed` 의 주석을 보라.
+  let buildError: unknown = null;
+  let EXECUTE_ONLY: ReadonlySet<ProhibitedClass> = new Set();
+  let MODIFY_ONLY: ReadonlySet<ProhibitedClass> = new Set();
+  let BOTH: ReadonlySet<ProhibitedClass> = new Set();
+  let NONE: ReadonlySet<ProhibitedClass> = new Set();
 
-  test("modification covers every write tool", () => {
-    const p = prohibitionsIn("수정하지 말고 분석만 해주세요.");
-    for (const tool of ["write_file", "create_file", "apply_patch", "delete_file"]) {
-      assert.equal(classForbidding(p, tool), "modify", tool);
-    }
-    assert.equal(classForbidding(p, "run_command"), null);
-  });
-
-  test("reading is never forbidden by either class", () => {
-    const both = prohibitionsIn("수정하거나 실행하지 말고 분석해줘.");
-    for (const tool of ["read_file", "search_files", "list_files", "get_git_diff"]) {
-      assert.equal(classForbidding(both, tool), null, tool);
+  before(() => {
+    try {
+      EXECUTE_ONLY = prohibitionsIn("실행하지 말고 보여줘.");
+      MODIFY_ONLY = prohibitionsIn("수정하지 말고 분석만 해주세요.");
+      BOTH = prohibitionsIn("수정하거나 실행하지 말고 분석해줘.");
+      NONE = prohibitionsIn("main.py를 실행해줘.");
+    } catch (err) {
+      buildError = err;
     }
   });
 
-  test("nothing forbidden means nothing refused", () => {
-    const none = prohibitionsIn("main.py를 실행해줘.");
-    assert.equal(classForbidding(none, "run_command"), null);
+  test("미리 읽어 둔 금지 집합이 만들어졌다", () => {
+    assert.equal(buildError, null, buildFailed(buildError));
+    assert.deepEqual([...EXECUTE_ONLY].sort(), ["execute"]);
+    assert.deepEqual([...MODIFY_ONLY].sort(), ["modify"]);
+    assert.deepEqual([...BOTH].sort(), ["execute", "modify"]);
+    assert.deepEqual([...NONE], []);
+  });
+
+  // execution covers run_command and nothing else.
+  const EXECUTE_COVERS: readonly Cover[] = [
+    ["run_command", "execute"],
+    ["write_file", null],
+    ["read_file", null],
+  ];
+
+  for (const [tool, klass] of EXECUTE_COVERS) {
+    test(`실행하지 말고 보여줘. · ${tool} → ${klass ?? "허용"}`, () => {
+      assert.equal(classForbidding(EXECUTE_ONLY, tool), klass, tool);
+    });
+  }
+
+  // modification covers every write tool, and nothing that runs.
+  const MODIFY_COVERS: readonly Cover[] = [
+    ["write_file", "modify"],
+    ["create_file", "modify"],
+    ["apply_patch", "modify"],
+    ["delete_file", "modify"],
+    ["run_command", null],
+  ];
+
+  for (const [tool, klass] of MODIFY_COVERS) {
+    test(`수정하지 말고 분석만 해주세요. · ${tool} → ${klass ?? "허용"}`, () => {
+      assert.equal(classForbidding(MODIFY_ONLY, tool), klass, tool);
+    });
+  }
+
+  // reading is never forbidden by either class.
+  const READ_COVERS: readonly Cover[] = [
+    ["read_file", null],
+    ["search_files", null],
+    ["list_files", null],
+    ["get_git_diff", null],
+  ];
+
+  for (const [tool, klass] of READ_COVERS) {
+    test(`수정하거나 실행하지 말고 분석해줘. · ${tool} → ${klass ?? "허용"}`, () => {
+      assert.equal(classForbidding(BOTH, tool), klass, tool);
+    });
+  }
+
+  test("nothing forbidden means nothing refused · main.py를 실행해줘. · run_command → 허용", () => {
+    assert.equal(classForbidding(NONE, "run_command"), null);
+  });
+
+  test("표의 줄 수 · EXECUTE_COVERS 3 + MODIFY_COVERS 5 + READ_COVERS 4", () => {
+    assert.equal(EXECUTE_COVERS.length, 3);
+    assert.equal(MODIFY_COVERS.length, 5);
+    assert.equal(READ_COVERS.length, 4);
   });
 });
 
 describe("조사가 낀 금지도 읽는다", () => {
-  test("동사 어간과 하지 사이의 조사", () => {
-    // Found while writing the auto-design demos: "수정도 하지 말아줘" is a plain
-    // prohibition and was not read as one, because the patterns required the
-    // stem and 하지 to be joined. A missed prohibition is the direction that
-    // lets a forbidden action through.
-    assert.deepEqual(forbids("수정도 하지 말아줘."), ["modify"]);
-    assert.deepEqual(forbids("실행도 하지 마세요."), ["execute"]);
-    assert.deepEqual(forbids("수정은 하지 말고 분석만 해줘."), ["modify"]);
-    assert.deepEqual(forbids("실행만 하지 말아주세요."), ["execute"]);
-  });
+  /**
+   * 동사 어간과 하지 사이의 조사.
+   *
+   * Found while writing the auto-design demos: "수정도 하지 말아줘" is a plain
+   * prohibition and was not read as one, because the patterns required the
+   * stem and 하지 to be joined. A missed prohibition is the direction that
+   * lets a forbidden action through.
+   */
+  const WITH_PARTICLE: readonly Sentence[] = [
+    ["수정도 하지 말아줘.", ["modify"]],
+    ["실행도 하지 마세요.", ["execute"]],
+    ["수정은 하지 말고 분석만 해줘.", ["modify"]],
+    ["실행만 하지 말아주세요.", ["execute"]],
+  ];
 
-  test("조사를 넓혀도 요청은 여전히 통과한다", () => {
-    assert.deepEqual(forbids("실행을 해서 결과를 보여줘."), []);
-    assert.deepEqual(forbids("수정을 해서 버그를 고쳐줘."), []);
-    assert.deepEqual(forbids("실행은 했는데 결과가 이상해."), []);
+  for (const [text, klasses] of WITH_PARTICLE) {
+    test(`조사 낀 금지: ${text} · ${label(klasses)}`, () => {
+      assert.deepEqual(forbids(text), klasses, text);
+    });
+  }
+
+  // 조사를 넓혀도 요청은 여전히 통과한다.
+  const STILL_A_REQUEST: readonly Sentence[] = [
+    ["실행을 해서 결과를 보여줘.", []],
+    ["수정을 해서 버그를 고쳐줘.", []],
+    ["실행은 했는데 결과가 이상해.", []],
+  ];
+
+  for (const [text, klasses] of STILL_A_REQUEST) {
+    test(`조사를 넓혀도 요청은 통과: ${text} · ${label(klasses)}`, () => {
+      assert.deepEqual(forbids(text), klasses, text);
+    });
+  }
+
+  test("표의 줄 수 · WITH_PARTICLE 4 + STILL_A_REQUEST 3", () => {
+    assert.equal(WITH_PARTICLE.length, 4);
+    assert.equal(STILL_A_REQUEST.length, 3);
   });
 });
 
@@ -177,31 +326,64 @@ describe("going to the web, as the user forbids it", () => {
   ];
 
   for (const text of FORBIDS) {
-    test(`forbids: ${text}`, () => {
+    test(`forbids: ${text} · research`, () => {
       assert.equal(has(text), true);
     });
   }
   for (const text of ASKS) {
-    test(`asks for it: ${text}`, () => {
+    test(`asks for it: ${text} · research 아님`, () => {
       assert.equal(has(text), false, "a request for the web read as a prohibition");
     });
   }
   for (const text of NEITHER) {
-    test(`instructs nothing: ${text}`, () => {
+    test(`instructs nothing: ${text} · research 아님`, () => {
       assert.equal(has(text), false, "a report or question read as a prohibition");
     });
   }
 
-  test("only the web tools, so a local search stays available", () => {
-    const found = prohibitionsIn("웹검색하지 말고 저장소 안에서 search_files로 찾아줘.");
-    assert.equal(classForbidding(found, "web_search"), "research");
-    assert.equal(classForbidding(found, "web_fetch"), "research");
-    assert.equal(classForbidding(found, "search_files"), null);
-    assert.equal(classForbidding(found, "read_file"), null);
-    assert.equal(classForbidding(found, "run_command"), null);
+  test("표의 줄 수 · FORBIDS 14 + ASKS 5 + NEITHER 6", () => {
+    assert.equal(FORBIDS.length, 14);
+    assert.equal(ASKS.length, 5);
+    assert.equal(NEITHER.length, 6);
   });
 
-  test("the refusal names what it is honouring", () => {
+  // only the web tools, so a local search stays available. 문장은 한 번만
+  // 읽고, 도구별로 나누어 본다. 읽는 자리는 before() 이고, 터져도 던지지 않는다.
+  let buildError: unknown = null;
+  let WEB_ONLY: ReadonlySet<ProhibitedClass> = new Set();
+
+  before(() => {
+    try {
+      WEB_ONLY = prohibitionsIn("웹검색하지 말고 저장소 안에서 search_files로 찾아줘.");
+    } catch (err) {
+      buildError = err;
+    }
+  });
+
+  test("미리 읽어 둔 웹 금지 집합이 만들어졌다", () => {
+    assert.equal(buildError, null, buildFailed(buildError));
+    assert.deepEqual([...WEB_ONLY], ["research"]);
+  });
+
+  const WEB_COVERS: readonly Cover[] = [
+    ["web_search", "research"],
+    ["web_fetch", "research"],
+    ["search_files", null],
+    ["read_file", null],
+    ["run_command", null],
+  ];
+
+  for (const [tool, klass] of WEB_COVERS) {
+    test(`웹검색하지 말고 저장소 안에서 search_files로 찾아줘. · ${tool} → ${klass ?? "허용"}`, () => {
+      assert.equal(classForbidding(WEB_ONLY, tool), klass, tool);
+    });
+  }
+
+  test("표의 줄 수 · WEB_COVERS 5", () => {
+    assert.equal(WEB_COVERS.length, 5);
+  });
+
+  test("the refusal names what it is honouring · research/web_search · 문구", () => {
     assert.match(describeProhibition("research", "web_search"), /웹 검색/);
   });
 });
@@ -260,4 +442,9 @@ describe("영어 금지문", () => {
       assert.deepEqual([...prohibitionsIn(text)], [], text);
     });
   }
+
+  test("표의 줄 수 · FORBIDS 12 + REPORTS 4", () => {
+    assert.equal(FORBIDS.length, 12);
+    assert.equal(REPORTS.length, 4);
+  });
 });

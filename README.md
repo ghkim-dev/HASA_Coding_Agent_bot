@@ -88,8 +88,8 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 | 불변식 — 지어내지 않음, 근거 일치, 금지 일관성 | 117턴 / 후보 129개 | `extractInvariants.test.ts` |
 | 생성된 문장에 대한 같은 불변식 | 매 실행 수천 건 | `*.fuzz.test.ts` |
 | 패널이 사용자에게 말하는 것 | 10개 검사 | `designerPayload.test.ts` |
-| 방어선이 실제로 지탱하는지 | 변이 **260개**, 예상 밖 무반응 0 | `pnpm design:mutate` |
-| 치환 문자열이 코드와 어긋나지 않았는지 | 260/260 | `pnpm design:anchors` |
+| 방어선이 실제로 지탱하는지 | 변이 **264개**, 예상 밖 무반응 0 | `pnpm design:mutate` |
+| 치환 문자열이 코드와 어긋나지 않았는지 | 264/264 | `pnpm design:anchors` |
 | 정규식이 자기 이스케이프를 먹지 않았는지 | 소스 전체 | `sourceHygiene.test.ts` |
 
 아직 재지 않은 것은 재지 않았다고 말한다 — `goldRequirements.ts`의 `UNMEASURED`가 그 목록이고, 0으로 채우지 않는다.
@@ -183,7 +183,7 @@ pnpm typecheck      # src + extension 타입 검사
 pnpm build:extension # VS Code 확장 컴파일 → extension/out
 
 pnpm design:anchors  # 변이 치환 문자열이 코드와 어긋나지 않았는지 (몇 초)
-pnpm design:mutate   # 방어선 260개를 하나씩 지우고 테스트가 잡는지 (수십 분)
+pnpm design:mutate   # 방어선 264개를 하나씩 지우고 테스트가 잡는지 (수십 분)
 ```
 
 속성 테스트는 시드 기반이라 실패가 항상 재현됩니다. 기본 반복 횟수는 CI가 몇 초에 끝나도록 작게 잡혀 있고, 필요하면 얼마든지 늘릴 수 있습니다.

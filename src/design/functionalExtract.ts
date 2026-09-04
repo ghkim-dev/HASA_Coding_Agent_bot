@@ -549,13 +549,13 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
     // still loses its 고속도로; that is the case left over, and it is recorded rather
     // than hidden.
     const located = !marksItsObject
-      ? token.replace(/(?:안에서만|에서만|에서|안에)$/u, "")
+      ? token.replace(/(?:안에서만|에서만|에서|안에|[안밖위속앞뒤옆]의)$/u, "")
       : token
           // The bare dative-locative joins the list once the object is settled.
           // "정지 이미지에 움직임을 넣어줘" is about the motion; the image is
           // where it goes. Held back until then for the same reason as `-로`:
           // with nothing else marked, the `-에` phrase may be all there is.
-          .replace(/(?:안에서만|에서만|에서|안에|에게|에)$/u, "")
+          .replace(/(?:안에서만|에서만|에서|안에|에게|[안밖위속앞뒤옆]의|에)$/u, "")
           .replace(/(?<=[가-힣]{2,})으로$/u, "")
           .replace(/(?:(?<=[가-힣]{2,})|(?<=[A-Za-z0-9]{2,}))로$/u, "");
     let out = located;
@@ -999,7 +999,22 @@ function embeddedQuestionBefore(clause: string, verbStart: number): string {
  * syllable (`Agent` → 에이전트 does not, `email` → 이메일 does), and every other
  * letter transliterates to a vowel-final syllable.
  */
-function objectParticle(object: string): string {
+export function objectParticle(object: string): string {
+  // A phrase that already carries a case particle does not take a second one.
+  //
+  // "모델도 후보에 넣어줘" came out as **모델 후보에를 넣는다** — `후보에` kept
+  // its 에 (the locative strip is held back until the sentence marks an object,
+  // and this one marks its object with 도) and then the renderer added 를 on
+  // top. Two particles in a row is not Korean, and the phrase underneath is not
+  // a thing the sentence points at.
+  //
+  // Only the endings no Korean noun has. `로`, `도`, `과`, `와` and `만` are
+  // excluded for the reason they are excluded everywhere else in this file:
+  // 고속도로, 해상도, 결과, 성과 end that way and are single words, so a guard
+  // written on them would silently drop the particle a real target needs. A
+  // sweep over all four corpora — 187 rendered requirements — found exactly one
+  // sentence with a doubled particle, and it is an `에`.
+  if (/(?<=[가-힣]{2,})(?:에서|에게|으로|에)$/u.test(object)) return "";
   const last = object.codePointAt(object.length - 1) ?? 0;
   if (last >= 0xac00 && last <= 0xd7a3) {
     return (last - 0xac00) % 28 === 0 ? "를" : "을";

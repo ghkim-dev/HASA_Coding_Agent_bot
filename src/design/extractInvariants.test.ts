@@ -174,9 +174,26 @@ describe("추출기 불변식", () => {
     // and `날` is 나+를, so "좋은 걸을 추가한다" carries the particle twice while
     // matching none of the pairs above — the whole point of a doubled particle
     // is that the reader sees it, and this did not.
+    //
+    // It missed a second one, and that is why the locative family joined the
+    // list. "모델도 후보에 넣어줘" rendered as **모델 후보에를 넣는다**: the
+    // locative strip is held back until the sentence marks an object, this
+    // sentence marks its object with `도`, so `후보에` kept its 에 and the
+    // renderer added 를 on top. A pair list catches only the pairs somebody
+    // thought of, and nobody had thought of this one — it took a sweep over all
+    // four corpora, one sentence out of 187, to find it.
+    //
+    // `로`, `도`, `과`, `와` and `만` stay out for the reason they stay out
+    // everywhere else in this project: 고속도로, 해상도, 결과, 성과 end in those
+    // syllables and are single words, so `로를` would fire on "고속도로를" — a
+    // correct rendering. The `에` family has no such collision, and requiring two
+    // syllables in front of it keeps even a one-syllable coincidence out.
     const doubled: string[] = [];
     for (const { turn, candidate } of candidates) {
-      if (/(?:을을|를를|도를|도을|은을|는를|의를|만을|걸을|건을|게를|날)/u.test(candidate.text)) {
+      if (
+        /(?:을을|를를|도를|도을|은을|는를|의를|만을|걸을|건을|게를|날)/u.test(candidate.text) ||
+        /(?<=[가-힣]{2,})(?:에서|에게|으로|에)(?:을|를)/u.test(candidate.text)
+      ) {
         doubled.push(`${turn.id}: ${candidate.text}`);
       }
     }

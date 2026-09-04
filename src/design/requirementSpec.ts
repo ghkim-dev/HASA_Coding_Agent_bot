@@ -3,7 +3,7 @@ import { exactSourcesIn, namedSourcesIn } from "../agent/sourceProvenance.ts";
 import type { TurnRelation } from "../agent/turnContract.ts";
 import { checkSpan, sentenceAround, type SourceSpan, type SpanProblem } from "./sourceSpan.ts";
 import { checkAlignment, conditionIn, priorityFrom, scopeIn, type Alignment } from "./semanticAlignment.ts";
-import { functionalCandidates, type ActionKind } from "./functionalExtract.ts";
+import { functionalCandidates, objectParticle, type ActionKind } from "./functionalExtract.ts";
 
 /**
  * What the user asked for, in a form a verification plan can be built from.
@@ -326,7 +326,12 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       ({ turnId: input.turnId, start: 0, end: input.text.length } as SourceSpan);
     out.push({
       id: `${input.turnId}-source-${source.hostname}`,
-      text: `${shown} 을(를) 실제로 읽고, 거기서 확인한 것만 그 출처로 보고한다`,
+      // `을(를)` was written here, and `functionalExtract`'s own particle rule
+      // opens by calling that not good enough for a sentence a person reads:
+      // "A user-facing sentence, so 오류을(를) is not good enough." The act lines
+      // have used the real particle since then and the source lines did not, so
+      // the same panel showed both spellings at once.
+      text: `${shown}${objectParticle(shown)} 실제로 읽고, 거기서 확인한 것만 그 출처로 보고한다`,
       sourceText: input.text.slice(span.start, span.end).trim(),
       span,
       sourceTurnId: input.turnId,
