@@ -178,7 +178,12 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   // compare. Negation is still decided once, below, so "바꾸지 마" stays a
   // prohibition rather than becoming a request to change something.
   { pattern: /바꾸(?:되|고|면|니|는|어|었|자|라|시)/, action: "modify" },
-  { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: "modify" },
+  // Reverting is `modify` — something that exists changes — but it is not the
+  // class phrase. "의존성을 되돌려줘" reported "의존성을 수정한다", which is a
+  // different deliverable: one puts the dependency back where it was and the
+  // other changes it to something new. The comment on `돌려` above already says
+  // this verb is the one that gets confused; this is the other half of it.
+  { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: "modify", phrase: "되돌린다" },
   verb("정리", "(?:하|해)", "modify"),
   verb("갱신", "(?:하|해)", "modify"),
   verb("번역", "(?:하|해)", "modify"),
@@ -196,10 +201,16 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   verb("fix", "(?:하|해)", "modify", "수정한다"),
   verb("추가", "(?:하|해)", "create"),
   verb("구현", "(?:하|해)", "create"),
-  { pattern: /만들어(?:줘|주세요|주(?![는던]))/, action: "create" },
+  // `만든다`, not the class phrase. The rule the noun-verbs above follow — the
+  // requirement says the word the user said — was never applied to the entries
+  // written as inflections, and `create` reads "추가한다": "이미지를 영상으로
+  // 만들어줘" came back as **이미지를 영상으로 추가한다**, which is not Korean
+  // and not the request. Making and adding are the same class and different
+  // verbs, and the manner phrase is where that stops being a nicety.
+  { pattern: /만들어(?:줘|주세요|주(?![는던]))/, action: "create", phrase: "만든다" },
   // The connective forms. "분류기를 만들고 학습해줘" is two acts, and only the
   // second was ever read.
-  { pattern: /만들(?:고|면|자|라|어야|어서)/, action: "create" },
+  { pattern: /만들(?:고|면|자|라|어야|어서)/, action: "create", phrase: "만든다" },
   verb("생성", "(?:하|해)", "create"),
   // `create` because a file that did not exist now does, which is the same test
   // `추가` and `구현` pass. `지원` is here rather than under `modify` because

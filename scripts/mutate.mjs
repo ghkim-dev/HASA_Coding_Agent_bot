@@ -989,6 +989,13 @@ const MUTATIONS = [
   ["M261", "앞 턴을 가리키는 무시를 정정으로 읽지 못함", "src/design/preview.ts",
     "    /(?:방금|아까|이전|직전|앞)\\s*(?:것|건|거|말|요청|턴)?\\s*[은는을를]?\\s*무시/u.test(text) ||",
     "    false ||", "metrics"],
+  // ---- C4.32: the user's verb, in the entries written as inflections -----------
+  ["M262", "`만들다` 를 다시 부류 대표어로 부름 — `동영상으로 추가한다`", "src/design/functionalExtract.ts",
+    "  { pattern: /만들어(?:줘|주세요|주(?![는던]))/, action: \"create\", phrase: \"만든다\" },",
+    "  { pattern: /만들어(?:줘|주세요|주(?![는던]))/, action: \"create\" },", "recall"],
+  ["M263", "`되돌리다` 를 다시 부류 대표어로 부름 — 되돌리기가 수정으로 보고됨", "src/design/functionalExtract.ts",
+    "  { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: \"modify\", phrase: \"되돌린다\" },",
+    "  { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: \"modify\" },", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

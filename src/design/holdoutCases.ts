@@ -206,7 +206,7 @@ export const HOLDOUT_CASES: readonly HoldoutCase[] = [
     questions: { expected: [], max: 2 },
     startable: true,
     executable: true,
-    extras: { standing: ["마이그레이션 스크립트를 추가한다"] },
+    extras: { standing: ["마이그레이션 스크립트를 만든다"] },
   },
 
   // --- priority -------------------------------------------------------------

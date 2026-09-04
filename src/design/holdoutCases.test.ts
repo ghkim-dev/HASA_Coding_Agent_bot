@@ -40,8 +40,18 @@ import { parseProposals } from "./proposalParse.ts";
  * tree can hold CRLF: hashing raw bytes pins the answers to one platform and fails
  * everywhere else, which would make this test a portability bug rather than a
  * guarantee.
+ *
+ * ## Changes to the answers, with their reasons
+ *
+ * `1cdbfd1c…` — `h-continue-changes-nothing` expected the standing requirement
+ * to read "마이그레이션 스크립트를 추가한다". The extractor rendered every
+ * `만들다` with its class phrase 추가한다, which the file's own rule forbids for
+ * noun-verbs and had never been applied to the entries written as inflections —
+ * "이미지를 동영상으로 만들어줘" was coming back as "이미지를 동영상으로
+ * 추가한다". The answer moved because the rendering was corrected, not because
+ * the reading changed: the act, the target and the relation are all as they were.
  */
-const HOLDOUT_DIGEST = "f750b45e1b25fd99c8a36081e8911c11bbcac7275180e3719231744b41524d84";
+const HOLDOUT_DIGEST = "1cdbfd1c823ce2ac35440dc3450ffc46e304f522bf08ec16e149ee7f6e611e46";
 
 /** The content this digest is over. One definition, used to pin and to verify. */
 function normalise(source: string): string {

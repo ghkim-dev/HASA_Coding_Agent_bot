@@ -184,11 +184,11 @@ describe("조사와 파일명", () => {
 describe("나열과 범위는 하나의 목적어다", () => {
   test("접속 조사로 이어진 목록은 통째로 남는다", () => {
     assert.deepEqual(texts("CNN과 ViT로 분류기를 만들고 각각 학습해줘."), [
-      "CNN과 ViT로 분류기를 추가한다",
+      "CNN과 ViT로 분류기를 만든다",
       "각각을 학습한다",
     ]);
     assert.deepEqual(texts("개와 고양이 분류 프로젝트를 만들어줘."), [
-      "개와 고양이 분류 프로젝트를 추가한다",
+      "개와 고양이 분류 프로젝트를 만든다",
     ]);
     assert.deepEqual(texts("웹과 Hugging Face를 참고해줘."), ["웹과 Hugging Face를 참고한다"]);
   });
@@ -272,9 +272,11 @@ describe("무엇이 대상이고 무엇이 대상이 아닌가", () => {
     // `동영상으로` had only its `로` taken off, so the target was `동영상으` — a
     // fragment, shown to the user as the thing their request was about. The
     // means stays in the sentence, out of the target.
-    assert.deepEqual(texts("이미지를 동영상으로 만들어줘."), ["이미지를 동영상으로 추가한다"]);
+    assert.deepEqual(texts("이미지를 동영상으로 만들어줘."), ["이미지를 동영상으로 만든다"]);
     assert.equal(of("이미지를 동영상으로 만들어줘.")[0]?.object, "이미지");
-    assert.deepEqual(texts("설정을 기본값으로 되돌려줘."), ["설정을 기본값으로 수정한다"]);
+    // 되돌리는 것과 고치는 것은 다른 결과물이다 — 하나는 있던 자리로 돌려놓고
+    // 다른 하나는 새것으로 바꾼다. 부류는 같지만 동사는 다르다.
+    assert.deepEqual(texts("설정을 기본값으로 되돌려줘."), ["설정을 기본값으로 되돌린다"]);
     assert.deepEqual(texts("결과를 미리보기로 보여줘."), ["결과를 미리보기로 살펴본다"]);
   });
 
@@ -285,8 +287,8 @@ describe("무엇이 대상이고 무엇이 대상이 아닌가", () => {
     // the request with no target at all, so it stays, and the particle strip at
     // the end of the phrase is then the only thing standing between the user and
     // `동영상으`.
-    assert.deepEqual(texts("동영상으로 만들어줘."), ["동영상을 추가한다"]);
-    assert.deepEqual(texts("기본값으로 되돌려줘."), ["기본값을 수정한다"]);
+    assert.deepEqual(texts("동영상으로 만들어줘."), ["동영상을 만든다"]);
+    assert.deepEqual(texts("기본값으로 되돌려줘."), ["기본값을 되돌린다"]);
     assert.deepEqual(texts("한국어로 번역해줘."), ["한국어를 번역한다"]);
   });
 
@@ -422,7 +424,7 @@ describe("경동사 하나에 묶인 여러 행위", () => {
     // 같은 `X와 Y를 …` 모양이지만 개 와 고양이 는 동사 어간이 아니다. 어휘를
     // 보지 않고 모양만 보면 이 문장이 먼저 부서진다.
     assert.deepEqual(texts("개와 고양이를 분류하는 프로젝트를 만들어줘."), [
-      "개와 고양이를 분류하는 프로젝트를 추가한다",
+      "개와 고양이를 분류하는 프로젝트를 만든다",
     ]);
   });
 

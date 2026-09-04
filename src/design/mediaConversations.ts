@@ -60,7 +60,7 @@ export const MEDIA_CONVERSATIONS: readonly MediaConversation[] = [
     // relative clause it clears the bar the target/sentence split sets, so the
     // panel shows what the user described rather than only what it resolved to.
     standing: [
-      "이미지를 동영상으로 만들어주는 프로젝트를 추가한다",
+      "이미지를 동영상으로 만들어주는 프로젝트를 만든다",
       "프레임 수와 해상도를 설정한다",
       "결과 영상을 mp4로 내보낸다",
     ],
@@ -91,7 +91,7 @@ export const MEDIA_CONVERSATIONS: readonly MediaConversation[] = [
     // The prohibition is one of the user's own requirements and is listed as
     // one — it is not a baseline the harness added, and leaving it out of the
     // answer would let a run that silently dropped it still pass.
-    standing: ["도구를 추가한다", "이번 요청에서 명령을 실행하지 않는다", "설계를 살펴본다"],
+    standing: ["도구를 만든다", "이번 요청에서 명령을 실행하지 않는다", "설계를 살펴본다"],
     prohibitions: ["no_execute"],
   },
   {
