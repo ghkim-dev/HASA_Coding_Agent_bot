@@ -262,4 +262,65 @@ export const MEDIA_CASES: readonly MediaCase[] = [
     why: "조건절 + `-게 해줘`. 대상은 문장에 없으므로 null 이다.",
     requirements: [{ action: "execute", target: null }],
   },
+
+  // --- 두 번째 통과: 이 말뭉치가 담지 않았던 모양 -----------------------------
+  //
+  // 위 24문장에서 이 경로는 행위 25/26, 대상 25/26 이었다. 그 점수가 말한 것은
+  // 말뭉치의 범위였고, 같은 세 주제를 사람이 실제로 쓸 문장 열 개로 다시 묻자
+  // 넷이 없는 대상을 내놓았다. 아래 정답은 코드를 건드리기 전에 문장에서 썼다.
+  {
+    id: "m-bound-noun-with-particle",
+    topic: "image_to_video",
+    text: "이미지를 10장 뽑아서 그중 제일 나은 걸로 영상을 만들어줘.",
+    why:
+      "`걸로` 는 의존명사에 조사가 붙은 것이다. `걸` 은 이미 목록에 있었고 " +
+      "통과한 것은 `로` 였다 — 대상이 `걸로 영상` 이 되었다.",
+    requirements: [{ action: "create", target: "영상" }],
+  },
+  {
+    id: "m-time-head-with-particle",
+    topic: "operating",
+    text: "생성 중에는 진행률을 보여줘.",
+    why:
+      "`중에는` 도 같은 모양이다. 시점명사는 부사와 달리 건너뛰어서는 안 된다 — " +
+      "그 앞의 명사는 시점 구의 것이지 동사의 것이 아니다.",
+    requirements: [{ action: "inspect", target: "진행률" }],
+  },
+  {
+    id: "m-standalone-numeral",
+    topic: "prompt_to_media",
+    text: "결과물은 mp4랑 gif 둘 다 저장해줘.",
+    why: "`둘` 은 목록을 세는 말이지 저장할 물건이 아니다.",
+    requirements: [{ action: "create", target: "결과물은 mp4랑 gif" }],
+  },
+  {
+    id: "m-prohibition-then-request",
+    topic: "image_to_video",
+    text: "워터마크는 넣지 말고 영상을 만들어줘.",
+    why: "금지가 앞에 오고 요청이 뒤에 온다. 금지된 동사가 요구사항이 되어서는 안 된다.",
+    requirements: [{ action: "create", target: "영상" }],
+  },
+  {
+    id: "m-comitative-style",
+    topic: "image_prompt_to_video",
+    text: "이 이미지랑 비슷한 스타일로 만들어줘.",
+    why: "`-랑 비슷한` 은 명사구 안에 있다. 구 전체가 만들 대상이다.",
+    requirements: [{ action: "create", target: "이미지랑 비슷한 스타일" }],
+  },
+  {
+    id: "m-add-audio",
+    topic: "image_prompt_to_video",
+    text: "음악도 같이 넣어줘.",
+    why: "`도` 는 목적어에 남지 않고 `같이` 는 대상이 아니다.",
+    requirements: [{ action: "create", target: "음악" }],
+  },
+  {
+    id: "m-vary-prompts",
+    topic: "prompt_to_media",
+    text: "프롬프트를 바꿔가면서 여러 개 만들어줘.",
+    why:
+      "`-면서` 는 절 경계이고, 뒤 절이 만드는 것은 프롬프트가 아니라 여러 개다. " +
+      "앞 절의 목적어가 넘어오면 지어낸 것이 된다.",
+    requirements: [{ action: "create", target: "여러 개" }],
+  },
 ];

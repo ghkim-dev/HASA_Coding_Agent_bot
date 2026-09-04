@@ -100,8 +100,8 @@ before(() => {
 describe("생성형 미디어 프로젝트 요청", () => {
   test("말뭉치 자체", () => {
     // The denominator, guarded. Every rate below is meaningless if this drifts.
-    assert.equal(score.turns, 24);
-    assert.equal(score.goldTotal, 26);
+    assert.equal(score.turns, 31);
+    assert.equal(score.goldTotal, 33);
     for (const media of MEDIA_CASES) {
       assert.ok(media.why.length > 15, `${media.id}: 이유가 없습니다`);
       assert.ok(media.requirements.length > 0, `${media.id}: 정답이 비어 있습니다`);
@@ -120,19 +120,23 @@ describe("생성형 미디어 프로젝트 요청", () => {
     // Deciding that on the user's behalf is the thing this file refuses to do,
     // so the sentence stays unread and stays listed.
     assert.deepEqual(score.unread, ["m-user-chooses"]);
-    assert.equal(score.read, 23);
+    assert.equal(score.read, 30);
   });
 
-  test("행위 정확도 25/26", () => {
+  test("행위 정확도 32/33", () => {
     // Was 13/26. The missing act is the unread sentence above.
+    //
+    // 26 → 33 when seven sentences joined the set, aimed at what the first
+    // twenty-four did not contain. Four of the seven were producing a target
+    // the sentence does not name when they were written down.
     assert.deepEqual(
       { hit: score.actHit, of: score.goldTotal },
-      { hit: 25, of: 26 },
+      { hit: 32, of: 33 },
       "행위 정확도가 움직였습니다",
     );
   });
 
-  test("대상 정확도 25/26", () => {
+  test("대상 정확도 32/33", () => {
     // Was 7/26, and the harder axis — it decides whether a person recognises
     // their own request in what the panel shows back. Every requirement that is
     // produced now names the right thing; the one short of full is the sentence
@@ -140,7 +144,7 @@ describe("생성형 미디어 프로젝트 요청", () => {
     assert.deepEqual(score.wrongTarget, []);
     assert.deepEqual(
       { hit: score.targetHit, of: score.goldTotal },
-      { hit: 25, of: 26 },
+      { hit: 32, of: 33 },
       "대상 정확도가 움직였습니다 — 어긋난 것: " + score.wrongTarget.join(" / "),
     );
   });
