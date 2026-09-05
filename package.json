@@ -22,8 +22,10 @@
     "design:preview": "node --env-file-if-exists=.env src/design/previewCli.ts",
     "design:mutate": "node scripts/mutate.mjs",
     "design:anchors": "node scripts/mutate.mjs --anchors",
+    "design:answers": "node scripts/answers.mjs",
     "audit:assertions": "node scripts/auditAssertions.mjs",
-    "audit:operators": "node scripts/auditOperators.mjs"
+    "audit:operators": "node scripts/auditOperators.mjs",
+    "audit:numbers": "node scripts/auditNumbers.mjs"
   },
   "dependencies": {
     "fastify": "^5.2.1",
