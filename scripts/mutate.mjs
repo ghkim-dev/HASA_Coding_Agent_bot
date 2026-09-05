@@ -48,6 +48,7 @@ const FILES = [
   "src/design/proposalParse.ts",
   "src/design/proposerMetrics.ts",
   "src/design/proposerCases.ts",
+  "src/design/proposerEvidence.ts",
   "src/design/preview.ts",
   "src/design/previewMetrics.ts",
   "src/design/previewReport.ts",
@@ -220,6 +221,7 @@ const SUITES = {
   designer: ["src/design/harnessDesign.test.ts"],
   recommend: ["src/design/recommendationCases.test.ts"],
   proposer: ["src/design/proposerMetrics.test.ts"],
+  evidence: ["src/design/proposerEvidence.test.ts"],
 };
 
 const MUTATIONS = [
@@ -255,6 +257,27 @@ const MUTATIONS = [
     "    -(s.invented.value ?? 1),\n    s.pointed.value ?? 0,", "    s.pointed.value ?? 0,", "proposer"],
   ["M304", "순위에서 지목을 빼기", "src/design/proposerMetrics.ts",
     "    s.pointed.value ?? 0,\n    s.shape.value ?? 0,", "    s.shape.value ?? 0,", "proposer"],
+  // proposerEvidence — 실측을 라우터가 쓸 수 있는 증거로 옮기는 다리. 여기서
+  // 무너지면 잰 적 없는 것을 잰 것처럼 라우터에 넘기게 된다.
+  ["M305", "근거 점수를 조화평균 대신 재현만으로", "src/design/proposerEvidence.ts",
+    "  return (2 * precision * recall) / (precision + recall);", "  return recall;", "evidence"],
+  ["M306", "표본이 모자라도 harness_eval 로 올림", "src/design/proposerEvidence.ts",
+    '    const origin = samples >= MIN_SAMPLES_FOR_EVIDENCE ? "harness_eval" : "declared";',
+    '    const origin = "harness_eval";', "evidence"],
+  ["M307", "능력을 가장 작은 예산에서 읽음 — 굶긴 수를 모델 점수로 씀", "src/design/proposerEvidence.ts",
+    "  const richest = byBudget.get(budgets[budgets.length - 1] ?? 0);",
+    "  const richest = byBudget.get(budgets[0] ?? 0);", "evidence"],
+  ["M308", "예산 바닥에서 잰 예산 목록을 버림", "src/design/proposerEvidence.ts",
+    "      return { tokens, measured: budgets, truncatedAtFloor: score.truncated };",
+    "      return { tokens, measured: [], truncatedAtFloor: score.truncated };", "evidence"],
+  ["M309", "한 번도 답 못 낸 모델을 굶은 목록에서 뺌", "src/design/proposerEvidence.ts",
+    "    .filter((e) => e.budget.tokens === null || e.budget.tokens > budget)",
+    "    .filter((e) => e.budget.tokens !== null && e.budget.tokens > budget)", "evidence"],
+  ["M310", "해상도를 표본과 무관한 상수로", "src/design/proposerEvidence.ts",
+    "  return Math.sqrt((p * (1 - p)) / denominator);", "  return 0.05;", "evidence"],
+  ["M311", "구분 불가 묶음을 1등 하나로 좁힘", "src/design/proposerEvidence.ts",
+    "    return top - value <= Math.max(best.resolution, e.resolution);",
+    "    return top - value <= 0;", "evidence"],
   ["M01", "span 범위 검사 제거", "src/design/sourceSpan.ts",
     'if (span.start < 0 || span.end > full.length) problems.push("out_of_range");', ""],
   ["M02", "correction merge 제거", "src/design/requirementSpec.ts",
