@@ -252,6 +252,7 @@ curl -X POST http://127.0.0.1:7801/runs \
 
 ## 설계 문서
 
+- **[docs/measurement-and-memory.md](docs/measurement-and-memory.md) — 용어 사전 + 전체 설계 (그림 포함). 처음 읽는다면 여기부터**
 - [docs/architecture.md](docs/architecture.md) — 시스템 구성, 도메인 모델, 스케줄러, 런타임 추상화
 - [docs/compatibility-matrix.md](docs/compatibility-matrix.md) — probe 항목, 판정 기준, 모델 자격 규칙
 - [docs/security-policy.md](docs/security-policy.md) — 키 취급, 명령 allowlist, 격리, judge 제한
