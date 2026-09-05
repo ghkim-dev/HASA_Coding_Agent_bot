@@ -102,6 +102,11 @@ export function buildProposerCase(input: {
     if (first < 0) {
       throw new Error(`${input.turnId}: 인용 «${want.quote}» 이(가) 원문에 없습니다.`);
     }
+    // `>= 0` rather than `> 0`, and the two are equivalent here because the
+    // search starts at `first + 1` and so can never return 0. Written down
+    // because an automatic mutation audit flags this line and will keep
+    // flagging it: it is the one surviving mutant in this file that no test can
+    // kill, which is different from one no test happens to.
     if (input.text.indexOf(want.quote, first + 1) >= 0) {
       throw new Error(`${input.turnId}: 인용 «${want.quote}» 이(가) 원문에 두 번 나옵니다.`);
     }

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   nearest,
   outcomeOf,
+  recordTurn,
   remember,
   revise,
   verdictFor,
@@ -158,6 +159,33 @@ describe("remember", () => {
     assert.equal(withSpace[0]?.space, spaceKey(SPACE));
   });
 
+  it("읽어낸 행위와 대상을 행에 담는다", () => {
+    // 자동 변이 감사가 찾은 구멍. `spec.act === undefined ? {} : {act}` 를
+    // `!==` 로 뒤집어도 전체 스위트가 통과했다 — 행이 행위와 대상을 나른다는
+    // 것을 아무 시험도 주장하지 않았다. 이웃의 결과를 모델 증거로 읽으려면
+    // 그 둘이 있어야 한다.
+    const [only] = remember({
+      sessionId: "s1",
+      specs: [spec({ id: "r1", act: "inspect", target: "시스템 아키텍처" })],
+      proposedBy: null,
+      budget: null,
+      at: 0,
+    });
+    assert.equal(only?.act, "inspect");
+    assert.equal(only?.target, "시스템 아키텍처");
+  });
+
+  it("문장이 대상을 대지 않았으면 대상 칸이 없다 — undefined 를 값으로 담지 않는다", () => {
+    const [only] = remember({
+      sessionId: "s1",
+      specs: [spec({ id: "r1", act: "inspect" })],
+      proposedBy: null,
+      budget: null,
+      at: 0,
+    });
+    assert.equal("target" in (only ?? {}), false);
+  });
+
   it("임베딩이 없어도 행은 남는다 — 못 잰 것이 없던 일은 아니다", () => {
     const rows = remember({
       sessionId: "s1",
@@ -169,6 +197,51 @@ describe("remember", () => {
     });
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.vector, undefined);
+  });
+});
+
+describe("recordTurn", () => {
+  // 이 함수에는 시험이 하나도 없었다. 자동 변이가 벡터·공간 전달을 통째로
+  // 끊어도 전체 스위트가 통과해서 드러났다 — 쓴 사람이 시험을 잊은 자리다.
+  it("벡터와 공간을 그대로 넘긴다", () => {
+    const record = recordTurn({
+      requirements: [spec({ id: "r1" })],
+      sessionId: "s1",
+      refusedProposals: 0,
+      proposedBy: "m",
+      budget: 800,
+      at: 0,
+      vectors: new Map([["r1", [1, 0, 0]]]),
+      space: SPACE,
+    });
+    assert.deepEqual(record.rows[0]?.vector, [1, 0, 0]);
+    assert.equal(record.rows[0]?.space, spaceKey(SPACE));
+  });
+
+  it("거부된 제안 수를 그대로 들고 나온다 — 기록 못 한 것을 숨기지 않는다", () => {
+    const record = recordTurn({
+      requirements: [],
+      sessionId: "s1",
+      refusedProposals: 3,
+      proposedBy: "m",
+      budget: 800,
+      at: 0,
+    });
+    assert.equal(record.refusedProposals, 3);
+    assert.equal(record.rows.length, 0);
+  });
+
+  it("벡터를 주지 않으면 행에도 벡터가 없다", () => {
+    const record = recordTurn({
+      requirements: [spec({ id: "r1" })],
+      sessionId: "s1",
+      refusedProposals: 0,
+      proposedBy: null,
+      budget: null,
+      at: 0,
+    });
+    assert.equal(record.rows[0]?.vector, undefined);
+    assert.equal(record.rows[0]?.space, undefined);
   });
 });
 

@@ -148,6 +148,30 @@ describe("scoreProposerCase — 읽음과 지목은 다른 축이다", () => {
     assert.equal(outcome.named, 1, "거부됐어도 읽기는 읽었다");
   });
 
+  it("한쪽만 담고 있어도 옮겨적음이다 — 자동 변이가 찾은 구멍", () => {
+    // `a.includes(b) || b.includes(a)` 를 `&&` 로 바꿔도 전체 스위트가
+    // 통과했다. 앞선 옮겨적음 시험이 구간을 **정확히** 베낀 답만 써서, 양방향이
+    // 동시에 참이었기 때문이다. 잘라 베낀 답은 한 방향만 참이고, 그것도 베낀
+    // 것이다.
+    const a = legacy.text.indexOf(WANT_A);
+    const outcome = scoreProposerCase({
+      testCase: legacy,
+      raw: answer([{ text: WANT_A.slice(0, 10), start: a, end: a + WANT_A.length }]),
+    });
+    assert.equal(outcome.transcribed, 1, "구간의 일부만 베껴도 베낀 것이다");
+  });
+
+  it("빈 문장은 옮겨적음이 아니다", () => {
+    // `a.length === 0 || b.length === 0` 를 `&&` 로 바꿔도 통과했다. 한쪽만
+    // 비었을 때 `x.includes("")` 가 참이라 빈 답이 베낀 것으로 세어진다.
+    const a = legacy.text.indexOf(WANT_A);
+    const outcome = scoreProposerCase({
+      testCase: legacy,
+      raw: answer([{ text: "", start: a, end: a + WANT_A.length }]),
+    });
+    assert.equal(outcome.transcribed, 0, "아무 말도 안 한 것은 베낀 것이 아니다");
+  });
+
   it("권한을 참칭한 후보도 읽음은 읽음으로 센다 — 넘어선 것과 못 읽은 것은 다르다", () => {
     // parseProposals 는 참칭 항목을 지우지 않고 표시해서 내보낸다. 거부를
     // 검사기가 '기록'하게 하려는 설계이고, 이 지표가 그것을 없던 일로 만들면
@@ -189,6 +213,24 @@ describe("읽음 임계값", () => {
 
   it("임계값은 0과 1 사이의 실수다", () => {
     assert.ok(NAMED_COVERAGE > 0 && NAMED_COVERAGE < 1);
+  });
+
+  it("계수가 임계값과 정확히 같으면 읽은 것이다 — 경계는 포함이다", () => {
+    // 자동 변이 감사가 남긴 마지막 자리들. `>=` 를 `>` 로 바꿔도, 그리고
+    // 바이그램 루프의 `<=` 를 `<` 로 바꿔도 전체 스위트가 통과했다 — 계수가
+    // 정확히 0.6 이 되는 사례가 하나도 없었기 때문이다. 아래는 계산해서 만든
+    // 그 사례이고, 마지막 바이그램을 잃으면 0.5 로 떨어져 두 변이를 함께 잡는다.
+    const phased = PROPOSER_CASES.find((k) => k.testCase.turnId === "p-roadmap-phased")?.testCase;
+    assert.ok(phased !== undefined);
+    assert.equal(phased.wants[1]?.quote, "단계별 투자 규모를 산정해");
+    const outcome = scoreProposerCase({
+      testCase: phased,
+      raw: answer([{ text: "정해단계계별별투투자자규", start: 0, end: 5 }]),
+    });
+    assert.equal(outcome.named, 1, "정확히 0.6 이면 읽은 것으로 세야 한다");
+    // 읽음과 지어냄은 같은 임계를 서로 다른 자리에서 쓴다. 읽음만 주장하면
+    // 지어냄 쪽 경계는 여전히 아무도 지키지 않는다 — 감사가 그 자리를 남겼다.
+    assert.equal(outcome.invented, 0, "읽은 것을 동시에 지어낸 것으로 셀 수는 없다");
   });
 
   it("절반쯤 겹치는 문장은 그 요구를 읽은 것이 아니다", () => {

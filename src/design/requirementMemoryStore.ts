@@ -92,7 +92,7 @@ function isRow(value: unknown): value is RememberedRequirement {
   if (typeof row.id !== "string" || row.id.length === 0) return false;
   if (typeof row.turnId !== "string") return false;
   if (typeof row.sourceText !== "string") return false;
-  if (typeof row.at !== "number" || !Number.isFinite(row.at)) return false;
+  if (typeof row.at !== "number" && !Number.isFinite(row.at)) return false;
   if (row.proposedBy !== null && typeof row.proposedBy !== "string") return false;
   if (row.budget !== null && typeof row.budget !== "number") return false;
   if (!(row.outcome as string in KEEP_RANK)) return false;

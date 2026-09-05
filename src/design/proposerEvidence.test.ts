@@ -329,6 +329,35 @@ describe("indistinguishable — 말뭉치가 못 가르는 것을 가른 척하�
     assert.deepEqual(tied.map((e) => e.modelId), ["good"]);
   });
 
+  it("표본이 문턱과 정확히 같으면 harness_eval 이다 — 경계는 포함이다", () => {
+    // 자동 변이 감사가 찾았다. `samples >= MIN_SAMPLES_FOR_EVIDENCE` 를 `>` 로
+    // 바꿔도 통과했는데, 표본이 문턱과 정확히 같은 사례가 없었기 때문이다.
+    const exact = scoreFor({
+      modelId: "boundary",
+      cases: MIN_SAMPLES_FOR_EVIDENCE,
+      wants: 4,
+      named: 3,
+      invented: 0,
+      proposals: 3,
+      shapeOk: MIN_SAMPLES_FOR_EVIDENCE,
+    });
+    const [ev] = evidenceFrom([measurement(6000, [exact])]);
+    assert.equal(ev?.capabilities.sourceGrounding?.samples, MIN_SAMPLES_FOR_EVIDENCE);
+    assert.equal(ev?.capabilities.sourceGrounding?.origin, "harness_eval");
+  });
+
+  it("분모가 0 이면 해상도는 가장 넓다 — 모르는 정밀도는 정밀도 없음이다", () => {
+    // `value === null || denominator <= 0` 의 두 갈래 모두 시험이 없었다.
+    // 요구가 0건인 말뭉치는 분모가 0 이고, 그때 좁은 해상도를 주면 아무 근거
+    // 없이 순위를 가를 수 있게 된다.
+    const noWants = scoreFor({
+      modelId: "empty",
+      cases: 4, wants: 0, named: 0, invented: 0, proposals: 4, shapeOk: 4,
+    });
+    const [ev] = evidenceFrom([measurement(6000, [noWants])]);
+    assert.equal(ev?.resolution, 1);
+  });
+
   it("해상도는 표본이 커질수록 좁아진다", () => {
     const small = scoreFor({ modelId: "small", cases: 4, wants: 4, named: 3, invented: 1, proposals: 4, shapeOk: 4 });
     const large = scoreFor({ modelId: "large", cases: 10, wants: 64, named: 48, invented: 16, proposals: 64, shapeOk: 10 });

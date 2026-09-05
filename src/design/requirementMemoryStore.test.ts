@@ -78,6 +78,19 @@ describe("loadMemory", () => {
     assert.equal(got.kind, "refused", "못 읽은 것을 첫 실행으로 착각하면 기억이 조용히 사라진다");
   });
 
+  it("최상위가 배열이면 거부한다 — 객체가 아닌 것도 JSON 이다", async () => {
+    // 자동 변이 감사가 찾았다. `typeof parsed !== "object" || parsed === null`
+    // 을 `&&` 로 바꿔도 통과했는데, JSON 이면서 객체가 아닌 입력을 아무 시험도
+    // 주지 않았기 때문이다. 배열은 typeof 가 "object" 라 앞 조건만으로는 안 걸린다.
+    await writeFile(path(), "[]", "utf8");
+    assert.equal((await loadMemory({ path: path(), baseUrl: BASE })).kind, "refused");
+  });
+
+  it("최상위가 null 이면 거부한다", async () => {
+    await writeFile(path(), "null", "utf8");
+    assert.equal((await loadMemory({ path: path(), baseUrl: BASE })).kind, "refused");
+  });
+
   it("형식 문자열이 다르면 거부한다", async () => {
     await writeFile(path(), JSON.stringify({ format: "옛날형식", rows: [] }), "utf8");
     const got = await loadMemory({ path: path(), baseUrl: BASE });
@@ -286,6 +299,20 @@ describe("capRows — 잊더라도 신호부터 잊지는 않는다", () => {
 
   it("한도가 0 이면 전부 버린다", () => {
     assert.equal(capRows([row({ id: "a" })], 0).length, 0);
+  });
+
+  it("행 수가 한도와 정확히 같으면 아무것도 버리지 않는다", () => {
+    // `rows.length <= maxRows` 를 `<` 로 바꿔도 통과했다 — 딱 맞는 경우를
+    // 아무 시험도 주지 않아서, 한도에 정확히 찬 기억이 조용히 잘려도 몰랐다.
+    const rows = [row({ id: "a", at: 1 }), row({ id: "b", at: 2 })];
+    assert.deepEqual(capRows(rows, 2).map((r) => r.id), ["a", "b"]);
+  });
+
+  it("같은 등급·같은 나이면 아이디순으로 갈라 결과가 흔들리지 않는다", () => {
+    // 정렬의 마지막 갈래(`|| a.id.localeCompare(b.id)`)를 지워도 통과했다.
+    // 등급도 나이도 같은 두 행이 없었기 때문이다.
+    const rows = [row({ id: "b", at: 5 }), row({ id: "a", at: 5 })];
+    assert.deepEqual(capRows(rows, 1).map((r) => r.id), ["a"]);
   });
 
   it("기본 한도는 양수다", () => {
