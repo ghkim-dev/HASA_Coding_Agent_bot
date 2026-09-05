@@ -346,6 +346,10 @@ let unusable = 0;
 let refused = 0;
 let total = 0;
 const unchecked = [];
+/** 이번 실행에서 실제로 본 답들의 열쇠. 낡은 면제를 찾는 데 쓴다. */
+const seenKeys = new Set();
+/** 이번 실행에서 검사되지 않은 답들의 열쇠. */
+const missedKeys = new Set();
 
 for (const corpus of work) {
   const original = readFileSync(corpus.file, "utf8");
@@ -438,6 +442,12 @@ for (const corpus of work) {
       `${bad > 0 ? ` (쓸 수 없는 변조 ${bad})` : ""}${note}`,
   );
   for (const answer of surprising) unchecked.push(keyOf(answer));
+  // 이 말뭉치에서 실제로 본 열쇠를 기록해 둔다. 나중에 면제 표와 대조해
+  // 「안 보기로 했는데 이제는 보고 있는」 항목을 찾기 위해서다.
+  for (const answer of found) seenKeys.add(keyOf(answer));
+  // 검사되지 않은 답은 따로 모은다 — 예상된 것이든 아니든. 면제가 낡았는지는
+  // 「표에 있는데 이번에는 검사됐다」로 정해지므로, 놓친 쪽을 알아야 한다.
+  for (const answer of missed) missedKeys.add(keyOf(answer));
 }
 
 say("-".repeat(78));
@@ -447,6 +457,18 @@ say(`쓸 수 없는 변조         : ${unusable}`);
 say(`말뭉치가 거부한 답      : ${refused}`);
 say(`예상 밖으로 안 보는 답    : ${unchecked.length}`);
 for (const line of unchecked) say(`   ${line}`);
+
+// 면제가 아직 유효한가. 「이 답은 검사되지 않고, 그래도 된다」고 적어 둔 것을
+// 나중에 누군가 검사하게 만들면, 이유는 거짓이 되는데 표에는 그대로 남는다.
+// 변이 하네스의 EXPECTED_SILENT 와 같은 구멍이었고, 같은 이유로 메워둔다.
+const staleAllowances = [...EXPECTED_UNCHECKED.keys()].filter(
+  (key) => seenKeys.has(key) && !missedKeys.has(key),
+);
+const unknownAllowances = [...EXPECTED_UNCHECKED.keys()].filter((key) => !seenKeys.has(key));
+say(`낡은 면제            : ${staleAllowances.length}`);
+for (const line of staleAllowances) say(`   ${line}`);
+say(`답을 찾지 못한 면제   : ${unknownAllowances.length}`);
+for (const line of unknownAllowances) say(`   ${line}`);
 
 const report = process.argv[2];
 if (report !== undefined && !report.startsWith("--")) {

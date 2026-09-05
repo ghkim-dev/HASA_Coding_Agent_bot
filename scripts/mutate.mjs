@@ -1215,6 +1215,25 @@ const MUTATIONS = [
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */
+/**
+ * Mutations that were removed, and what their reasoning still tells us.
+ *
+ * Separate from `EXPECTED_SILENT` because that table means "this mutation runs
+ * and no test catches it" — an id in it that is not a mutation makes the table
+ * lie about its own contents, and the run now says so. The reasoning is worth
+ * keeping when the mutation is not: it explains why a defensive condition in
+ * the source stays even though nothing can currently violate it.
+ */
+const REMOVED_MUTATIONS = new Map([
+  [
+    "M86",
+    "verified 집계의 evidence 조건은 현재 이벤트 모델에서 위반될 수 없다. reduceTask 는 도구 관측이 " +
+      "요구사항을 settle 할 때만 passed 로 올리므로 evidence 가 빈 passed 는 만들어지지 않는다. " +
+      "TaskState 를 직접 주입할 공개 경로가 없어 단위로도 재현할 수 없어, 미래의 reducer 변경에 대비한 " +
+      "방어 조건으로 남긴다. 변이 자체는 제거되었고, 그 판단만 여기 남는다.",
+  ],
+]);
+
 const EXPECTED_SILENT = new Map([
   [
     "M168",
@@ -1227,13 +1246,6 @@ const EXPECTED_SILENT = new Map([
       "finished 분기도 같은 warning 을 돌려주므로 분기를 지워도 결과가 같다",
   ],
   ["M17", "종료를 보장하는 것은 attempted 중복 방지이므로 pass 상한을 지워도 동작이 같다"],
-  [
-    "M86",
-    "verified 집계의 evidence 조건은 현재 이벤트 모델에서 위반될 수 없다. reduceTask 는 도구 관측이 " +
-      "요구사항을 settle 할 때만 passed 로 올리므로 evidence 가 빈 passed 는 만들어지지 않는다. " +
-      "TaskState 를 직접 주입할 공개 경로가 없어 단위로도 재현할 수 없어, 미래의 reducer 변경에 대비한 " +
-      "방어 조건으로 남긴다 (M86 은 제거됨)",
-  ],
   [
     "M58",
     "mayExecute 의 두 번째 조건은 현재 중복이다. audit.ok 가 true 이면 NO_USER_REQUIREMENT·" +
@@ -1506,6 +1518,8 @@ const restore = () => {
 
 let notApplied = 0;
 let unexpectedlySilent = 0;
+/** 면제 표에 남아 있지만 이제는 물고 있는 변이. 낡은 판단이다. */
+let staleExemptions = [];
 let aborted = null;
 
 try {
@@ -1562,6 +1576,14 @@ try {
     if (silent && !allowed) {
       note = "  << 물지 않음";
       unexpectedlySilent += 1;
+    }
+    // 면제가 아직 유효한지도 센다. 「이 변이는 물 수 없다」고 적어 둔 항목을
+    // 누군가 나중에 물게 만들면, 그 이유는 이제 거짓인데 표에는 그대로 남는다.
+    // 검사되지 않는 답을 찾는 것과 같은 이유로 이쪽도 봐야 한다 — 낡은 면제는
+    // 조용히 쌓이고, 다음 사람은 그것을 여전히 유효한 판단으로 읽는다.
+    if (!silent && allowed) {
+      note = "  << 면제가 낡음: 이제 물고 있으므로 EXPECTED_SILENT 에서 빼야 한다";
+      staleExemptions.push(id);
     }
     say(`${id} ${label.padEnd(34)} pass ${String(result.pass).padStart(3)}  fail ${String(result.fail).padStart(2)}${note}`);
   }
@@ -1623,6 +1645,22 @@ say(`변이 적용          : ${MUTATIONS.length - notApplied} / ${MUTATIONS.len
 say(`변이 미적용        : ${notApplied}`);
 say(`예상 밖 무반응     : ${unexpectedlySilent}`);
 say(`허용된 무반응      : ${[...EXPECTED_SILENT.keys()].join(", ") || "없음"}`);
+say(`낡은 면제          : ${staleExemptions.join(", ") || "없음"}`);
+// 모두 적용된 경우에만 의미가 있다 — 적용되지 않은 변이의 면제는 낡은 것이 아니라 재지 못한 것이다.
+const unknownExemptions = notApplied === 0
+  ? [...EXPECTED_SILENT.keys()].filter((id) => !MUTATIONS.some(([m]) => m === id))
+  : [];
+if (unknownExemptions.length > 0) {
+  say(`없는 변이의 면제  : ${unknownExemptions.join(", ")}`);
+}
 
 write(process.argv[2]);
-process.exit(notApplied === 0 && unexpectedlySilent === 0 && after.fail === 0 ? 0 : 1);
+process.exit(
+  notApplied === 0 &&
+  unexpectedlySilent === 0 &&
+  staleExemptions.length === 0 &&
+  unknownExemptions.length === 0 &&
+  after.fail === 0
+    ? 0
+    : 1,
+);
