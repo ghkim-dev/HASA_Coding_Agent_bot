@@ -172,6 +172,9 @@ const SUITES = {
     // been asked to read, and the numbers it scores there are what most of the
     // mutations below are measured against.
     "src/design/mediaCases.test.ts",
+    // C4.41: IT·디지털 전환 컨설팅 말뭉치. 관형절 가드와 컨설팅 동사들은 여기서만
+    // 재어진다 — 앞의 두 말뭉치에는 안팎이 다른 관형절 문장이 하나도 없었다.
+    "src/design/consultingCases.test.ts",
   ],
   metrics: ["src/design/preview.test.ts"],
   gold: ["src/design/goldRequirements.test.ts"],
@@ -770,8 +773,8 @@ const MUTATIONS = [
     "    const clause = plainImperative(source);",
     "    const clause = source;", "recall"],
   ["M192", "조건절의 동사를 요청으로 읽음", "src/design/functionalExtract.ts",
-    "    const preferred = ordered.filter((found) => !conditional(found.match));",
-    "    const preferred = ordered;", "recall"],
+    "    const preferred = usable.filter(\n      (found) => !conditional(found.match) && !adnominal(found.match),\n    );",
+    "    const preferred = usable.filter(\n      (found) => !adnominal(found.match),\n    );", "recall"],
   ["M193", "목적어 표시를 문장 끝에서만 찾음", "src/design/functionalExtract.ts",
     "    if (/[을를]$/u.test(token)) {",
     "    if (/[을를]$/u.test(token) && i === beforeTokens.length - 1) {", "recall"],
@@ -1076,6 +1079,25 @@ const MUTATIONS = [
   ["M287", "`속도` 를 단위명사 목록에서 뺌 — `가속도` 가 `가속` 이 됨", "src/design/functionalExtract.ts",
     "  /^(?:.*(?:속도|해상도|정확도|밀도|온도|각도|채도|명도|강도|빈도|정도|고도|위도|경도|진도|척도|난이도|만족도|신뢰도|충실도|완성도|기여도|중요도|우선도|유사도|선명도|투명도|가용도))$/u;",
     "  /^(?:.*(?:해상도|정확도|밀도|온도|각도|채도|명도|강도|빈도|정도|고도|위도|경도|진도|척도|난이도|만족도|신뢰도|충실도|완성도|기여도|중요도|우선도|유사도|선명도|투명도|가용도))$/u;", "recall"],
+  // ---- C4.41: a verb inside a relative clause, and who competes for the clause -
+  ["M288", "관형절 안의 동사를 요청으로 읽음 — `이전하는 로드맵을 만들어줘` 가 ERP 이전이 됨", "src/design/functionalExtract.ts",
+    "    const preferred = usable.filter(\n      (found) => !conditional(found.match) && !adnominal(found.match),\n    );",
+    "    const preferred = usable.filter(\n      (found) => !conditional(found.match),\n    );", "recall"],
+  ["M289", "관형형 판정을 무력화", "src/design/functionalExtract.ts",
+    "      /^(?:는|은|을|ㄹ|던)/u.test(clause.slice(match.index + match[0].length));",
+    "      /(?!)/u.test(clause.slice(match.index + match[0].length));", "recall"],
+  ["M290", "부정된 동사가 우선순위를 다투게 둠 — 진짜 동사를 굶김", "src/design/functionalExtract.ts",
+    "    const usable = ordered.filter((found) => !negated(found.match));",
+    "    const usable = ordered;", "recall"],
+  ["M291", "컨설팅 이관 동사를 다시 뺌", "src/design/functionalExtract.ts",
+    "  verb(\"이관\", \"(?:하|해)\", \"modify\"),",
+    "  verb(\"이관\", \"(?!)\", \"modify\"),", "recall"],
+  ["M292", "`정하다` 를 다시 뺌", "src/design/functionalExtract.ts",
+    "  { pattern: /(?<![가-힣])정[해하](?:줘|주세요|주(?![는던])|고|면|자|라|여)/, action: \"create\", phrase: \"정한다\" },",
+    "  { pattern: /(?!)/, action: \"create\", phrase: \"정한다\" },", "recall"],
+  ["M293", "`찾아서` 어미를 다시 뺌", "src/design/functionalExtract.ts",
+    "  { pattern: /찾아(?:줘|주세요|주(?![는던])|봐|서|야|도)/, action: \"inspect\" },",
+    "  { pattern: /찾아(?:줘|주세요|주(?![는던])|봐)/, action: \"inspect\" },", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

@@ -187,6 +187,35 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   verb("정리", "(?:하|해)", "modify"),
   verb("갱신", "(?:하|해)", "modify"),
   verb("번역", "(?:하|해)", "modify"),
+  // IT·디지털 전환 컨설팅의 동사들.
+  //
+  // 이 어휘는 저장소를 고치는 심부름과 생성형 미디어 주위에서 자랐고, 컨설팅
+  // 요청이 산출물을 만들고 시스템을 옮기는 데 쓰는 낱말은 하나도 없었다. 25문장을
+  // 물어보니 여덟 문장이 이것 하나 때문에 통째로 읽히지 않았다 — "온프레미스
+  // 서버를 클라우드로 이전해줘" 가 아무 요구사항도 내지 않는다.
+  //
+  // `이관`·`이전`·`전환`·`통합` 은 `변환` 과 같은 논거로 `modify` 다: 문장이
+  // 대상으로 삼는 것은 옮겨지는 쪽이지 도착지가 아니다. `수립`·`작성`·`설계` 는
+  // 없던 문서가 생기므로 `create`, `산정`·`진단` 은 무엇도 바꾸지 않으므로
+  // `inspect`, `보고` 는 읽은 것을 사람에게 돌려주는 일이라 `inspect` 다.
+  verb("이관", "(?:하|해)", "modify"),
+  verb("이전", "(?:하|해)", "modify"),
+  verb("전환", "(?:하|해)", "modify"),
+  verb("통합", "(?:하|해)", "modify"),
+  verb("조정", "(?:하|해)", "modify"),
+  verb("적용", "(?:하|해)", "modify"),
+  verb("수립", "(?:하|해)", "create"),
+  verb("작성", "(?:하|해)", "create"),
+  verb("설계", "(?:하|해)", "create"),
+  verb("산정", "(?:하|해)", "inspect"),
+  verb("진단", "(?:하|해)", "inspect"),
+  verb("보고", "(?:하|해)", "inspect"),
+  // `정하다` 는 어간이 한 음절이라 표에 그냥 넣을 수 없다 — `일정하게`,
+  // `특정한`, `결정하고` 안에 그대로 들어 있기 때문이다. 왼쪽에 한글이 없을 때만
+  // 본다: "우선순위를 정해줘" 는 앞이 공백이고, `일정하` 는 앞이 `일` 이다.
+  { pattern: /(?<![가-힣])정[해하](?:줘|주세요|주(?![는던])|고|면|자|라|여)/, action: "create", phrase: "정한다" },
+  // "감사 로그를 남기게 해줘" — 기록을 만드는 일이라 `create` 다.
+  { pattern: /남기(?:게|고|도록|기|면)|남겨(?:줘|주세요|주(?![는던]))/, action: "create", phrase: "남긴다" },
   // `변환` is `modify` rather than `create` on the argument the sentence itself
   // makes: "이미지를 영상으로 변환해줘" marks the *source* as the object. What is
   // asked for is that this thing become another form, not that a second thing
@@ -235,7 +264,9 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   { pattern: /살펴(?:봐|보)/, action: "inspect" },
   verb("설명", "(?:하|해)", "inspect"),
   { pattern: /보여(?:줘|주세요|주(?![는던])|달라|다오)/, action: "inspect" },
-  { pattern: /찾아(?:줘|주세요|주(?![는던])|봐)/, action: "inspect" },
+  // `-아서` 도 이 동사의 활용형이다. "필드를 찾아서 규칙을 만들어줘" 의 앞 절이
+  // 통째로 사라지고 있었다 — 동사를 모르는 것이 아니라 어미가 목록에 없었다.
+  { pattern: /찾아(?:줘|주세요|주(?![는던])|봐|서|야|도)/, action: "inspect" },
   // "원인을 알려줘" is a request to look and report, and one of the most common
   // shapes there is. It produced nothing at all.
   { pattern: /알려(?:줘|주세요|주(?![는던])|줄래|주라|다오)/, action: "inspect" },
@@ -1761,13 +1792,51 @@ export function functionalCandidates(input: { turnId: string; text: string }): F
       const after = clause.slice(match.index + match[0].length);
       return /^면(?!서)/u.test(after) || (match[0].endsWith("면") && !after.startsWith("서"));
     };
+    /**
+     * 관형형으로 끝난 동사는 뒤에 오는 명사를 꾸미는 것이지 요청이 아니다.
+     *
+     * 조건절 가드와 같은 문제이고 같은 방식으로 진다. "레거시 ERP를 클라우드로
+     * 이전하는 로드맵을 만들어줘" 에서 만들 것은 로드맵이고 `이전하는` 은 그
+     * 로드맵이 무엇에 대한 것인지 말할 뿐인데, 표에서 `이전` 이 `만들` 보다 먼저
+     * 시도되어 절을 가져갔다 — 결과는 **레거시 ERP를 이전한다** 로, 로드맵이
+     * 통째로 사라진 요구사항이다.
+     *
+     * 이 자리가 오래 비어 있었던 이유는 말뭉치가 이 모양을 담지 않아서다.
+     * "이미지를 동영상으로 만들어주는 프로젝트를 만들어줘" 는 안팎이 같은 동사라
+     * 어느 쪽이 이겨도 결과가 같았고, 컨설팅 요청을 물어보고서야 안팎이 다른
+     * 문장이 처음 들어왔다.
+     *
+     * `VERB_ADNOMINAL` 은 이미 같은 것을 알아보지만 그것은 **목적어 스캔**의
+     * 판정이고, 여기는 어느 동사가 절을 가져가는가의 판정이다. 두 곳이 필요하다.
+     */
+    const adnominal = (match: RegExpExecArray): boolean =>
+      /^(?:는|은|을|ㄹ|던)/u.test(clause.slice(match.index + match[0].length));
     const ordered = [
       ...VERBS.map((entry) => ({ entry, match: entry.pattern.exec(clause) })).filter(
         (found): found is { entry: VerbEntry; match: RegExpExecArray } => found.match !== null,
       ),
     ];
-    const preferred = ordered.filter((found) => !conditional(found.match));
-    for (const { entry: { action, phrase }, match } of preferred.length > 0 ? preferred : ordered) {
+    /**
+     * 부정된 동사는 우선순위를 다투지도 않는다.
+     *
+     * 아래 반복문이 `NEGATED` 로 걸러내는 것이 보증이고, 이것은 순서 문제다. 두
+     * 검사가 따로 있으면 **부정된 동사가 유일한 우선 후보가 되어 진짜 동사를
+     * 굶긴다**: "아니, 실행하라는 게 아니라 코드 결과물을 보여달라는 말이야" 에서
+     * `실행하라는` 은 관형형이 아니라 우선 후보로 남고 `보여달라는` 은 관형형이라
+     * 밀려나, 우선 후보가 하나뿐인 채로 그것이 반복문 안에서 부정으로 버려지면서
+     * 절이 통째로 비었다. 관형절 가드를 넣기 전에는 `보여` 가 우선 후보였으므로
+     * 보이지 않던 자리다.
+     *
+     * 보증은 그대로다 — 여기서 빠져도 반복문의 `NEGATED` 는 여전히 돈다.
+     */
+    const negated = (match: RegExpExecArray): boolean =>
+      NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8));
+    const usable = ordered.filter((found) => !negated(found.match));
+    const preferred = usable.filter(
+      (found) => !conditional(found.match) && !adnominal(found.match),
+    );
+    const candidates = preferred.length > 0 ? preferred : usable.length > 0 ? usable : ordered;
+    for (const { entry: { action, phrase }, match } of candidates) {
 
       // The user forbade this verb rather than asking for it. Emitting the
       // positive form here would contradict `statedProhibitions`, which is

@@ -84,6 +84,21 @@ const EXPECTED_UNCHECKED = new Map([
     "위와 같다 — S20-mixed-stress#6 쪽.",
   ],
   [
+    'src/design/consultingCases.ts:122 :: requirements = "PoC부터 전사 확산까지 단계"',
+    "두 어절 창이 이 명사구를 자르는 자리다. `consultingCases.test.ts` 의 " +
+      "KNOWN_TARGET_MISS 가 잘린 값을 못 박고 있으므로, 테스트는 정답이 아니라 못을 " +
+      "주장한다 — 정답 쪽을 바꿔도 실패하지 않는 것이 맞고, 창이 넓어져 정답과 " +
+      "같아지는 순간 그 못이 실패한다.",
+  ],
+  [
+    'src/design/consultingCases.ts:267 :: requirements = "장애 복구 시간"',
+    "위와 같다 — 세 어절 명사구의 앞머리가 잘리는 자리이고, 잘린 값이 못 박혀 있다.",
+  ],
+  [
+    'src/design/consultingCases.ts:298 :: requirements = "벤더 세 곳의 제안서"',
+    "위와 같다 — 수량 구가 남고 머리 명사가 잘리는 자리이고, 잘린 값이 못 박혀 있다.",
+  ],
+  [
     'src/design/goldCases.ts:517 :: relation = "new_task"',
     "past-failure-retry 의 두 번째 턴이다. `RELATION_AS_BUILT` 가 이 턴을 `refine` 으로 " +
       "못 박아 두었으므로 테스트는 정답이 아니라 못을 주장하고, 그래서 정답 쪽을 바꿔도 " +
@@ -119,6 +134,7 @@ const ANSWER_KEYS = [
 
 const CORPORA = [
   { file: "src/design/mediaCases.ts", tests: ["src/design/mediaCases.test.ts"] },
+  { file: "src/design/consultingCases.ts", tests: ["src/design/consultingCases.test.ts"] },
   { file: "src/design/mediaCasesEnglish.ts", tests: ["src/design/mediaCasesEnglish.test.ts"] },
   { file: "src/design/mediaConversations.ts", tests: ["src/design/mediaConversations.test.ts"] },
   { file: "src/design/mediaConversationsEnglish.ts", tests: ["src/design/mediaConversations.test.ts"] },
