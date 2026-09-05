@@ -122,6 +122,10 @@ const ANSWER_KEYS = [
   "expectWinner",
   "becauseCapability",
   "quote",
+  // `proposerCases` 는 한 사례가 여러 구절을 답으로 갖는다. 단수 `quote` 만
+  // 보면 그 말뭉치의 답 전부가 검사 밖에 남는다 — 등록해 놓고 아무것도 재지
+  // 않는 것이 검사되지 않는 것보다 나쁘다.
+  "quotes",
   "polarity",
   "mustContainKinds",
   "mustContainText",
@@ -148,6 +152,7 @@ const CORPORA = [
   },
   { file: "src/design/holdoutCases.ts", tests: ["src/design/holdoutCases.test.ts"] },
   { file: "src/design/recommendationCases.ts", tests: ["src/design/recommendationCases.test.ts"] },
+  { file: "src/design/proposerCases.ts", tests: ["src/design/proposerMetrics.test.ts"] },
 ];
 
 for (const name of readdirSync("examples/design-preview").filter((f) => f.endsWith(".json")).sort()) {
@@ -271,14 +276,30 @@ const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("he
 
 /** What the corpus exports, as a comparable string — or null if it will not load. */
 let loadCount = 0;
+/**
+ * A corpus that refuses the changed answer at construction.
+ *
+ * Distinct from "the file no longer parses", and the distinction matters.
+ * `proposerCases` runs every quote through `buildProposerCase`, which throws
+ * when a quote is not in its text — so a perturbed answer never becomes a
+ * value at all. That is the strongest catch there is: the bad answer cannot be
+ * written down, never mind reach a test.
+ *
+ * Reporting it as unusable said the opposite — that nothing was measured. The
+ * two are told apart by what the module threw: a SyntaxError means the
+ * perturbation broke the file and the probe is void; any other error means the
+ * corpus looked at the answer and said no.
+ */
+const GUARDED = Symbol("corpus refused the answer");
+
 async function shapeOf(file) {
   try {
     if (file.endsWith(".json")) return JSON.stringify(JSON.parse(readFileSync(file, "utf8")));
     loadCount += 1;
     const mod = await import(`${pathToFileURL(file).href}?answers=${loadCount}`);
     return JSON.stringify(Object.fromEntries(Object.entries(mod).map(([k, v]) => [k, v])));
-  } catch {
-    return null;
+  } catch (err) {
+    return err instanceof SyntaxError ? null : GUARDED;
   }
 }
 
@@ -321,6 +342,8 @@ if (leftovers.length > 0) {
 let checked = 0;
 let allowed = 0;
 let unusable = 0;
+/** Perturbations the corpus threw out before they became a value. */
+let refused = 0;
 let total = 0;
 const unchecked = [];
 
@@ -360,15 +383,23 @@ for (const corpus of work) {
       const mutated = original.slice(0, answer.start) + replacement + original.slice(answer.end + 1);
       writeFileSync(corpus.file, mutated);
       let usable = false;
+      let guarded = false;
       let result = null;
       try {
         // 1. it still parses, and 2. the data actually moved. A perturbation
-        // that fails either is not a measurement of anything.
+        // that fails either is not a measurement of anything — unless the
+        // corpus itself threw the answer out, which is a catch, not a miss.
         const shape = await shapeOf(corpus.file);
-        usable = shape !== null && shape !== baseShape;
+        guarded = shape === GUARDED;
+        usable = !guarded && shape !== null && shape !== baseShape;
         if (usable) result = verdict(corpus.tests);
       } finally {
         writeFileSync(corpus.file, original);
+      }
+      if (guarded) {
+        checked += 1;
+        refused += 1;
+        continue;
       }
       if (!usable) {
         bad += 1;
@@ -413,6 +444,7 @@ say("-".repeat(78));
 say(`검사되는 답            : ${checked} / ${total - unusable}`);
 say(`의도적으로 안 보는 답     : ${allowed}`);
 say(`쓸 수 없는 변조         : ${unusable}`);
+say(`말뭉치가 거부한 답      : ${refused}`);
 say(`예상 밖으로 안 보는 답    : ${unchecked.length}`);
 for (const line of unchecked) say(`   ${line}`);
 
