@@ -549,13 +549,13 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
     // still loses its 고속도로; that is the case left over, and it is recorded rather
     // than hidden.
     const located = !marksItsObject
-      ? token.replace(/(?:안에서만|에서만|에서|안에|[안밖위속앞뒤옆]의)$/u, "")
+      ? token.replace(/(?:안에서만|에서만|에서|안에|에만|[안밖위속앞뒤옆]의)$/u, "")
       : token
           // The bare dative-locative joins the list once the object is settled.
           // "정지 이미지에 움직임을 넣어줘" is about the motion; the image is
           // where it goes. Held back until then for the same reason as `-로`:
           // with nothing else marked, the `-에` phrase may be all there is.
-          .replace(/(?:안에서만|에서만|에서|안에|에게|[안밖위속앞뒤옆]의|에)$/u, "")
+          .replace(/(?:안에서만|에서만|에서|안에|에게|에만|[안밖위속앞뒤옆]의|에)$/u, "")
           .replace(/(?<=[가-힣]{2,})으로$/u, "")
           .replace(/(?:(?<=[가-힣]{2,})|(?<=[A-Za-z0-9]{2,}))로$/u, "");
     let out = located;
@@ -618,6 +618,17 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
       text: out,
       /** This token was marked as an object by the sentence itself. */
       carriesObjectMark,
+      /**
+       * The sentence made this its topic, with `은`/`는`.
+       *
+       * A topic is a full noun phrase and never a bare modifier, which is what
+       * the rule below needs to know. "API Key는 SecretStorage에만 저장하고"
+       * had its whole target thrown away as a modifier of `SecretStorage`,
+       * because the rule fires whenever the run is not marked with `을`/`를` —
+       * and this sentence marks its subject instead. Nothing came out at all,
+       * for a requirement about where a secret may be stored.
+       */
+      carriesTopicMark: /[은는]$/u.test(token.replace(/,$/u, "")) && bare.length > 0,
       /**
        * Grammar, but with a noun still inside it — `영상으로`, `미리보기로`.
        *
@@ -699,8 +710,18 @@ function objectBefore(clause: string, verbStart: number): { target: string; show
   // 보여줘" has exactly the same shape and `결과` is the object, which the
   // sentence said with `를`; and "auth 폴더 안에서만 수정해줘" is untouched
   // because `안에서만` is a bare particle with no noun in it.
+  //
+  // A topic is not a bare modifier either. The gate is "the clause marks its
+  // object elsewhere", and `을`/`를` is not the only way a clause says which
+  // noun it is about: "API Key는 SecretStorage에만 저장하고" marks its topic,
+  // and the whole target was thrown away as a modifier of `SecretStorage` — a
+  // requirement about where an API key may be stored came out as nothing at
+  // all. `5초짜리` carries no such mark and is still dropped.
   const trailing = runEndsAt === -1 ? undefined : tokens[runEndsAt + 1];
-  if (!runMarked && trailing?.grammar === true && trailing.carriesNoun) run.length = 0;
+  const runTopicMarked = run.length > 0 && tokens[runEndsAt]?.carriesTopicMark === true;
+  if (!runMarked && !runTopicMarked && trailing?.grammar === true && trailing.carriesNoun) {
+    run.length = 0;
+  }
 
   // What modifies a bound noun belongs to it, not to the verb.
   //
@@ -1014,7 +1035,12 @@ export function objectParticle(object: string): string {
   // written on them would silently drop the particle a real target needs. A
   // sweep over all four corpora — 187 rendered requirements — found exactly one
   // sentence with a doubled particle, and it is an `에`.
-  if (/(?<=[가-힣]{2,})(?:에서|에게|으로|에)$/u.test(object)) return "";
+  // 한글 앞에서는 두 음절을 요구하고 라틴 문자·숫자 앞에서는 요구하지 않는다.
+  // 두 음절 조건은 `결과`·`성과` 처럼 그 음절로 끝나는 낱말을 지키려는 것이고,
+  // 라틴 낱말은 한글 음절 `에`로 끝날 수 없으므로 그런 충돌이 없다. 이 구멍으로
+  // 보안 요구사항 하나가 새 나갔다 — "API Key는 SecretStorage에만 저장하고" 가
+  // **Key는 SecretStorage에를 저장한다** 로 나왔다.
+  if (/(?:(?<=[가-힣]{2,})|(?<=[A-Za-z0-9]))(?:에서|에게|으로|에)$/u.test(object)) return "";
   const last = object.codePointAt(object.length - 1) ?? 0;
   if (last >= 0xac00 && last <= 0xd7a3) {
     return (last - 0xac00) % 28 === 0 ? "를" : "을";

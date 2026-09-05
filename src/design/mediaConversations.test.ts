@@ -76,6 +76,27 @@ function live(id: string): string[] {
     .map((spec) => spec.text);
 }
 
+/**
+ * 정정으로 물러난 요구사항 — 목록에 남아 있고, 무엇이 물렸는지 표시가 붙은 것.
+ *
+ * `live` 의 여집합이 아니다. 요구사항이 마지막 턴에 서 있지 않은 이유는 둘이고,
+ * 그 둘은 완전히 다른 일이다: 정정이 그것을 물렸거나, 애초에 읽히지 않았거나.
+ * 정정 축이 `!held.includes(text)` 만 보던 동안 이 둘은 구별되지 않았고, 그래서
+ * 런타임이 그 요구사항을 처음부터 만들지 않게 만들어도 스위트는 완전히 초록이었다
+ * — 이 파일 머리가 말하는 실패 모드("a requirement quietly falls out between two
+ * of them")가 바로 그것인데 정정 축이 그것을 볼 수 없었다.
+ *
+ * `supersededBy` 가 붙어 있다는 것은 설계가 "이것은 있었고, 이 턴이 물렸다" 고
+ * 말한다는 뜻이다. 그 말이 없으면 물러난 것이 아니라 없었던 것이다.
+ */
+function retiredIn(id: string): string[] {
+  const preview = previews.get(id);
+  assert.ok(preview !== undefined, `${id}: no preview`);
+  return preview.requirements
+    .filter((spec) => spec.status !== "system_added" && spec.supersededBy !== undefined)
+    .map((spec) => spec.text);
+}
+
 /** 정답에 있는데 마지막 턴에 남아 있지 않은 것. */
 function missingIn(conversation: MediaConversation): string[] {
   const held = live(conversation.id);
@@ -98,6 +119,34 @@ function prohibitionsRead(conversation: MediaConversation): Set<string> {
   return seen;
 }
 
+/**
+ * 마지막 턴에 설계가 들고 있는 금지.
+ *
+ * 위엣것과 다른 질문이다. `prohibitionsRead` 는 턴을 하나씩 다시 읽으므로 순서도
+ * 누적도 보지 않고, 설계가 그 금지를 잊어버려도 통과한다 — 실제로 확인했다:
+ * 미리보기에서 금지 요구사항을 걸러내 설계가 금지를 완전히 잊게 만들어도 그 축은
+ * 전부 초록이었다.
+ *
+ * 둘 다 필요하고 둘은 서로를 대신하지 못한다. 도구 게이트가 묻는 것은
+ * `statedProhibitions` 이므로 그것이 읽지 못하는 금지는 일어나지 않을 거절이고,
+ * 사람이 보는 것은 설계의 요구사항 목록이므로 거기서 빠진 금지는 보이지 않는
+ * 약속이다.
+ */
+function prohibitionsHeld(id: string): Set<string> {
+  const preview = previews.get(id);
+  assert.ok(preview !== undefined, `${id}: no preview`);
+  const seen = new Set<string>();
+  for (const spec of preview.requirements) {
+    if (spec.polarity !== "forbidden" || spec.derivedBy !== "runtime_prohibition") continue;
+    if (spec.supersededBy !== undefined) continue;
+    // `t1-forbid-execute` 처럼 턴 접두사 뒤에 부류가 붙는다. 그 부류가 금지의
+    // 종류이고, 말뭉치는 `no_execute` 형태로 적는다.
+    const klass = spec.id.split("-forbid-")[1];
+    if (klass !== undefined) seen.add(`no_${klass}`);
+  }
+  return seen;
+}
+
 describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
   test("말뭉치가 만들어졌다", () => {
     assert.equal(buildError, null, `말뭉치를 만들지 못했습니다: ${buildError?.stack}`);
@@ -112,8 +161,27 @@ describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
      * 여기 남은 것은 사례별 테스트가 스스로 할 수 없는 일 — 사례가 말뭉치에서 빠지면
      * 그 사례의 테스트도 같이 빠져서 아무도 실패하지 않는 것 — 을 막는 핀이다.
      */
-    test("말뭉치의 사례 수", () => {
+    test("말뭉치의 사례 수와 이름", () => {
       assert.equal(ALL.length, 13);
+      // 개수만 못 박으면 삭제는 잡히고 **치환**은 잡히지 않는다. 정교화 축을
+      // 재는 사례 하나를 턴이 중복된 자리채움으로 통째로 바꿔치기해도 13은
+      // 13이고 테스트 총수도 그대로라, 검사 하나가 소리 없이 사라진다.
+      // 이름을 고정하면 그 자리가 비는 순간 이름으로 실패한다.
+      assert.deepEqual(ALL.map((conversation) => conversation.id).sort(), [
+        "emc-accumulate",
+        "emc-correction",
+        "emc-genuine-new-task",
+        "emc-prohibition-midway",
+        "emc-refine",
+        "mc-accumulate",
+        "mc-correction",
+        "mc-correction-bare-ani",
+        "mc-correction-not-that",
+        "mc-genuine-new-task",
+        "mc-preserve-while-adding",
+        "mc-prohibition-midway",
+        "mc-refine-target",
+      ]);
     });
 
     /**
@@ -196,8 +264,14 @@ describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
         for (const text of held) {
           if (!allowed.has(text)) extra.push(`${conversation.id}: "${text}"`);
         }
+        const retired = retiredIn(conversation.id);
         for (const text of conversation.superseded ?? []) {
           if (held.includes(text)) extra.push(`${conversation.id}: 정정됐어야 할 "${text}"`);
+          // 그리고 물러난 자리에 실제로 있어야 한다. 이 줄이 없으면 런타임이
+          // 그 요구사항을 아예 만들지 않아도 위의 검사가 무조건 참이 된다.
+          if (!retired.includes(text)) {
+            extra.push(`${conversation.id}: "${text}" 이(가) 물러난 것이 아니라 읽히지 않았습니다`);
+          }
         }
       }
       assert.deepEqual(extra, []);
@@ -217,9 +291,18 @@ describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
       for (const text of conversation.superseded ?? []) {
         test(`${conversation.id} · 물러났어야 할 "${text}"`, () => {
           const held = live(conversation.id);
+          const retired = retiredIn(conversation.id);
+          // 두 방향을 함께 본다 — 서 있으면 안 되고, 물러난 자리에는 있어야
+          // 한다. 앞엣것만 보면 "정정이 물렸다" 와 "애초에 읽히지 않았다" 가
+          // 같은 초록이 된다. 이 파일이 재려는 것은 앞쪽이다.
           assert.ok(
             !held.includes(text),
             `${conversation.id}: 정정됐어야 할 "${text}" 이(가) 아직 서 있습니다 (남은 것: ${held.join(" / ")})`,
+          );
+          assert.ok(
+            retired.includes(text),
+            `${conversation.id}: "${text}" 이(가) 물러난 목록에 없습니다 — 정정이 물린 것이 아니라 ` +
+              `런타임이 그 요구사항을 만들지 않았습니다 (물러난 것: ${retired.join(" / ") || "없음"})`,
           );
         });
       }
@@ -232,7 +315,7 @@ describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
    * `statedProhibitions` cannot see is a refusal that will not happen.
    */
   describe("대화 도중에 나온 금지", () => {
-    test("대화 도중에 나온 금지를 런타임이 들고 있다", () => {
+    test("대화 도중에 나온 금지를 도구 게이트가 읽어낸다", () => {
       for (const conversation of ALL) {
         const wanted = conversation.prohibitions ?? [];
         if (wanted.length === 0) continue;
@@ -245,9 +328,39 @@ describe("여러 턴에 걸친 미디어 프로젝트 요청", () => {
 
     for (const conversation of ALL) {
       for (const kind of conversation.prohibitions ?? []) {
-        test(`${conversation.id} · 금지 ${kind}`, () => {
+        test(`${conversation.id} · 금지 ${kind} · 도구 게이트가 읽는다`, () => {
           const seen = prohibitionsRead(conversation);
           assert.ok(seen.has(kind), `${conversation.id}: ${kind} 를 읽지 못했습니다 (${[...seen].join(",")})`);
+        });
+      }
+    }
+
+    /**
+     * 그리고 설계도 마지막 턴에 그것을 들고 있어야 한다.
+     *
+     * 위 축은 턴을 다시 읽으므로 설계가 금지를 잊어도 통과한다. 사람이 보는 것은
+     * 설계의 요구사항 목록이고, 거기서 빠진 금지는 보이지 않는 약속이다 — 그래서
+     * 같은 사례를 두 방향에서 묻는다.
+     */
+    test("대화 도중에 나온 금지를 설계가 마지막 턴까지 들고 있다", () => {
+      const lost: string[] = [];
+      for (const conversation of ALL) {
+        const held = prohibitionsHeld(conversation.id);
+        for (const kind of conversation.prohibitions ?? []) {
+          if (!held.has(kind)) lost.push(`${conversation.id}: ${kind}`);
+        }
+      }
+      assert.deepEqual(lost, []);
+    });
+
+    for (const conversation of ALL) {
+      for (const kind of conversation.prohibitions ?? []) {
+        test(`${conversation.id} · 금지 ${kind} · 설계가 들고 있다`, () => {
+          const held = prohibitionsHeld(conversation.id);
+          assert.ok(
+            held.has(kind),
+            `${conversation.id}: 설계가 ${kind} 를 들고 있지 않습니다 (${[...held].join(",") || "없음"})`,
+          );
         });
       }
     }

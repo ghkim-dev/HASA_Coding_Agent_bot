@@ -140,7 +140,15 @@ describe("모델은 제안만 한다", () => {
    * 이름으로 말하지 못했다. 필드마다 하나씩 세운다.
    */
   describe("권한 필드를 보내면 위조로 거부된다", () => {
-    for (const field of ["sourceText", "derivedBy", "id", "status"]) {
+    const FORGEABLE = ["sourceText", "derivedBy", "id", "status"];
+
+    test("네 개다", () => {
+      // 표에서 한 줄을 지우면 그 필드는 검사되지 않는데 test 수만 하나 줄고
+      // 스위트는 초록이다. 개수를 세는 것은 이 줄뿐이다.
+      assert.equal(FORGEABLE.length, 4);
+    });
+
+    for (const field of FORGEABLE) {
       test(`${field} · forged_provenance 로 거부`, async () => {
         const [span] = spansOf(TEXT, "코드만 설명해줘", "t1");
         const raw = JSON.stringify([
@@ -173,7 +181,13 @@ describe("모델 응답이 정상이 아닐 때", () => {
    * 검사되지 않으므로, 응답 모양마다 하나씩 세운다.
    */
   describe("malformed / empty 는 offline 결과로 되돌아간다", () => {
-    for (const raw of ["", "not json at all", "[", "{}", "[1,2,3]"]) {
+    const BROKEN = ["", "not json at all", "[", "{}", "[1,2,3]"];
+
+    test("다섯 개다", () => {
+      assert.equal(BROKEN.length, 5);
+    });
+
+    for (const raw of BROKEN) {
       const label = raw === "" ? "(빈 문자열)" : raw;
       test(`${label} · offline 결과`, async () => {
         const result = await previewDesign({ turns: [TEXT], propose: proposerReturning(raw) });
@@ -343,6 +357,9 @@ describe("여러 턴", () => {
    */
   describe("question 과 continue 는 요구사항을 만들지 않는다", () => {
     const FOLLOWS = ["이게 무엇인가요?", "이어서 계속해줘."];
+    // `liveAfter.size === FOLLOWS.length` 는 양변이 같은 상수에서 나오는
+    // 항등식이라 표가 줄어든 것을 잡지 못한다. 개수는 여기서 센다.
+    const FOLLOW_COUNT = 2;
     const liveAfter = new Map<string, number>();
     let baseLive = -1;
     let buildError: unknown = null;
@@ -365,6 +382,7 @@ describe("여러 턴", () => {
     test("기준과 후속 preview 가 준비되었다", () => {
       assert.equal(buildError, null, `preview 를 준비하지 못했습니다: ${errorText(buildError)}`);
       assert.ok(baseLive >= 0, "기준 preview 가 돌지 않았습니다");
+      assert.equal(FOLLOWS.length, FOLLOW_COUNT, "후속 표에서 줄이 사라졌습니다");
       assert.equal(
         liveAfter.size,
         FOLLOWS.length,
@@ -414,6 +432,10 @@ describe("사용자용 출력", () => {
       "sourceSpan",
       "generic",
     ];
+    // 열한 개다. 이 목록에서 한 줄을 지우면 그 낱말은 다시 새어 나가도 되는데
+    // test 수조차 줄지 않는다 — 반복문이 한 test 안에 있기 때문이다. 여기서
+    // 세는 것이 그 유일한 방어선이다.
+    assert.equal(leaks.length, 11);
     for (const term of leaks) {
       assert.ok(!report.includes(term), `사용자용 출력에 ${term} 이(가) 있습니다`);
     }
@@ -569,7 +591,7 @@ async function runCase(turns: string[]) {
 type CaseView = Awaited<ReturnType<typeof runCase>>;
 
 /**
- * 개인 사용 fixture 15개 — 사례별로, 축별로.
+ * 개인 사용 fixture 16개 — 사례별로, 축별로.
  *
  * 예전에는 반복문 하나가 모든 fixture 의 모든 축을 돌며 실패 문자열을 모아
  * `assert.deepEqual(failures, [])` 로 한 번에 터뜨렸다. 빨간 줄 하나가 "무언가
@@ -583,7 +605,7 @@ type CaseView = Awaited<ReturnType<typeof runCase>>;
  * previewDesign 은 사례당 한 번, before() 에서만 돈다. 아래 test 들은 그
  * 미리 계산된 결과를 읽기만 한다. 지표 test 들도 같은 결과를 쓴다.
  */
-describe("개인 사용 fixture 15개", () => {
+describe("개인 사용 fixture 16개", () => {
   const cases = new Map<string, CaseView>();
   let metrics: ReturnType<typeof measurePreviews> | null = null;
   let renderedCorpus = "";
@@ -631,8 +653,79 @@ describe("개인 사용 fixture 15개", () => {
     assert.ok(renderedCorpus.length > 0, "지표 출력이 비어 있습니다");
   });
 
-  test("fixture 는 15개 이상이다", () => {
-    assert.ok(FIXTURE_FILES.length >= 15, `fixture 가 ${FIXTURE_FILES.length} 개뿐입니다`);
+  /**
+   * 말뭉치를 이름으로 못 박는다.
+   *
+   * `>= 15` 였고 파일은 16개였다 — 여유가 정확히 1이라, fixture 하나를 지우면
+   * 그 사례의 test 12개가 조용히 사라지면서 스위트는 초록으로 남았다. 실측:
+   * login-fix.json 을 지우면 196 → 184, fail 0. 두 개를 지워야 비로소 이 핀이
+   * 실패했다.
+   *
+   * 개수 대신 이름을 고정하면 삭제도 치환도 그 자리가 비는 순간 실패한다.
+   * 그리고 이 목록이 곧 아래 사례별 test 들의 분모다 — 여기 없는 이름은
+   * 아무도 검사하지 않는다.
+   */
+  test("말뭉치의 fixture 이름", () => {
+    assert.deepEqual(FIXTURE_FILES, [
+      "conditional-compat.json",
+      "conflict-keep-and-rename.json",
+      "correction.json",
+      "do-everything.json",
+      "korean-particle-prohibition.json",
+      "login-fix.json",
+      "must-and-may.json",
+      "named-source.json",
+      "no-execute-show-code.json",
+      "no-modify-no-execute.json",
+      "regression-preserve.json",
+      "retry-after-failure.json",
+      "scoped-write.json",
+      "secret-storage.json",
+      "vague-do-it-well.json",
+      "while-modifying-not-conditional.json",
+    ]);
+  });
+
+  /**
+   * 아무것도 나오지 않는 것이 정답인 fixture.
+   *
+   * "알아서 다 해줘." 와 "적당히 잘 좀 해줘." 는 요구사항이 없어야 맞다. 그래서
+   * 이 둘의 `expect` 는 상한과 부정만 담고 있고, 그 상태로는 **아무것도 읽지
+   * 못하는 추출기와 올바른 추출기를 구별하지 못한다** — 실측했다: previewDesign
+   * 이 이 문장들에 대해 빈 결과를 돌려주게 만들어도 이 둘은 통과한다.
+   *
+   * 구별을 못 하는 것 자체는 결함이 아니다. 이 둘이 재는 것은 거절이고, 거절은
+   * 다른 fixture 들이 거절하지 않는다는 것과 나란히 놓일 때만 뜻이 있다(말뭉치
+   * 전체에 빈 결과를 주면 47건이 실패한다). 결함이었던 것은 **그 사실이 어디에도
+   * 적혀 있지 않았다**는 것이다 — 빈 `expect` 는 아직 정답을 쓰지 않은 fixture 와
+   * 글자 모양이 같다.
+   *
+   * 그래서 이름을 적고, 0이라는 것을 주장으로 만든다. 셋째였던
+   * `secret-storage` 는 여기서 빠졌다 — 그 문장은 실제로 무언가를 요구하고
+   * 있었고, 정답이 없는 동안 **Key는 SecretStorage에를 저장한다** 를 내놓고
+   * 있었다(API 가 사라지고 조사가 겹친, 비밀 저장 위치에 대한 요구사항).
+   */
+  describe("아무것도 나오지 않는 것이 정답인 fixture", () => {
+    const REFUSALS = ["do-everything.json", "vague-do-it-well.json"];
+
+    test("두 개다", () => {
+      assert.equal(REFUSALS.length, 2);
+      for (const file of REFUSALS) {
+        assert.ok(FIXTURE_FILES.includes(file), `${file} 이(가) 말뭉치에 없습니다`);
+      }
+    });
+
+    for (const file of REFUSALS) {
+      test(`${file} · 사용자 요구사항 0건`, () => {
+        const found = caseOf(file);
+        const stated = found.result.requirements.filter((s) => s.status !== "system_added");
+        assert.deepEqual(
+          stated.map((s) => s.text),
+          [],
+          `${file}: 읽어낼 것이 없는 문장에서 요구사항이 나왔습니다`,
+        );
+      });
+    }
   });
 
   /**
@@ -759,7 +852,7 @@ describe("개인 사용 fixture 15개", () => {
     });
   }
 
-  test("15개 전체에 대한 지표가 나온다", () => {
+  test("16개 전체에 대한 지표가 나온다", () => {
     const m = measured();
     assert.equal(m.source, "offline");
     assert.equal(m.cases, FIXTURE_FILES.length);
@@ -790,6 +883,34 @@ describe("개인 사용 fixture 15개", () => {
       "executableRate",
     ] as const;
 
+    test("아홉 개다", () => {
+      // 표에서 한 줄을 지우면 test 하나가 조용히 줄어들 뿐이다.
+      assert.equal(RATIOS.length, 9);
+    });
+
+    /**
+     * 값도 함께 못 박는다.
+     *
+     * `hit <= of` 와 "분모가 출력에 있다" 는 **모든 틀린 답에 대해서도 참**이다.
+     * 실측: measurePreviews 를 감싸 16사례의 모든 비율을 hit=0 으로 무너뜨려도
+     * 이 아홉 개는 전부 통과했다. 분모를 함께 보고한다는 주장은 지켜지고 있었고,
+     * 보고된 값이 맞는지는 아무도 보지 않고 있었다.
+     *
+     * 핀이지 문턱이 아니다. 값이 움직이면 그것은 결과이거나 회귀이고, 어느
+     * 쪽인지는 사람이 정한다.
+     */
+    const EXPECTED: Readonly<Record<(typeof RATIOS)[number], readonly [number, number]>> = {
+      ambiguousIntentRate: [0, 27],
+      unresolvedBindingRate: [3, 27],
+      blockedRate: [6, 27],
+      semanticUnknownRate: [0, 27],
+      noDesignRuleRate: [0, 27],
+      questionCases: [5, 16],
+      remediableClosureRate: [16, 16],
+      fullyResolvedRate: [9, 16],
+      executableRate: [9, 16],
+    };
+
     for (const name of RATIOS) {
       test(`${name} · 분자·분모·출력`, () => {
         const r = measured()[name];
@@ -798,6 +919,8 @@ describe("개인 사용 fixture 15개", () => {
         if (r.value !== null) {
           assert.ok(renderedCorpus.includes(`(${r.hit}/${r.of})`), `${name} 의 분모가 출력에 없습니다`);
         }
+        const [hit, of] = EXPECTED[name];
+        assert.deepEqual([r.hit, r.of], [hit, of], `${name} 가 움직였습니다`);
       });
     }
   });
