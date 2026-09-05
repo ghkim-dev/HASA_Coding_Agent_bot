@@ -759,12 +759,20 @@ describe("개인 사용 fixture 16개", () => {
       }
 
       for (const action of expect.forbiddenActions ?? []) {
-        const word = action === "execute" ? "실행" : "수정";
         test(`${id} · 금지 ${action}`, () => {
           const { forbidden } = caseOf(file);
+          // 부류로 대조한다. 여기 있던 것은 `action === "execute" ? "실행" : "수정"`
+          // 였고, 그것은 **execute 가 아닌 모든 값을 조용히 수정으로 읽는다**. 답에
+          // 무엇을 적든 `수정` 금지가 하나라도 있으면 통과했다는 뜻이고, 답이
+          // 스스로 이름 붙인 것에 대해 아무 말도 하지 않았다. 답을 바꿔 보는
+          // 하네스(`scripts/answers.mjs`)가 execute 를 다른 값으로 바꿔도 초록인
+          // 것을 보고 이 자리를 가리켰다.
+          //
+          // 금지 요구사항의 id 는 `t1-forbid-execute` 꼴이고, 그 꼬리가 부류다.
+          const kinds = forbidden.map((s) => s.id.split("-forbid-")[1] ?? "");
           assert.ok(
-            forbidden.some((s) => s.text.includes(word)),
-            `금지 ${action} 없음: ${JSON.stringify(forbidden.map((s) => s.text))}`,
+            kinds.includes(action),
+            `금지 ${action} 없음: ${JSON.stringify(kinds)} — ${JSON.stringify(forbidden.map((s) => s.text))}`,
           );
         });
       }

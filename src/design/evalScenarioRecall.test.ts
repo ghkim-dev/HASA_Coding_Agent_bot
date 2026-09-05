@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { designHarness } from "./harnessDesign.ts";
 import type { DerivedBy } from "./requirementSpec.ts";
 import { SCENARIOS } from "../eval/scenarios.ts";
+import { relationOf } from "./preview.ts";
 
 /**
  * The designer, scored on project-scale requests.
@@ -475,5 +476,112 @@ describe("the four keywords that do not survive", () => {
     // What the same sentence does deliver, so the loss stays a clause and not
     // a turn: "개와 고양이 분류 프로젝트를 만들어줘 … 학습까지 해줘".
     assert.deepEqual(found.hit, ["개와 고양이", "학습"], found.shown);
+  });
+});
+
+/**
+ * 시나리오 말뭉치의 관계 정답.
+ *
+ * 31개 턴이 `expectedRelation` 을 들고 있고, **오프라인 스위트에서는 아무도 그것을
+ * 읽지 않았다.** README 가 적어 온 「관계 분류 29/31」은 모델을 부르는 평가 경로에서
+ * 나오는 숫자이고, 여기서 도는 테스트들은 키워드만 재고 있었다.
+ *
+ * 답을 하나씩 바꿔 보는 하네스(`scripts/answers.mjs`)가 그것을 찾았다 — 31개 답을
+ * 전부 틀리게 고쳐도 스위트가 초록이었다. 손으로 찾은 것이 아니라 재서 찾은 것이고,
+ * 그것이 이 파일에 이 블록이 있는 이유다.
+ *
+ * 어긋난 둘은 지우지 않고 판정과 이유를 달아 둔다 — `goldRequirements.test.ts` 의
+ * `RELATION_AS_BUILT` 와 같은 규율이다.
+ */
+interface ScenarioRelationAsBuilt {
+  relation: string;
+  verdict: "defect" | "by_design";
+  reason: string;
+}
+
+const SCENARIO_RELATION_AS_BUILT = new Map<string, ScenarioRelationAsBuilt>([
+  [
+    "S08-false-blocker#2",
+    {
+      relation: "refine",
+      verdict: "by_design",
+      reason:
+        "「안 된 부분 직접 해결해줘.」 — 정답은 `continue` 다. 이 문장은 앞 턴을 " +
+        "이어가지만 동시에 제 요구사항(해결)을 새로 말한다. `continue` 는 서 있던 것을 " +
+        "그대로 옮기고 아무것도 더하지 않는 관계이므로, 그렇게 읽으면 이 턴이 말한 일이 " +
+        "사라진다. `refine` 은 서 있던 것을 지키면서 이것을 더하므로 대화의 결과가 같거나 " +
+        "낫다. 정답을 코드에 맞춰 고치지 않고 남긴다.",
+    },
+  ],
+  [
+    "S20-mixed-stress#6",
+    {
+      relation: "refine",
+      verdict: "by_design",
+      reason:
+        "「이제 마무리하고 결과를 정리해줘.」 — 같은 이유다. `마무리` 는 이어감을 " +
+        "가리키지만 `결과를 정리` 는 이 턴이 새로 말하는 일이고, `continue` 로 읽으면 " +
+        "그것이 요구사항이 되지 못한다. `마무리` 자체를 행위로 읽지 않는 결정은 " +
+        "`functionalExtract.test.ts` 의 「읽지 않기로 한 것들」에 따로 적혀 있다.",
+    },
+  ],
+]);
+
+describe("시나리오 말뭉치의 관계", () => {
+  test("정답을 가진 턴은 31개다", () => {
+    const withAnswers = SCENARIOS.flatMap((scenario) =>
+      scenario.turns.filter((turn) => turn.expectedRelation !== undefined),
+    );
+    assert.equal(withAnswers.length, 31);
+  });
+
+  test("relation 29/31", () => {
+    let hit = 0;
+    let of = 0;
+    for (const scenario of SCENARIOS) {
+      for (const [index, turn] of scenario.turns.entries()) {
+        if (turn.expectedRelation === undefined) continue;
+        of += 1;
+        if (relationOf(turn.user, index === 0) === turn.expectedRelation) hit += 1;
+      }
+    }
+    assert.deepEqual({ hit, of }, { hit: 29, of: 31 }, "관계 정확도가 움직였습니다");
+  });
+
+  for (const scenario of SCENARIOS) {
+    for (const [index, turn] of scenario.turns.entries()) {
+      if (turn.expectedRelation === undefined) continue;
+      const id = `${scenario.id}#${index + 1}`;
+      const pinned = SCENARIO_RELATION_AS_BUILT.get(id);
+      test(`${id} · relation${pinned === undefined ? "" : " (as-built)"}`, () => {
+        const got = relationOf(turn.user, index === 0);
+        if (pinned === undefined) {
+          assert.equal(got, turn.expectedRelation, `「${turn.user}」`);
+          return;
+        }
+        // 못 박은 어긋남. 정답과 같아지면 여기서 실패해서 못을 지우게 만든다.
+        assert.equal(got, pinned.relation, `「${turn.user}」`);
+        assert.notEqual(
+          pinned.relation,
+          turn.expectedRelation,
+          `${id}: 정답과 같은 관계를 어긋남으로 적어 두었습니다`,
+        );
+      });
+    }
+  }
+
+  test("as-built 표도 KNOWN_MISSES 와 같은 규율을 받는다", () => {
+    const ids = new Set(
+      SCENARIOS.flatMap((scenario) =>
+        scenario.turns.map((turn, index) =>
+          turn.expectedRelation === undefined ? "" : `${scenario.id}#${index + 1}`,
+        ),
+      ),
+    );
+    for (const [key, pin] of SCENARIO_RELATION_AS_BUILT) {
+      assert.ok(pin.reason.length > 40, `${key}: 이유가 너무 짧습니다`);
+      assert.ok(["defect", "by_design"].includes(pin.verdict), `${key}: 판정이 없습니다`);
+      assert.ok(ids.has(key), `${key}: 존재하지 않는 턴을 가리킵니다`);
+    }
   });
 });
