@@ -1072,6 +1072,10 @@ const MUTATIONS = [
   ["M286", "`에만` 을 처소 표지에서 뺌", "src/design/functionalExtract.ts",
     "      ? token.replace(/(?:안에서만|에서만|에서|안에|에만|[안밖위속앞뒤옆]의)$/u, \"\")",
     "      ? token.replace(/(?:안에서만|에서만|에서|안에|[안밖위속앞뒤옆]의)$/u, \"\")", "recall"],
+  // ---- C4.40: the measure-noun entry nothing was holding ----------------------
+  ["M287", "`속도` 를 단위명사 목록에서 뺌 — `가속도` 가 `가속` 이 됨", "src/design/functionalExtract.ts",
+    "  /^(?:.*(?:속도|해상도|정확도|밀도|온도|각도|채도|명도|강도|빈도|정도|고도|위도|경도|진도|척도|난이도|만족도|신뢰도|충실도|완성도|기여도|중요도|우선도|유사도|선명도|투명도|가용도))$/u;",
+    "  /^(?:.*(?:해상도|정확도|밀도|온도|각도|채도|명도|강도|빈도|정도|고도|위도|경도|진도|척도|난이도|만족도|신뢰도|충실도|완성도|기여도|중요도|우선도|유사도|선명도|투명도|가용도))$/u;", "recall"],
 ];
 
 /** Mutations that are allowed not to bite, with the reason recorded. */

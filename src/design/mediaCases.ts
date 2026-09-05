@@ -228,7 +228,13 @@ export const MEDIA_CASES: readonly MediaCase[] = [
     id: "m-measure-and-judge",
     topic: "operating",
     text: "생성 속도를 측정하고 품질을 평가해줘.",
-    why: "이미 읽히던 형태. `속도` 의 `도` 를 조사로 잘못 떼지 않는지도 함께 본다.",
+    why:
+      "이미 읽히던 형태. 한 문장 안의 두 요청이 둘 다 나오는지를 본다. " +
+      "이 자리에 \"`속도` 의 `도` 를 조사로 잘못 떼지 않는지도 함께 본다\" 고 적혀 " +
+      "있었는데, 사실이 아니었다 — 문장이 `속도를` 이라고 쓰므로 `-도` 절단 분기가 " +
+      "애초에 발화하지 않는다. `MEASURE_NOUN` 에서 `속도` 를 지워도 저장소 전체가 " +
+      "초록이었다. 그 항목을 실제로 재는 것은 `functionalExtract.test.ts` 의 " +
+      "「`-도` 를 지우는 두 관문」 이다.",
     requirements: [
       { action: "verify", target: "생성 속도" },
       { action: "verify", target: "품질" },
