@@ -146,12 +146,27 @@ export interface KnownGap {
 }
 
 /**
- * Every place the gold and the implementation still disagree, with a verdict.
+ * Where the gold and the implementation still disagree **on these four axes**,
+ * with a verdict.
  *
  * Listed rather than removed, and the test asserts this list is *exactly* the
  * set of disagreements — so closing one of these means deleting a line here, and
  * opening a new one fails the build. A gold set with no such table is a gold set
  * that was edited until it agreed.
+ *
+ * The four axes are the four in `KnownGap.axis`, and that is not every axis this
+ * set scores. `relation` is measured — 47 of 48 — and cannot be written down
+ * here, so the sentence above said "exactly the set of disagreements" while
+ * being silent about a whole axis with a live mismatch in it. The other half
+ * lives in `RELATION_AS_BUILT` in the test file, under the same discipline: a
+ * verdict, a reason longer than a line, a key that has to name a real turn, and
+ * a check that refuses a row agreeing with the gold.
+ *
+ * Two tables rather than one because a relation is a property of a turn and a
+ * `KnownGap` is a property of a case, and merging them would have to invent a
+ * shape for one of the two. What keeps a new relation mismatch from hiding is
+ * not this table: it is the pinned `47/48` and the per-turn test, which fail
+ * together the moment a turn is read differently.
  */
 export const KNOWN_MISSES: readonly KnownGap[] = [
   // Empty, and that is a measurement rather than a claim: the test below asserts
