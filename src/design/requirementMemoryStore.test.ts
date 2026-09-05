@@ -86,6 +86,17 @@ describe("loadMemory", () => {
     assert.equal((await loadMemory({ path: path(), baseUrl: BASE })).kind, "refused");
   });
 
+  it("시각이 숫자가 아닌 행을 거부한다", async () => {
+    const file = {
+      format: MEMORY_FORMAT,
+      baseUrlFingerprint: fingerprint(BASE),
+      savedAt: "",
+      rows: [{ ...row({ id: "a" }), at: "어제" }],
+    };
+    await writeFile(path(), JSON.stringify(file), "utf8");
+    assert.equal((await loadMemory({ path: path(), baseUrl: BASE })).kind, "refused");
+  });
+
   it("최상위가 null 이면 거부한다", async () => {
     await writeFile(path(), "null", "utf8");
     assert.equal((await loadMemory({ path: path(), baseUrl: BASE })).kind, "refused");

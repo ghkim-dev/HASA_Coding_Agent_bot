@@ -92,7 +92,15 @@ function isRow(value: unknown): value is RememberedRequirement {
   if (typeof row.id !== "string" || row.id.length === 0) return false;
   if (typeof row.turnId !== "string") return false;
   if (typeof row.sourceText !== "string") return false;
-  if (typeof row.at !== "number" && !Number.isFinite(row.at)) return false;
+  // `Number.isFinite` is unreachable through the only caller and stays anyway.
+  // `JSON.parse` cannot produce NaN or Infinity, so no file can reach it — an
+  // automatic mutation audit flags this and no test can kill it. It is kept
+  // because `isRow` is a shape check, and the next caller may not come from
+  // `JSON.parse`. Written down so the next audit does not spend time on it, and
+  // so nobody writes a test that appears to cover it: the first attempt used
+  // the *string* "NaN", which the `typeof` clause catches, and would have been
+  // a test that claimed something it did not check.
+  if (typeof row.at !== "number" || !Number.isFinite(row.at)) return false;
   if (row.proposedBy !== null && typeof row.proposedBy !== "string") return false;
   if (row.budget !== null && typeof row.budget !== "number") return false;
   if (!(row.outcome as string in KEEP_RANK)) return false;
