@@ -21,7 +21,9 @@
     "test:extension": "node extension/build.mjs && node extension/test/runTest.js",
     "design:preview": "node --env-file-if-exists=.env src/design/previewCli.ts",
     "design:mutate": "node scripts/mutate.mjs",
-    "design:anchors": "node scripts/mutate.mjs --anchors"
+    "design:anchors": "node scripts/mutate.mjs --anchors",
+    "audit:assertions": "node scripts/auditAssertions.mjs",
+    "audit:operators": "node scripts/auditOperators.mjs"
   },
   "dependencies": {
     "fastify": "^5.2.1",

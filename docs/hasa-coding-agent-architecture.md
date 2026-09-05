@@ -410,7 +410,7 @@ src/provider/
     hasaErrorMapper.ts        HasaError → ProviderError (403 allowed_models 등)
     hasaCredentialStore.ts    SecretStorage 포트 기반 키 보관
     hasaModelRegistry.ts      동적 모델 조회 + 2단 캐시 + fallback
-    hasaCapabilityResolver.ts lazy capability 조회 + 캐시
+    hasaCapabilityProbe.ts    lazy capability 조회 + 캐시
     hasaProvider.ts           HasaProvider (validate 포함)
 ```
 
@@ -501,7 +501,7 @@ extension/**         현재 Arena UI (Z3에서 확장하되 Z1에서는 무변�
 | `assembleStream`, `parseChunk` 개념 | `wire.ts`가 같은 index 규약으로 조립 |
 | `fingerprint`, `registerSecret`, `evidence` | 캐시 키 스코프 + 로그 마스킹 |
 | `ModelsResponseSchema` | 모델 목록 파싱 |
-| `CapabilityMatrix` 타입·`computeEligibility` | `hasaCapabilityResolver.ts` |
+| `CapabilityMatrix` 타입·`computeEligibility` | `probe/matrix.ts` (capability 조회는 `hasaCapabilityProbe.ts`) |
 | `startMockHasa` | Z1 테스트 전부 |
 | `git.ts`, `sandbox.ts`, `commands.ts` | Z2 CheckpointManager / ToolExecutor |
 
