@@ -29,6 +29,18 @@ import {
 
 /** Two: one attempt, one retry for a malformed answer. Never more. */
 export const MAX_CALLS = 2;
+
+/**
+ * The output budget every proposer call runs under.
+ *
+ * Exported because it is not an implementation detail: `proposerEvidence`
+ * established that a model's score and its budget are one fact — six of the
+ * eighteen chat models on this gateway return an empty string at this number
+ * and answer well above it — so anything recording what a model did has to
+ * record the budget it did it under. A caller that had to guess 800 would
+ * write down a fact it did not know.
+ */
+export const MAX_OUTPUT_TOKENS = 800;
 const TIMEOUT_MS = 30_000;
 
 /**
@@ -177,7 +189,7 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
               { role: "user", content: attempt === 1 ? text : `${text}\n\n(JSON 배열만 출력하십시오.)` },
             ],
             temperature: 0,
-            maxOutputTokens: 800,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
           },
           { timeoutMs: TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) },
         );

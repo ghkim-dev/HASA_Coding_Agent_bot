@@ -69,7 +69,19 @@ const OUTCOME_RANK: Readonly<Record<RequirementOutcome, number>> = {
 };
 
 export interface RememberedRequirement {
-  /** The spec's own id — stable across turns, and already unique. */
+  /**
+   * `${sessionId}/${spec.id}` — unique across sessions, not only within one.
+   *
+   * The spec's own id is not enough and running it proved it: three separate
+   * `design:preview` invocations each produced `t1-act-create-1`, because a
+   * turn id restarts at `t1` every process. Keyed on that alone, three
+   * different requests merged into one row and the memory held a third of what
+   * it was told. The session prefix makes the collision impossible rather than
+   * unlikely.
+   *
+   * Re-recording the *same* turn still merges, which is the point: same
+   * session, same spec, same key.
+   */
   id: string;
   turnId: string;
   /** The runtime's cut. Never a model's string. */
@@ -131,6 +143,8 @@ export function outcomeOf(spec: RequirementSpec): RequirementOutcome {
  */
 export function remember(input: {
   specs: readonly RequirementSpec[];
+  /** Distinguishes one process's turn ids from another's. Required, not defaulted. */
+  sessionId: string;
   proposedBy: string | null;
   budget: number | null;
   at: number;
@@ -143,7 +157,7 @@ export function remember(input: {
     if (spec.status === "system_added") continue;
     const vector = input.vectors?.get(spec.id);
     rows.push({
-      id: spec.id,
+      id: `${input.sessionId}/${spec.id}`,
       turnId: spec.sourceTurnId,
       sourceText: spec.sourceText,
       ...(spec.act === undefined ? {} : { act: spec.act }),
@@ -158,6 +172,59 @@ export function remember(input: {
     });
   }
   return rows;
+}
+
+export interface TurnRecord {
+  rows: RememberedRequirement[];
+  /**
+   * Proposals the runtime refused this turn, which become no row.
+   *
+   * Carried, and not quietly dropped, because it is a **named gap** rather than
+   * a zero. `outcomeOf` can return `rejected`, but nothing in the production
+   * path ever sets `provenance: "invalid"` — a refused proposal never becomes a
+   * `RequirementSpec` at all, it leaves through `PreviewResult.rejected`. So
+   * the rejections a real turn produces are, today, invisible to the memory.
+   *
+   * They cannot simply be turned into rows: a proposal refused for an
+   * out-of-range span has no runtime-cut text to store, and the model's own
+   * string is the one thing this module will not keep. Closing the gap needs
+   * the turn's text so the span can be re-cut where it is valid, which is a
+   * later slice. Until then a caller can at least see the number it is not
+   * recording.
+   */
+  refusedProposals: number;
+}
+
+/**
+ * One turn's contribution to the memory.
+ *
+ * Takes the specs and a count rather than a `PreviewResult`, so this module
+ * keeps depending on nothing but the requirement type — the design layer's own
+ * rule, and the reason `remember` is separately callable at all.
+ */
+export function recordTurn(input: {
+  requirements: readonly RequirementSpec[];
+  sessionId: string;
+  /** `PreviewResult.rejected.length` at the call site. */
+  refusedProposals: number;
+  proposedBy: string | null;
+  budget: number | null;
+  at: number;
+  vectors?: ReadonlyMap<string, readonly number[]>;
+  space?: EmbeddingSpaceIdentity;
+}): TurnRecord {
+  return {
+    rows: remember({
+      specs: input.requirements,
+      sessionId: input.sessionId,
+      proposedBy: input.proposedBy,
+      budget: input.budget,
+      at: input.at,
+      ...(input.vectors === undefined ? {} : { vectors: input.vectors }),
+      ...(input.space === undefined ? {} : { space: input.space }),
+    }),
+    refusedProposals: input.refusedProposals,
+  };
 }
 
 /**

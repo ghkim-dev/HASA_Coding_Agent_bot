@@ -50,6 +50,7 @@ const FILES = [
   "src/design/proposerCases.ts",
   "src/design/proposerEvidence.ts",
   "src/design/requirementMemory.ts",
+  "src/design/requirementMemoryStore.ts",
   "src/design/preview.ts",
   "src/design/previewMetrics.ts",
   "src/design/previewReport.ts",
@@ -224,6 +225,7 @@ const SUITES = {
   proposer: ["src/design/proposerMetrics.test.ts"],
   evidence: ["src/design/proposerEvidence.test.ts"],
   memory: ["src/design/requirementMemory.test.ts"],
+  memstore: ["src/design/requirementMemoryStore.test.ts"],
 };
 
 const MUTATIONS = [
@@ -301,9 +303,37 @@ const MUTATIONS = [
   ["M318", "예산을 무시하고 모델만 봄 — 6000의 1위와 800의 0점을 한 증거로 합침", "src/design/requirementMemory.ts",
     "    (n) => n.row.proposedBy === modelId && n.row.budget === budget,",
     "    (n) => n.row.proposedBy === modelId,", "memory"],
+  // 실제로 CLI 를 돌려 보고서 찾은 결함. 턴 아이디는 프로세스마다 t1 부터 다시
+  // 시작해서, 세션 접두사가 없으면 서로 다른 세 요청이 한 행으로 덮어써졌다.
+  ["M329", "세션 접두사를 떼어 턴 아이디를 그대로 씀", "src/design/requirementMemory.ts",
+    "      id: `${input.sessionId}/${spec.id}`,", "      id: spec.id,", "memory"],
   ["M319", "결과 없는 이웃을 '나쁘지 않았다' 로 셈", "src/design/requirementMemory.ts",
     "    rate: decided.length === 0 ? null : (superseded + rejected) / decided.length,",
     "    rate: (superseded + rejected) / Math.max(1, mine.length),", "memory"],
+  // requirementMemoryStore — 기억을 프로세스보다 오래 살리는 부분. 여기가
+  // 무너지면 실패한 읽기가 조용한 초기화가 되어, 몇 달치 증거가 사라진다.
+  ["M320", "못 읽은 파일을 빈 기억으로 취급 — 조용한 초기화", "src/design/requirementMemoryStore.ts",
+    '    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "empty", rows: [] };',
+    '    return { kind: "empty", rows: [] };', "memstore"],
+  ["M321", "형식 문자열을 보지 않음", "src/design/requirementMemoryStore.ts",
+    "  if (file.format !== MEMORY_FORMAT) {", "  if (false) {", "memstore"],
+  ["M322", "다른 게이트웨이에서 모은 기억을 섞음", "src/design/requirementMemoryStore.ts",
+    "  if (file.baseUrlFingerprint !== want) {", "  if (false) {", "memstore"],
+  ["M323", "형식에 안 맞는 행만 조용히 걸러 냄", "src/design/requirementMemoryStore.ts",
+    "  if (rows.length !== file.rows.length) {", "  if (false) {", "memstore"],
+  ["M324", "벡터와 공간이 짝이 아니어도 받음", "src/design/requirementMemoryStore.ts",
+    "  if (hasVector !== hasSpace) return false;\n", "", "memstore"],
+  ["M325", "못 읽은 파일 위에 그냥 씀", "src/design/requirementMemoryStore.ts",
+    '  if (loaded.kind === "refused") return { refused: loaded.reason };\n', "", "memstore"],
+  ["M326", "두 번째 목격이 정정을 덮음", "src/design/requirementMemoryStore.ts",
+    "    byId.set(row.id, previous === undefined ? row : revise({ ...row, at: previous.at }, previous.outcome));",
+    "    byId.set(row.id, row);", "memstore"],
+  ["M327", "결과 등급을 무시하고 나이로만 버림 — 드문 신호부터 잊음", "src/design/requirementMemoryStore.ts",
+    "      .sort((a, b) => KEEP_RANK[b.outcome] - KEEP_RANK[a.outcome] || b.at - a.at || a.id.localeCompare(b.id))",
+    "      .sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))", "memstore"],
+  ["M328", "벡터를 줄이지 않고 통째로 적음", "src/design/requirementMemoryStore.ts",
+    "      row.vector === undefined ? row : { ...row, vector: row.vector.map(round) },",
+    "      row,", "memstore"],
   ["M01", "span 범위 검사 제거", "src/design/sourceSpan.ts",
     'if (span.start < 0 || span.end > full.length) problems.push("out_of_range");', ""],
   ["M02", "correction merge 제거", "src/design/requirementSpec.ts",

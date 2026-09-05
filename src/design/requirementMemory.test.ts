@@ -77,16 +77,34 @@ describe("outcomeOf — 결과는 물어보는 게 아니라 이미 기록된 �
 describe("remember", () => {
   it("하네스가 스스로 붙인 요구는 담지 않는다", () => {
     const rows = remember({
+      sessionId: "s1",
       specs: [spec({ id: "r1" }), spec({ id: "r2", status: "system_added" })],
       proposedBy: null,
       budget: null,
       at: 0,
     });
-    assert.deepEqual(rows.map((r) => r.id), ["r1"]);
+    assert.deepEqual(rows.map((r) => r.id), ["s1/r1"]);
+  });
+
+  it("다른 세션의 같은 요구는 다른 행이다", () => {
+    // 이 시험은 실제로 돌려 보고서야 필요한 줄 알았다. 턴 아이디는 프로세스마다
+    // t1 부터 다시 시작하므로, 세션 접두사가 없으면 서로 다른 세 요청이 모두
+    // `t1-act-create-1` 이 되어 한 행으로 덮어써진다. 기억이 들은 것의 3분의 1만
+    // 갖고 있었고, 단위 시험은 전부 통과하고 있었다.
+    const one = remember({ sessionId: "세션A", specs: [spec({ id: "t1-act-create-1" })], proposedBy: null, budget: null, at: 0 });
+    const two = remember({ sessionId: "세션B", specs: [spec({ id: "t1-act-create-1" })], proposedBy: null, budget: null, at: 1 });
+    assert.notEqual(one[0]?.id, two[0]?.id);
+  });
+
+  it("같은 세션의 같은 요구는 같은 행이다 — 다시 기록해도 합쳐져야 한다", () => {
+    const first = remember({ sessionId: "세션A", specs: [spec({ id: "r1" })], proposedBy: null, budget: null, at: 0 });
+    const again = remember({ sessionId: "세션A", specs: [spec({ id: "r1" })], proposedBy: null, budget: null, at: 9 });
+    assert.equal(first[0]?.id, again[0]?.id);
   });
 
   it("모델의 문장이 아니라 런타임이 자른 말을 담는다", () => {
     const [only] = remember({
+      sessionId: "s1",
       specs: [spec({ id: "r1", text: "모델이 지어낸 문장", sourceText: "사용자가 쓴 말" })],
       proposedBy: "m",
       budget: 800,
@@ -103,6 +121,7 @@ describe("remember", () => {
 
   it("누가 어떤 예산으로 냈는지 함께 담는다", () => {
     const [only] = remember({
+      sessionId: "s1",
       specs: [spec({ id: "r1" })],
       proposedBy: "glm-4.7-flash",
       budget: 800,
@@ -116,6 +135,7 @@ describe("remember", () => {
 
   it("벡터는 공간과 함께일 때만 담는다", () => {
     const withoutSpace = remember({
+      sessionId: "s1",
       specs: [spec({ id: "r1" })],
       proposedBy: null,
       budget: null,
@@ -126,6 +146,7 @@ describe("remember", () => {
     assert.equal(withoutSpace[0]?.space, undefined);
 
     const withSpace = remember({
+      sessionId: "s1",
       specs: [spec({ id: "r1" })],
       proposedBy: null,
       budget: null,
@@ -139,6 +160,7 @@ describe("remember", () => {
 
   it("임베딩이 없어도 행은 남는다 — 못 잰 것이 없던 일은 아니다", () => {
     const rows = remember({
+      sessionId: "s1",
       specs: [spec({ id: "r1" })],
       proposedBy: null,
       budget: null,

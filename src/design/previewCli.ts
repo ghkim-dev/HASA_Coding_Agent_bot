@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { previewDesign, type Proposer } from "./preview.ts";
 import { renderAdvanced, renderJson, renderReport } from "./previewReport.ts";
@@ -8,9 +9,16 @@ import { createModelProposer } from "./modelProposer.ts";
  * `pnpm design:preview`
  *
  * Shows what the design engine makes of a request, and does none of it. No file
- * is read except the turns file it is given, nothing is written, and no command
- * runs. The only outbound request is the optional one asking a model for
- * requirement candidates.
+ * is read except the turns file it is given, and no command runs. The only
+ * outbound request is the optional one asking a model for requirement
+ * candidates.
+ *
+ * **Nothing is written unless `--remember` is passed.** That flag appends this
+ * turn's requirements to `.arena/requirement-memory.json` so a later turn can
+ * ask what became of a similar request. It is opt-in rather than default
+ * precisely because "nothing is written" was a promise this file made, and a
+ * preview that quietly started writing would break it for every existing
+ * caller.
  *
  *   pnpm design:preview -- --prompt "로그인 오류를 수정하고 테스트해줘."
  *   pnpm design:preview -- --turns examples/design-preview/correction.json
@@ -30,10 +38,11 @@ interface Args {
   offline: boolean;
   json: boolean;
   advanced: boolean;
+  remember: boolean;
 }
 
 function parse(argv: readonly string[]): Args {
-  const args: Args = { offline: false, json: false, advanced: false };
+  const args: Args = { offline: false, json: false, advanced: false, remember: false };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
@@ -42,6 +51,7 @@ function parse(argv: readonly string[]): Args {
     else if (flag === "--offline") args.offline = true;
     else if (flag === "--json") args.json = true;
     else if (flag === "--advanced") args.advanced = true;
+    else if (flag === "--remember") args.remember = true;
   }
   return args;
 }
@@ -55,6 +65,7 @@ const USAGE = [
   "  --offline    모델에 묻지 않고 요청에서 직접 읽어낼 수 있는 것만 사용",
   "  --json       기계 검증용 구조화 결과",
   "  --advanced   내부 상세 (span, 규칙 ID, finding)",
+  "  --remember   이번 턴의 요구사항을 .arena/ 에 기록 (유일하게 파일을 쓰는 옵션)",
 ].join("\n");
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
@@ -155,6 +166,49 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     if (args.advanced) {
       out("");
       out(renderAdvanced(result));
+    }
+  }
+
+  if (args.remember) {
+    // Assembled here rather than inside `previewDesign`, for the same reason
+    // the proposer's provider is: the design layer does not open files, and a
+    // layer that decided for itself when to persist would be a second place
+    // where a run writes to disk without a caller asking.
+    const { recordTurn } = await import("./requirementMemory.ts");
+    const { saveMemory } = await import("./requirementMemoryStore.ts");
+    const { MAX_OUTPUT_TOKENS } = await import("./modelProposer.ts");
+    const record = recordTurn({
+      requirements: result.requirements,
+      // One process is one session. Turn ids restart at `t1` every run, so
+      // without this three separate previews all write `t1-act-create-1` and
+      // overwrite each other — which is exactly what happened before this line
+      // existed.
+      sessionId: randomUUID(),
+      refusedProposals: result.rejected.length,
+      proposedBy: result.proposals.modelId,
+      // The budget the proposer actually ran under, read from the module that
+      // owns it. Guessing 800 here would write down a fact this file does not
+      // know, and the number is load-bearing — see `proposerEvidence`.
+      budget: result.proposals.modelId === null ? null : MAX_OUTPUT_TOKENS,
+      at: Date.now(),
+    });
+    const saved = await saveMemory({
+      baseUrl: process.env.HASA_BASE_URL ?? "offline",
+      rows: record.rows,
+      now: () => Date.now(),
+    });
+    if ("refused" in saved) {
+      out(`기억을 쓰지 못했습니다 — ${saved.refused}`);
+    } else {
+      out(
+        `기억: ${record.rows.length}건 기록 · 총 ${saved.written}건 보관` +
+          (saved.dropped > 0 ? ` · ${saved.dropped}건 정리` : "") +
+          // 거부된 제안은 행이 되지 않는다. 그 수를 여기서 말하지 않으면
+          // 기록이 완전하다는 잘못된 인상을 준다.
+          (record.refusedProposals > 0
+            ? ` · 거부된 제안 ${record.refusedProposals}건은 아직 기록되지 않음`
+            : ""),
+      );
     }
   }
 
