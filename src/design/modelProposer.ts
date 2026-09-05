@@ -31,7 +31,14 @@ import {
 export const MAX_CALLS = 2;
 const TIMEOUT_MS = 30_000;
 
-const SYSTEM = [
+/**
+ * The instructions the proposer actually ships with.
+ *
+ * Exported so `proposerMetrics` can measure this string rather than a copy of
+ * it. A sweep that pasted the prompt into its own script would keep reporting
+ * numbers about a prompt that had since changed here, and nothing would say so.
+ */
+export const SYSTEM = [
   "당신은 사용자의 요청에서 요구사항 후보를 찾아내는 보조자입니다.",
   "요청 원문에서 근거가 되는 구간의 위치만 지목하고, 그 구간의 글자를 옮겨 적지 마십시오.",
   "",

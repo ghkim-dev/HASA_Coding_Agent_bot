@@ -46,6 +46,8 @@ const FILES = [
   "src/design/modelProposer.ts",
   "src/design/modelPermission.ts",
   "src/design/proposalParse.ts",
+  "src/design/proposerMetrics.ts",
+  "src/design/proposerCases.ts",
   "src/design/preview.ts",
   "src/design/previewMetrics.ts",
   "src/design/previewReport.ts",
@@ -217,9 +219,42 @@ const SUITES = {
   replaylog: ["src/agent/contractReplay.test.ts"],
   designer: ["src/design/harnessDesign.test.ts"],
   recommend: ["src/design/recommendationCases.test.ts"],
+  proposer: ["src/design/proposerMetrics.test.ts"],
 };
 
 const MUTATIONS = [
+  // proposerMetrics — the measurement modelProposer said it did not have. Each
+  // of these takes out one decision the module argues for in prose, so that the
+  // argument and the code are checked against each other rather than only the
+  // code against itself.
+  ["M294", "읽음을 수립된 후보만 읽게 하기", "src/design/proposerMetrics.ts",
+    "  const said = proposals.map((p) => p.text);", "  const said = accepted.map((spec) => spec.text);", "proposer"],
+  ["M295", "읽음 임계 낮추기", "src/design/proposerMetrics.ts",
+    "export const NAMED_COVERAGE = 0.6;", "export const NAMED_COVERAGE = 0.3;", "proposer"],
+  ["M296", "중복 인용 거부 제거", "src/design/proposerMetrics.ts",
+    "    if (input.text.indexOf(want.quote, first + 1) >= 0) {", "    if (false) {", "proposer"],
+  ["M297", "없는 인용 거부 제거", "src/design/proposerMetrics.ts",
+    "    if (first < 0) {", "    if (false) {", "proposer"],
+  ["M298", "빈 분모를 null 이 아니라 0 으로", "src/design/proposerMetrics.ts",
+    "  value: of === 0 ? null : Math.round((hit / of) * 1000) / 1000,",
+    "  value: of === 0 ? 0 : Math.round((hit / of) * 1000) / 1000,", "proposer"],
+  ["M299", "지어냄의 분모를 수립된 것만으로", "src/design/proposerMetrics.ts",
+    "      proposed,\n    ),\n    transcribed: ratio(",
+    "      acceptedTotal,\n    ),\n    transcribed: ratio(", "proposer"],
+  ["M300", "무응답을 형식 분모에서 빼기", "src/design/proposerMetrics.ts",
+    "    shape: ratio(parsedOk, outcomes.length + input.unanswered),",
+    "    shape: ratio(parsedOk, outcomes.length),", "proposer"],
+  ["M301", "순위에서 읽음을 빼기", "src/design/proposerMetrics.ts",
+    "    s.named.value ?? 0,\n    -(s.invented.value ?? 1),",
+    "    -(s.invented.value ?? 1),", "proposer"],
+  ["M302", "지목을 런타임 자른 말이 아닌 모델 문장으로", "src/design/proposerMetrics.ts",
+    "  const cuts = accepted.map((spec) => spec.sourceText);", "  const cuts = accepted.map((spec) => spec.text);", "proposer"],
+  // 이름순 타이브레이크가 기대 순서와 우연히 겹쳐서, 정렬 키를 빼도 통과하는
+  // 시험이 셋 있었다. M301 이 그중 하나를 잡아냈고 나머지 둘을 여기서 잡는다.
+  ["M303", "순위에서 지어냄을 빼기", "src/design/proposerMetrics.ts",
+    "    -(s.invented.value ?? 1),\n    s.pointed.value ?? 0,", "    s.pointed.value ?? 0,", "proposer"],
+  ["M304", "순위에서 지목을 빼기", "src/design/proposerMetrics.ts",
+    "    s.pointed.value ?? 0,\n    s.shape.value ?? 0,", "    s.shape.value ?? 0,", "proposer"],
   ["M01", "span 범위 검사 제거", "src/design/sourceSpan.ts",
     'if (span.start < 0 || span.end > full.length) problems.push("out_of_range");', ""],
   ["M02", "correction merge 제거", "src/design/requirementSpec.ts",
