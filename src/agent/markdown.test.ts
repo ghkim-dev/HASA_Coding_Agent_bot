@@ -247,7 +247,7 @@ describe("nothing is lost", () => {
   }
 
   test("parsing never throws, whatever arrives", () => {
-    const nasty = ["```".repeat(50), "*".repeat(200), "#".repeat(10) + " h", " ", "1.".repeat(100)];
+    const nasty = ["```".repeat(50), "*".repeat(200), "#".repeat(10) + " h", "\0", "1.".repeat(100)];
     for (const input of nasty) assert.doesNotThrow(() => parseMarkdown(input));
   });
 });
