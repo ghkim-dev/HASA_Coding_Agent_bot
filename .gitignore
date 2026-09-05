@@ -27,3 +27,6 @@ Thumbs.db
 .vscode-test/
 extension/media/chat.bundle.js
 extension/media/chat.bundle.js.map
+
+# 실측 스윕이 남기는 원답변. 말뭉치를 되울리므로 저장소에 남기지 않는다.
+.probe/
