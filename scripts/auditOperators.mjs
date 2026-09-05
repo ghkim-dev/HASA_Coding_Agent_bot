@@ -95,7 +95,18 @@ export function sitesIn(text) {
 
 const args = process.argv.slice(2);
 const countOnly = args.includes("--count");
-const targets = args.filter((a) => !a.startsWith("--"));
+/**
+ * Test files are never targets.
+ *
+ * A glob like `src/design/*.ts` sweeps them in, and mutating a test asks
+ * nothing worth knowing: the suite changing when you change the suite is not a
+ * finding. Worse, a test file has no *paired* test, so every one of its sites
+ * skipped the cheap filter and went straight to the full-suite phase — a run
+ * that spent most of its budget on candidates that meant nothing.
+ */
+const targets = args
+  .filter((a) => !a.startsWith("--"))
+  .filter((a) => !/\.(test|fuzz\.test)\.ts$/.test(a));
 
 if (countOnly) {
   let total = 0;
