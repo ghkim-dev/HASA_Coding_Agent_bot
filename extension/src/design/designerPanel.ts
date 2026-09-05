@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { DesignPayload } from "../../../src/design/designerPayload.ts";
 
@@ -106,7 +107,12 @@ export class DesignerPanel {
 function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const media = (name: string): vscode.Uri =>
     webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", name));
-  const nonce = Array.from({ length: 32 }, () => Math.floor(Math.random() * 36).toString(36)).join("");
+  // CSP nonce — 추측할 수 없어야 한다는 것이 이 값의 유일한 일이므로
+  // Math.random 이 아니라 CSPRNG 로 만든다. 지금은 HTML 에 보간되는 값이
+  // 고정 상수뿐이라 악용 경로가 없지만, 모델이 만든 문자열이 하나라도
+  // 그리로 들어오는 순간 예측 가능한 nonce 는 방어가 아니게 된다.
+  // panel.ts 는 처음부터 이렇게 하고 있었고, 세 곳이 같아야 한다.
+  const nonce = randomBytes(16).toString("base64");
 
   return `<!DOCTYPE html>
 <html lang="ko">
