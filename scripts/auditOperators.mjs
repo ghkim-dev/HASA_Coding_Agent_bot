@@ -135,6 +135,35 @@ function testFileFor(source) {
  */
 const RUN_TIMEOUT_MS = 120_000;
 
+/**
+ * Where the run says it is still alive.
+ *
+ * "Is it running?" was asked repeatedly during the first full sweep and could
+ * not be answered from the artifacts: `process.stdout.write(".")` buffers when
+ * redirected, so the log froze while work continued. Falling back to inspecting
+ * the process list produced the opposite error — a liveness probe that returned
+ * empty was read as "the process is gone", and a healthy run was declared dead
+ * and a second one started on top of it.
+ *
+ * So the run states its own progress, unbuffered, on every step. A stale
+ * timestamp means stopped; a moving one means working. Nobody has to guess from
+ * a process table again.
+ */
+const HEARTBEAT = ".audit-operators-progress.json";
+
+function beat(phase, done, total, detail) {
+  try {
+    writeFileSync(
+      HEARTBEAT,
+      `${JSON.stringify({ phase, done, total, detail, at: new Date().toISOString() }, null, 1)}\n`,
+      "utf8",
+    );
+  } catch {
+    // 진행 표시를 못 썼다고 감사를 멈추지는 않는다.
+  }
+}
+
+
 function verdict(tests) {
   let out;
   let timedOut = false;
@@ -192,6 +221,7 @@ for (const file of targets) {
       applied += 1;
       if (verdict([paired]).fail > 0) { killed += 1; process.stdout.write("."); }
       else { candidates.push({ file, ...s, phase1: "짝 시험 통과" }); process.stdout.write("S"); }
+      beat("1단계", applied, null, `${file}:${s.line}`);
     }
   } finally {
     writeFileSync(file, original, "utf8");
@@ -227,7 +257,7 @@ if (existsSync(RESUME)) {
     if (line.trim() === "") continue;
     try {
       const row = JSON.parse(line);
-      done.set(`${row.file}:${row.line}:${row.label}:${row.to}`, row);
+      done.set(`${row.file}:${row.at}:${row.label}:${row.to}`, row);
     } catch {
       // 반쯤 쓰이다 끊긴 줄. 버리고 다시 잰다.
     }
@@ -235,7 +265,20 @@ if (existsSync(RESUME)) {
   console.log(`이어붙임: ${done.size}건은 이미 판정되어 있습니다 (${RESUME})\n`);
 }
 
-const keyOf = (c) => `${c.file}:${c.line}:${c.label}:${c.to}`;
+/**
+ * Keyed on the byte offset, not the line.
+ *
+ * `a === b && c === d` is two `===` sites on one line, and a key of
+ * file+line+operator collapses them into one — so a resumed run skips the
+ * second and hands it the first's verdict. That is a measurement nobody made,
+ * reported as one that was. The completed run measured every site individually,
+ * so the 577/577 result is unaffected; the next resume would not have been.
+ *
+ * An offset also invalidates correctly: edit the file and every site after the
+ * edit shifts, so a stale verdict drops out rather than being reused against
+ * code it was never about.
+ */
+const keyOf = (c) => `${c.file}:${c.at}:${c.label}:${c.to}`;
 
 try {
   for (const [i, c] of candidates.entries()) {
@@ -254,13 +297,14 @@ try {
     // 판정 직후에 쓴다. 다음 변이에서 죽어도 이건 남는다.
     appendFileSync(
       RESUME,
-      `${JSON.stringify({ file: c.file, line: c.line, label: c.label, to: c.to, alive, fail: r.fail, timedOut: r.timedOut === true })}\n`,
+      `${JSON.stringify({ file: c.file, at: c.at, line: c.line, label: c.label, to: c.to, alive, fail: r.fail, timedOut: r.timedOut === true })}\n`,
       "utf8",
     );
     console.log(
       `  [${String(i + 1).padStart(3)}/${candidates.length}] ${c.file}:${c.line} ${c.label}→${c.to.trim()}` +
         `  ${alive ? "살아남음" : `다른 시험이 잡음 (fail ${r.fail})`}`,
     );
+    beat("2단계", i + 1, candidates.length, `${c.file}:${c.line}`);
   }
 } finally {
   for (const [file, text] of byFile) writeFileSync(file, text, "utf8");

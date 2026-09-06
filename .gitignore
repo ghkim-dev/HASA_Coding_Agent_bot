@@ -33,3 +33,4 @@ extension/media/chat.bundle.js.map
 
 # 연산자 감사의 이어붙임 기록. 실행마다 다시 생긴다.
 .audit-operators-resume.jsonl
+.audit-operators-progress.json
