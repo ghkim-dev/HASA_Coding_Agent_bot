@@ -152,6 +152,7 @@ function render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <h2>이 일이 모델에게 요구하는 것</h2>
       <div id="demands" class="demands"></div>
       <p id="intents" class="muted"></p>
+      <p id="reading" class="muted" hidden></p>
     </div>
 
     <div class="card" id="recCard">

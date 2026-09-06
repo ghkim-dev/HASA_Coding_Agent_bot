@@ -20,6 +20,7 @@ const el = {
   conf: /** @type {HTMLElement} */ (document.getElementById("conf")),
   demands: /** @type {HTMLElement} */ (document.getElementById("demands")),
   intents: /** @type {HTMLElement} */ (document.getElementById("intents")),
+  reading: /** @type {HTMLElement} */ (document.getElementById("reading")),
   rec: /** @type {HTMLElement} */ (document.getElementById("rec")),
   qCard: /** @type {HTMLElement} */ (document.getElementById("qCard")),
   questions: /** @type {HTMLElement} */ (document.getElementById("questions")),
@@ -207,6 +208,20 @@ function render(design) {
   const bans = design.prohibitions.map((k) => CONSTRAINT[k] ?? k);
   el.intents.textContent =
     `읽어낸 의도: ${intents}` + (bans.length > 0 ? ` · 금지: ${bans.join(", ")}` : "");
+
+  // 무엇이 읽었는지. 이 줄이 없을 때는, 모델이 답을 거절한 설계와 모델에게
+  // 물어본 적조차 없는 설계가 화면에서 똑같이 보였다.
+  const reading = design.reading;
+  if (reading !== undefined && reading !== null) {
+    const how =
+      reading.source === "model" && reading.modelId !== null
+        ? `요구사항은 ${reading.modelId} 에게 물어 읽었습니다.`
+        : "요구사항은 요청에서 직접 읽어냈습니다 (모델에 묻지 않음).";
+    el.reading.textContent = reading.note === null ? how : `${how} ${reading.note}`;
+    el.reading.hidden = false;
+  } else {
+    el.reading.hidden = true;
+  }
 
   // --- the recommendation -------------------------------------------------
   el.rec.textContent = "";

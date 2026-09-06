@@ -26,6 +26,48 @@ const MODELS = [
 const design = (text: string, models?: typeof MODELS): Promise<ReturnType<typeof toPayload>> =>
   designHarness(models === undefined ? { text } : { text, models }).then((d) => toPayload(d, text));
 
+describe("무엇이 요구사항을 읽었는지", () => {
+  // 확장은 `designHarness` 를 제안자 없이 부른다 — 즉 확장의 모든 설계는
+  // 결정론적 계층만으로 읽힌 것인데, 화면에 그 사실이 없었다. 모델이 답을
+  // 거절한 설계와 모델에게 물어본 적조차 없는 설계가 똑같이 보였다.
+  test("모델에 묻지 않았으면 오프라인이라고 말한다", async () => {
+    const payload = await design("로그인 오류를 고쳐줘.");
+    assert.equal(payload.reading.source, "offline");
+    assert.equal(payload.reading.modelId, null);
+  });
+
+  test("모델이 답했으면 어느 모델인지 말한다", async () => {
+    const d = await designHarness({
+      text: "로그인 오류를 고쳐줘.",
+      propose: async ({ turnId }) => ({
+        proposals: [],
+        modelId: "some-model",
+        calls: 1,
+        parse: { outcome: "empty_array", proposals: [], itemOutcomes: [], forbiddenFieldItems: 0, itemsSeen: 0 },
+        turnId,
+      }),
+    });
+    const payload = toPayload(d, "로그인 오류를 고쳐줘.");
+    assert.equal(payload.reading.source, "model");
+    assert.equal(payload.reading.modelId, "some-model");
+  });
+
+  test("제안자가 실패하면 그 이유를 화면까지 들고 간다", async () => {
+    // 실패한 제안자는 여전히 오프라인 읽기다. 이유가 로그에만 남으면 사용자는
+    // 왜 결과가 얕은지 알 방법이 없다 — 방금 고친 「probe 를 돌리십시오」 같은
+    // 문장이 도달해야 하는 자리가 바로 여기다.
+    const d = await designHarness({
+      text: "로그인 오류를 고쳐줘.",
+      propose: async () => {
+        throw new Error("이 자격 증명으로 무엇을 부를 수 있는지 아직 재지 않았습니다.");
+      },
+    });
+    const payload = toPayload(d, "로그인 오류를 고쳐줘.");
+    assert.notEqual(payload.reading.note, null, "이유가 사라지면 안 된다");
+    assert.match(String(payload.reading.note), /재지 않았습니다/);
+  });
+});
+
 describe("패널에 넘기는 것", () => {
   test("런타임의 규칙과 사용자의 말을 구분해서 표시한다", async () => {
     // The panel draws these differently, and drawing a baseline as the user's

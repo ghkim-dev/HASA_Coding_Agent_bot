@@ -34,6 +34,25 @@ export interface DesignPayload {
   intents: string[];
   prohibitions: string[];
   understood: boolean;
+  /**
+   * How the requirements on screen were read.
+   *
+   * The extension calls `designHarness` without a proposer, so its designs are
+   * always read by the deterministic layer alone — and nothing on screen said
+   * so. A person looking at the panel could not tell whether a model had been
+   * consulted and declined, or never asked. The CLI has always reported this;
+   * the product's own surface did not.
+   *
+   * `note` carries the runtime's own sentence when a model was meant to answer
+   * and could not, so the reason reaches the user rather than the log.
+   */
+  reading: {
+    source: "offline" | "model";
+    /** Which model answered. Null whenever `source` is offline. */
+    modelId: string | null;
+    /** Why the model was not used, when that is the story. */
+    note: string | null;
+  };
   recommendation: {
     selected: {
       modelId: string;
@@ -89,6 +108,14 @@ export function toPayload(design: HarnessDesign, text: string): DesignPayload {
     ) as Record<string, number>,
     intents: design.intents,
     prohibitions: design.prohibitions.map((c) => c.kind),
+    // Read from the preview rather than from whether a proposer was passed in:
+    // a proposer that was supplied and then failed is still an offline reading,
+    // and the panel must say what happened rather than what was intended.
+    reading: {
+      source: design.preview.proposals.source,
+      modelId: design.preview.proposals.modelId,
+      note: design.preview.proposals.error,
+    },
     recommendation:
       rec === null
         ? null
