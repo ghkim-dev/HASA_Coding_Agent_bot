@@ -33,7 +33,7 @@
  * before writing a test for it; the ones worth closing are the ones where the
  * flipped code would do something different and nobody would notice.
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 /** 구문을 깨지 않는 치환만. 주석·문자열 안은 건드리지 않는다. */
@@ -208,14 +208,55 @@ const byFile = new Map();
 for (const c of candidates) {
   if (!byFile.has(c.file)) byFile.set(c.file, readFileSync(c.file, "utf8"));
 }
+/**
+ * Verdicts already reached, so a killed run does not start over.
+ *
+ * This tool has died mid-run three times — twice hung on a mutation with no
+ * timeout, once killed outright at candidate 479 of 577 — and each death threw
+ * away hours because everything lived in memory. Each verdict is now appended
+ * as it is decided, and a restart skips what the file already holds.
+ *
+ * Keyed by file, line and operator: the same candidate re-derived from the same
+ * source produces the same key, and a source edit changes the line and so
+ * correctly invalidates it.
+ */
+const RESUME = ".audit-operators-resume.jsonl";
+const done = new Map();
+if (existsSync(RESUME)) {
+  for (const line of readFileSync(RESUME, "utf8").split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const row = JSON.parse(line);
+      done.set(`${row.file}:${row.line}:${row.label}:${row.to}`, row);
+    } catch {
+      // 반쯤 쓰이다 끊긴 줄. 버리고 다시 잰다.
+    }
+  }
+  console.log(`이어붙임: ${done.size}건은 이미 판정되어 있습니다 (${RESUME})\n`);
+}
+
+const keyOf = (c) => `${c.file}:${c.line}:${c.label}:${c.to}`;
+
 try {
   for (const [i, c] of candidates.entries()) {
+    const key = keyOf(c);
+    const already = done.get(key);
+    if (already !== undefined) {
+      if (already.alive) survivors.push(c);
+      continue;
+    }
     const original = byFile.get(c.file);
     writeFileSync(c.file, original.slice(0, c.at) + c.to + original.slice(c.at + c.len), "utf8");
     const r = verdict(FULL);
     writeFileSync(c.file, original, "utf8");
     const alive = r.fail === 0;
     if (alive) survivors.push(c);
+    // 판정 직후에 쓴다. 다음 변이에서 죽어도 이건 남는다.
+    appendFileSync(
+      RESUME,
+      `${JSON.stringify({ file: c.file, line: c.line, label: c.label, to: c.to, alive, fail: r.fail, timedOut: r.timedOut === true })}\n`,
+      "utf8",
+    );
     console.log(
       `  [${String(i + 1).padStart(3)}/${candidates.length}] ${c.file}:${c.line} ${c.label}→${c.to.trim()}` +
         `  ${alive ? "살아남음" : `다른 시험이 잡음 (fail ${r.fail})`}`,
