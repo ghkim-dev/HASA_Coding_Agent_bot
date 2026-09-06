@@ -124,13 +124,35 @@ function testFileFor(source) {
   return existsSync(t) ? t : null;
 }
 
+/**
+ * How long one suite run may take before the mutation is presumed to hang.
+ *
+ * Flipping `<` to `<=` in a loop condition, or `&&` to `||` in a `while`, makes
+ * code that never terminates. Without a timeout the child never exits, the
+ * parent blocks on it forever, and the sweep stops dead with no output — which
+ * is exactly what happened: two runs sat for over six hours at 0.3 seconds of
+ * CPU, looking like slow progress rather than a hang.
+ */
+const RUN_TIMEOUT_MS = 120_000;
+
 function verdict(tests) {
   let out;
+  let timedOut = false;
   try {
-    out = execFileSync("node", ["--test", ...tests], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    out = execFileSync("node", ["--test", ...tests], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: RUN_TIMEOUT_MS,
+      maxBuffer: 256 * 1024 * 1024,
+    });
   } catch (err) {
+    // A killed child is a hang, not a verdict about assertions. Counted as
+    // caught — a mutation that makes the suite never finish is not one that
+    // slipped past it — but marked so a reader is not told a test failed.
+    if (err.killed === true || err.signal !== null && err.signal !== undefined) timedOut = true;
     out = `${err.stdout ?? ""}${err.stderr ?? ""}`;
   }
+  if (timedOut) return { pass: 0, fail: 1, timedOut: true };
   const pass = /^ℹ pass (\d+)$/m.exec(out);
   const fail = /^ℹ fail (\d+)$/m.exec(out);
   const cancelled = /^ℹ cancelled (\d+)$/m.exec(out);
