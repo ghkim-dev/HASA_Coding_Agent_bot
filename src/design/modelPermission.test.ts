@@ -13,7 +13,12 @@ import {
   permittedModels,
   type PermissionEvidence,
 } from "./modelPermission.ts";
-import { createModelProposer, rankByPermission } from "./modelProposer.ts";
+import {
+  chooseProposerModel,
+  createModelProposer,
+  demoteRemembered,
+  rankByPermission,
+} from "./modelProposer.ts";
 import type { CapabilityMatrix } from "../protocol/capability.ts";
 import type { LlmProvider, ProviderChatResponse } from "../provider/types.ts";
 
@@ -557,5 +562,124 @@ describe("design 계층은 게이트웨이를 직접 다루지 않는다", () =>
       if (/HASA_API_KEY/.test(source.replace(/^\s*\*.*$/gm, ""))) offenders.push(file);
     }
     assert.deepEqual(offenders, [], "previewCli 밖에서 키를 읽습니다");
+  });
+});
+
+describe("기억이 제안자 선택을 움직인다", () => {
+  const SPACE = "hasa|bge-m3|3|";
+
+  const seen = (
+    modelId: string,
+    outcome: "accepted" | "superseded",
+    n: number,
+    budget: number | null = 800,
+  ) =>
+    Array.from({ length: n }, (_, i) => ({
+      similarity: 0.9,
+      row: {
+        id: `${modelId}-${outcome}-${i}`,
+        turnId: "t1",
+        sourceText: "로그인 오류를 고쳐",
+        proposedBy: modelId,
+        budget,
+        outcome,
+        vector: [1, 0, 0],
+        space: SPACE,
+        at: 0,
+      },
+    }));
+
+  test("기억이 없으면 카탈로그 순서 그대로다", () => {
+    const order = ["a", "b", "c"];
+    assert.deepEqual(demoteRemembered(order, [], 0), order);
+  });
+
+  test("정정당한 모델이 뒤로 밀린다", () => {
+    // 마디 3 이 실제로 하는 일. 지난 비슷한 요청에서 사용자가 고쳐야 했던
+    // 제안자는 이번에도 덜 신뢰한다.
+    const order = ["나쁜모델", "좋은모델"];
+    const neighbours = [
+      ...seen("나쁜모델", "superseded", 4),
+      ...seen("좋은모델", "accepted", 4),
+    ];
+    assert.deepEqual(demoteRemembered(order, neighbours, 0), ["좋은모델", "나쁜모델"]);
+  });
+
+  test("기억이 모르는 모델은 자리를 지킨다", () => {
+    // 의견이 없는 것은 나쁘다는 뜻이 아니다. 모르는 모델을 뒤로 미는 것은
+    // 침묵을 최하점으로 읽는 일이고, 그러면 새 모델은 영영 뽑히지 않는다.
+    const order = ["모르는모델", "나쁜모델"];
+    assert.deepEqual(
+      demoteRemembered(order, seen("나쁜모델", "superseded", 4), 0),
+      ["모르는모델", "나쁜모델"],
+    );
+  });
+
+  test("이웃이 문턱보다 적으면 순서를 바꾸지 않는다", () => {
+    const order = ["a", "b"];
+    assert.deepEqual(demoteRemembered(order, seen("a", "superseded", 1), 0), order);
+  });
+
+  test("제외하지는 않는다 — 권한은 이 함수의 것이 아니다", () => {
+    const order = ["나쁜모델", "좋은모델"];
+    const after = demoteRemembered(order, seen("나쁜모델", "superseded", 5), 0);
+    assert.equal(after.length, 2, "밀어내되 빼지 않는다");
+    assert.ok(after.includes("나쁜모델"));
+  });
+
+  test("한 예산에서만 나빴어도 그 판정을 쓴다", () => {
+    // 프로필에 예산 칸이 없으니, 좋은 날 성적으로 뽑고 나쁜 날에 부르는 일이
+    // 없도록 최악을 쓴다.
+    const order = ["양면모델", "고른모델"];
+    const neighbours = [
+      ...seen("양면모델", "accepted", 4, 6000),
+      ...seen("양면모델", "superseded", 4, 800),
+      ...seen("고른모델", "accepted", 4, 800),
+    ];
+    assert.deepEqual(demoteRemembered(order, neighbours, 0), ["고른모델", "양면모델"]);
+  });
+
+  /** Two permitted models, so a reorder can actually change the answer. */
+  const TWO_PERMITTED: PermissionEvidence = {
+    ...EVIDENCE,
+    models: [
+      { modelId: "public-a", chat: "pass" },
+      { modelId: "permitted-one", chat: "pass" },
+    ],
+  };
+
+  test("chooseProposerModel 이 기억의 순서를 따른다", async () => {
+    // 처음 쓴 이 시험은 권한 있는 모델이 하나뿐이어서, 기억을 통째로 무시하는
+    // 변이를 넣어도 통과했다 — 재정렬이 답을 바꿀 수 없는 판이었다.
+    const provider = fakeProvider();
+    const chosen = await chooseProposerModel({
+      provider,
+      permission: TWO_PERMITTED,
+      now: () => NOW,
+      // public-a 가 카탈로그에서 앞이지만, 기억이 그것을 밀어낸다.
+      remembered: [...seen("public-a", "superseded", 4), ...seen("permitted-one", "accepted", 4)],
+    });
+    assert.equal(chosen, "permitted-one");
+  });
+
+  test("기억이 없으면 chooseProposerModel 은 카탈로그 순서를 쓴다", async () => {
+    const provider = fakeProvider();
+    const chosen = await chooseProposerModel({ provider, permission: TWO_PERMITTED, now: () => NOW });
+    assert.equal(chosen, "public-a", "기억이 없으면 앞선 것이 뽑힌다");
+  });
+
+  test("의견 없는 모델은 나쁜 모델보다 앞에 남는다", () => {
+    // 앞선 시험은 둘뿐이라 비교자가 뒤집혀도 우연히 통과했다. 셋으로 두면
+    // 「모르는 것은 앞, 나쁜 것은 뒤」가 순서로 드러난다.
+    const order = ["나쁜모델", "모르는모델", "덜나쁜모델"];
+    const neighbours = [
+      ...seen("나쁜모델", "superseded", 4),
+      ...seen("덜나쁜모델", "superseded", 2).concat(seen("덜나쁜모델", "accepted", 2)),
+    ];
+    assert.deepEqual(demoteRemembered(order, neighbours, 0), [
+      "모르는모델",
+      "덜나쁜모델",
+      "나쁜모델",
+    ]);
   });
 });

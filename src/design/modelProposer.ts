@@ -1,6 +1,8 @@
 import type { LlmProvider } from "../provider/types.ts";
 import type { Proposer } from "./preview.ts";
 import { parseProposals } from "./proposalParse.ts";
+import { evidenceFromMemory } from "./memoryEvidence.ts";
+import type { Neighbour } from "./requirementMemory.ts";
 import {
   denyObserved,
   isForbiddenDenial,
@@ -109,6 +111,15 @@ export interface ProposerOptions {
   store?: PermissionEvidenceStore;
   /** Told about the refusal too, for a report that wants to mention it. */
   onDenied?: (denial: { modelId: string; permission: PermissionEvidence | null }) => void;
+  /**
+   * What the memory saw happen to requests like this one.
+   *
+   * Supplied by the composition root, which embeds the request and reads the
+   * store — this layer opens neither a socket nor a file. Omitted means the
+   * memory was not consulted, and the order is then exactly what permission and
+   * the catalogue produced.
+   */
+  remembered?: readonly Neighbour[];
 }
 
 /**
@@ -130,13 +141,84 @@ export interface ProposerOptions {
  * quarantine could have fixed that, because the metric was the wrong metric
  * before the question of which file it came from arose.
  *
- * So: permitted models in catalogue order, and the selection says plainly that
- * it had no measured basis. A proposer-specific measurement is what would
- * change this; `proposerMetrics.ts` defines what it would have to contain.
+ * So the base order is permitted models in catalogue order, which has no
+ * measured basis and never claimed one.
+ *
+ * ## What now moves it
+ *
+ * `remembered` — what happened to requests like this one. It is the first
+ * evidence this function has ever had that is about the job it is choosing for:
+ * a proposer misreading a request, seen in real use rather than measured
+ * against a corpus. It reorders and never excludes, and with no neighbours the
+ * order is unchanged, so the honest description of an unused memory is still
+ * "catalogue order with no measured basis".
+ *
+ * `proposerMetrics.ts` remains the corpus-side answer to the same question, and
+ * the two are deliberately not merged: one is what a sweep measured on a day,
+ * the other is what users lived with.
  */
 export async function chooseProposerModel(options: ProposerOptions): Promise<string | null> {
   const ranked = await rankByPermission(options);
-  return ranked[0] ?? null;
+  return demoteRemembered(ranked, options.remembered ?? [], options.now())[0] ?? null;
+}
+
+/**
+ * Moves models the memory has watched fail on requests like this one to the back.
+ *
+ * This is the evidence the module has said it did not have since it stopped
+ * ranking by `requirementRecall`. It is the right evidence for *this* choice and
+ * for no other: what the memory records is a proposer misreading a request —
+ * the user corrected the requirement, or the runtime refused its coordinates —
+ * which is precisely the job being chosen for here.
+ *
+ * ## Why it does not go into the router's ranking instead
+ *
+ * That was tried first and it was wrong. The router ranks models to *do the
+ * work*, and for "로그인 오류를 고쳐줘" it asks for coding, tool use and
+ * recovery — `sourceGrounding` is demanded at zero. Folding the memory in there
+ * either did nothing or, worse, would have claimed that a model which misreads
+ * a request is also worse at writing code. Nothing establishes that, and
+ * asserting it is the laundering of one signal into many that
+ * `memoryEvidence` refuses on its own doorstep.
+ *
+ * ## It reorders; it never excludes
+ *
+ * A model the memory dislikes is still permitted, and permission is not this
+ * function's to revoke — `permittedModels` decided that, from evidence about
+ * what the gateway allows. A handful of corrected requirements is a reason to
+ * prefer someone else, not a reason to declare a model unusable. When the
+ * memory has no opinion the order is exactly what it was.
+ */
+export function demoteRemembered(
+  ranked: readonly string[],
+  neighbours: readonly Neighbour[],
+  now: number,
+): string[] {
+  if (neighbours.length === 0) return [...ranked];
+  const worst = new Map<string, number>();
+  for (const e of evidenceFromMemory({ neighbours, now })) {
+    const seen = e.capabilities.sourceGrounding;
+    if (seen === undefined) continue;
+    const standing = worst.get(e.modelId);
+    // The worst verdict any budget produced. Ranking a model on its best day
+    // and then calling it on its worst is how a pick becomes a promise nobody
+    // made — the same reason `proposerEvidence` carries a budget floor.
+    if (standing === undefined || seen.value < standing) worst.set(e.modelId, seen.value);
+  }
+  if (worst.size === 0) return [...ranked];
+
+  // A stable sort over the original order, so models the memory says nothing
+  // about keep their catalogue positions relative to each other. Only what the
+  // memory actually watched moves.
+  return [...ranked]
+    .map((modelId, index) => ({ modelId, index, score: worst.get(modelId) }))
+    .sort((a, b) => {
+      if (a.score === undefined && b.score === undefined) return a.index - b.index;
+      if (a.score === undefined) return -1;
+      if (b.score === undefined) return 1;
+      return b.score - a.score || a.index - b.index;
+    })
+    .map((r) => r.modelId);
 }
 
 /** Models this credential may call, catalogue order. Exported for its own test. */
