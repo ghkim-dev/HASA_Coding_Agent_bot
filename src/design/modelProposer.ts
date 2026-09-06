@@ -4,7 +4,9 @@ import { parseProposals } from "./proposalParse.ts";
 import {
   denyObserved,
   isForbiddenDenial,
+  permissionReport,
   permittedModels,
+  type ModelPermission,
   type PermissionEvidence,
   type PermissionEvidenceStore,
 } from "./modelPermission.ts";
@@ -149,10 +151,61 @@ export async function rankByPermission(options: ProposerOptions): Promise<string
  * Chosen once and reused, so a multi-turn preview does not re-list the
  * catalogue per turn and does not drift between models mid-conversation.
  */
+/**
+ * Why nothing was eligible, in words the person can act on.
+ *
+ * The old message said "no model this credential can call" and stopped there.
+ * That sentence is true of two different situations and only one of them is a
+ * problem with the key:
+ *
+ *   - nothing has ever been measured for this key, so nothing is *known* to be
+ *     callable — the fix is to run the probe, and the message now says so;
+ *   - measurements exist and the gateway refused every model — the key really
+ *     cannot reach them, and probing again will not change that.
+ *
+ * Running the product as a user is what surfaced this. A valid key, a gateway
+ * answering 35 models, and a design that reported no callable model — because
+ * the capability matrix on disk was three weeks old and belonged to a different
+ * key. The runtime knew that (`never_probed`) and told nobody.
+ */
+function whyNoModel(permissions: readonly ModelPermission[]): string {
+  const forbidden = permissions.filter((p) => p.standing === "server_forbidden");
+  const unmeasured = permissions.filter(
+    (p) => p.reason === "never_probed" || p.reason === "expired",
+  );
+
+  if (permissions.length === 0) {
+    return "게이트웨이가 모델 목록을 주지 않았습니다. 네트워크와 HASA_BASE_URL 을 확인하십시오.";
+  }
+  if (unmeasured.length === permissions.length) {
+    return (
+      `이 자격 증명으로 무엇을 부를 수 있는지 아직 재지 않았습니다 ` +
+      `(모델 ${permissions.length}개 전부 미측정). \`pnpm probe\` 를 먼저 돌리십시오 — ` +
+      `능력 측정은 키마다 따로 쌓이므로, 키를 바꿨다면 예전 측정은 쓰이지 않습니다.`
+    );
+  }
+  if (unmeasured.length === 0) {
+    return (
+      `게이트웨이가 이 자격 증명으로는 모델 ${forbidden.length}개를 전부 거부했습니다. ` +
+      `다시 재도 거부는 바뀌지 않습니다 — 키의 권한을 확인하십시오.`
+    );
+  }
+  // 거부와 미측정이 섞인 경우. 미측정이 남아 있으면 재는 것이 여전히 할 일이고,
+  // 여기서 "다시 재도 소용없다"고 말하면 고칠 수 있는 사람을 돌려보내게 된다.
+  return (
+    `부를 수 있다고 확인된 대화형 모델이 없습니다 — ` +
+    `거부 ${forbidden.length}개, 아직 재지 않음 ${unmeasured.length}개. ` +
+    `\`pnpm probe\` 로 나머지를 재 보십시오. 거부된 ${forbidden.length}개는 다시 재도 바뀌지 않습니다.`
+  );
+}
+
 export async function createModelProposer(options: ProposerOptions): Promise<Proposer> {
   const modelId = await chooseProposerModel(options);
   if (modelId === null) {
-    throw new Error("이 자격 증명으로 호출할 수 있는 대화형 모델이 없습니다.");
+    const listing = await options.provider.listModels();
+    throw new Error(
+      whyNoModel(permissionReport(options.permission, listing.models.map((m) => m.id), options.now())),
+    );
   }
 
   /**

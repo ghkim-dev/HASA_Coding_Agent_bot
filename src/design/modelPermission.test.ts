@@ -352,6 +352,58 @@ describe("proposer 는 권한이 확인된 모델만 사용한다", () => {
     assert.deepEqual(provider.asked, [], "권한이 없는데도 호출을 시도했습니다");
   });
 
+  test("한 번도 재지 않았으면 재라고 말한다", async () => {
+    // 제품을 사용자처럼 써 보고서야 필요한 줄 알았다. 유효한 키에 35개를 답하는
+    // 게이트웨이인데 「부를 수 있는 모델이 없습니다」만 나왔다 — 런타임은 이유가
+    // `never_probed` 인 것을 알고 있었고 아무에게도 말하지 않았다.
+    const provider = fakeProvider();
+    await assert.rejects(
+      () => createModelProposer({ provider, permission: null, now }),
+      (err: Error) => {
+        assert.match(err.message, /재지 않았습니다/, "무엇이 없는지 말해야 한다");
+        assert.match(err.message, /probe/, "무엇을 하면 되는지 말해야 한다");
+        return true;
+      },
+    );
+  });
+
+  test("전부 거부됐으면 다시 재라고 말하지 않는다", async () => {
+    // 거부는 재측정으로 바뀌지 않는다. 여기서 probe 를 권하면 고칠 수 없는 일을
+    // 시키는 것이고, 사용자는 키 권한이라는 진짜 원인에서 멀어진다.
+    const allDenied: PermissionEvidence = {
+      ...EVIDENCE,
+      models: CATALOGUE.map((modelId) => ({ modelId, chat: "denied" as const })),
+    };
+    const provider = fakeProvider();
+    await assert.rejects(
+      () => createModelProposer({ provider, permission: allDenied, now }),
+      (err: Error) => {
+        assert.match(err.message, /거부/);
+        assert.doesNotMatch(err.message, /probe/, "재도 소용없는데 재라고 하면 안 된다");
+        return true;
+      },
+    );
+  });
+
+  test("거부와 미측정이 섞이면 남은 것을 재라고 말한다", async () => {
+    // 처음 쓴 메시지는 이 경우에도 「다시 재도 바뀌지 않는다」고 말했다. 미측정이
+    // 남아 있으면 재는 것이 정확히 할 일이므로, 고칠 수 있는 사람을 돌려보내는
+    // 조언이었다.
+    const mixed: PermissionEvidence = {
+      ...EVIDENCE,
+      models: [{ modelId: "denied-one", chat: "denied" }],
+    };
+    const provider = fakeProvider();
+    await assert.rejects(
+      () => createModelProposer({ provider, permission: mixed, now }),
+      (err: Error) => {
+        assert.match(err.message, /probe/, "미측정이 남았으면 재라고 해야 한다");
+        assert.match(err.message, /거부 1개/, "거부된 수도 함께 말해야 한다");
+        return true;
+      },
+    );
+  });
+
   test("권한 없는 모델에는 한 번도 호출하지 않는다", async () => {
     const provider = fakeProvider('[{"text":"x","start":0,"end":4}]');
     const propose = await createModelProposer({ provider, permission: EVIDENCE, now });
