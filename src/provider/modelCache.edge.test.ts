@@ -299,7 +299,28 @@ describe("no credential reaches the disk, whatever the model ids are", () => {
       const files = await readdir(dir);
       for (const name of files) {
         assert.ok(!name.includes(KEY), "filename leaked the key");
-        const raw = await readFile(join(dir, name), "utf8");
+        // Every file, temporaries included — a key in a `.tmp` is on the disk
+        // exactly as much as a key in the published entry, so filtering them
+        // out would leave the more dangerous half unchecked.
+        //
+        // Which means this loop reads names the writer is still managing, and
+        // a temporary can be unlinked between the listing and the open. That
+        // is a missing file, not a leaking one, so it is skipped rather than
+        // failed: a name that no longer exists cannot be a credential on disk.
+        // Failing here instead would turn a benign race into a red test, and
+        // a red test that nobody can reproduce is how a real leak gets
+        // dismissed as flake.
+        let raw: string;
+        try {
+          raw = await readFile(join(dir, name), "utf8");
+        } catch (err) {
+          assert.equal(
+            (err as NodeJS.ErrnoException).code,
+            "ENOENT",
+            `${name} 을(를) 읽을 수 없습니다 — 사라진 것이 아니라면 확인이 필요합니다`,
+          );
+          continue;
+        }
         assert.ok(!raw.includes(KEY), "payload leaked the key");
       }
       const read = await cache.read(scope);

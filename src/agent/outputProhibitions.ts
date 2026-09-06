@@ -117,15 +117,32 @@ const IS_DELIVERABLE = new RegExp(DELIVERABLE, "i");
  * that should read it. What is left — 빼다, 제외하다, 생략하다 — is ambiguous
  * on its own, which is exactly why it may only fire next to a deliverable.
  *
- * The locative has to sit directly in front of the verb, which gives up "벤더
- * 이름은 빼고 보고서를 정리해줘" — a real constraint, stated with the
- * deliverable on the far side of the verb. Given up on purpose: reaching for it
- * meant a lookahead over the rest of the clause, and a pattern that scans
- * twenty characters for a noun will eventually find one in a sentence that
- * meant something else. The negated phrasing is both commoner and unambiguous,
- * and `NEGATED_CONTENT` reads it without any of this.
+ * The locative has to sit directly in front of the verb. `JOINED_REMOVAL`
+ * below is the other half — the same constraint with the deliverable on the
+ * far side.
  */
 const REMOVAL = new RegExp(`(?:은|는|을|를)?\\s*(${DELIVERABLE})(?:에서|에는|에)\\s*(?:빼|제외|생략)`, "g");
+
+/**
+ * "벤더 이름은 빼고 보고서를 정리해줘" — the removal joined to what follows.
+ *
+ * The first attempt at this scanned twenty characters past the verb for a
+ * deliverable, and was dropped for the reason a fixed window deserves to be
+ * dropped: a pattern that hunts for a noun in an arbitrary span will find one
+ * in a sentence that meant something else.
+ *
+ * `-고` gives a real boundary instead of an invented one. It is the connective
+ * that joins "not X" to "do Y", which is the shape `clausesOf` already names,
+ * so the region to look in is not a character count — it is the rest of the
+ * sentence this clause was joined to. "테스트는 빼고 빌드만 해줘" names no
+ * deliverable there and does not fire; "가격은 빼고 보고서 써줘" does.
+ *
+ * Sentence-bounded rather than clause-bounded on purpose. "테스트는 빼고
+ * 빌드해줘. 보고서는 나중에." must not fire, and it is the full stop that says
+ * so — the 보고서 in the next sentence is a different thought.
+ */
+const JOINED_REMOVAL = /(?:은|는|을|를)\s*(?:빼|제외하|생략하)(?:고|구)(?=\s)/g;
+const DELIVERABLE_AHEAD = new RegExp(DELIVERABLE, "i");
 
 /**
  * Where a clause the reader may claim begins.
@@ -290,11 +307,25 @@ export function outputProhibitionsIn(
     out.push({ subject: read.subject, place: read.place, start, end });
   };
 
-  for (const pattern of [NEGATED_CONTENT, REMOVAL]) {
+  for (const pattern of [NEGATED_CONTENT, REMOVAL, JOINED_REMOVAL]) {
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
       const at = match.index;
       if (claimed(at)) continue;
+      // The joined form's qualifier is on the far side of the verb, so it is
+      // checked here rather than in the pattern: everything from the end of
+      // the match to the end of the sentence, and nothing beyond it.
+      let ahead: string | null = null;
+      if (pattern === JOINED_REMOVAL) {
+        const rest = text.slice(at + match[0].length, clauseEnd(text, at + match[0].length));
+        const found = DELIVERABLE_AHEAD.exec(rest);
+        if (found === null) continue;
+        // The noun that made this branch fire is also where the user said the
+        // thing may not go, so it is kept for the same reason `REMOVAL` keeps
+        // its capture: discarding it renders "벤더 이름은 넣지 않는다" for a
+        // sentence that named the report.
+        ahead = found[0];
+      }
       const start = clauseStart(text, at);
       const end = clauseEnd(text, at + match[0].length);
       const read = subjectIn(text.slice(start, at));
@@ -302,7 +333,7 @@ export function outputProhibitionsIn(
       // `subjectIn` no longer contains it. The capture puts it back — the whole
       // reason that branch fires is the noun it matched on, and dropping it
       // produced "경쟁사 이름은 넣지 않는다" for a sentence that said where.
-      if (read !== null && match[1] !== undefined) read.place ??= match[1];
+      if (read !== null) read.place ??= match[1] ?? ahead ?? null;
       // A named place has to be the thing being produced.
       //
       // 쓰다 and 넣다 mean both "write in the answer" and "write to a file", and

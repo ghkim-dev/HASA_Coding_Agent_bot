@@ -264,6 +264,33 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   { pattern: /살펴(?:봐|보)/, action: "inspect" },
   verb("설명", "(?:하|해)", "inspect"),
   { pattern: /보여(?:줘|주세요|주(?![는던])|달라|다오)/, action: "inspect" },
+  /**
+   * `보다` as the main verb — "로그를 봐줘", "이 파일 좀 봐 주세요".
+   *
+   * `보여줘` was read and `봐줘` was not, which is the same request in the
+   * commoner conjugation: "로그를 봐줘" produced no requirement at all, so the
+   * runtime read a plain instruction as having asked for nothing. Found while
+   * writing a case for a different axis — the sentence was a prop and the
+   * extractor was silent about half of it.
+   *
+   * The exclusion was almost certainly deliberate and it was nowhere written
+   * down, which is the part worth fixing as much as the pattern: `보다` is also
+   * Korean's try-doing-it auxiliary, and "실행해 봐줘" must stay an `execute`
+   * rather than gaining a second, invented `inspect` beside it.
+   *
+   * So the particle does the separating. Main-verb `보다` takes an object
+   * marked `를`/`을`, or `만`/`도`, or the softener `좀`; the auxiliary attaches
+   * to a preceding verb's connective ending, which is never any of those. The
+   * alternative — excluding the connective — would have to enumerate every
+   * vowel it can surface as (해, 려, 워, 와, 서, 겨…) and would let through the
+   * first one missed. Requiring the particle fails towards silence instead,
+   * which is the direction this file's header argues for.
+   *
+   * It gives up "봐줘" with no particle at all ("이거 봐줘"), and that is the
+   * trade: a bare `봐` matches inside the auxiliary of every verb in the
+   * language.
+   */
+  { pattern: /(?<=(?:를|을|만|도|좀)\s{0,2})봐\s*(?:줘|주세요|주라|주시|줄래|다오)/, action: "inspect" },
   // `-아서` 도 이 동사의 활용형이다. "필드를 찾아서 규칙을 만들어줘" 의 앞 절이
   // 통째로 사라지고 있었다 — 동사를 모르는 것이 아니라 어미가 목록에 없었다.
   { pattern: /찾아(?:줘|주세요|주(?![는던])|봐|서|야|도)/, action: "inspect" },

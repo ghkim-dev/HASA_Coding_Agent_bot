@@ -86,7 +86,7 @@ describe("추출기 불변식", () => {
       // another. Two of the three new candidates name a target, because a
       // noun-verb in that construction is its own noun. 127 → 129 when `-어서`
       // became a clause boundary for the halves that name their own target.
-      { turns: 118, candidates: 130, withObject: 117, forbidding: 14 },
+      { turns: 119, candidates: 131, withObject: 118, forbidding: 15 },
       "말뭉치가 달라졌습니다 — 의도한 변경이면 이 숫자를 갱신하십시오",
     );
   });

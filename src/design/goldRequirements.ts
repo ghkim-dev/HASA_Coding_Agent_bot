@@ -191,7 +191,7 @@ export interface KnownGap {
 export const KNOWN_MISSES: readonly KnownGap[] = [
   // Empty, and that is a measurement rather than a claim: the test below asserts
   // this list is *exactly* the set of remaining disagreements, so an empty table
-  // is only green while every one of the 43 cases agrees on all nine axes.
+  // is only green while every one of the 45 cases agrees on all nine axes.
   //
   // The two entries that were here — `preserve-and-modify` on questions and on
   // startability — were one defect: `markConflicts` could not see a rename that
@@ -212,7 +212,6 @@ export const UNMEASURED: readonly string[] = [
   "priority(must/should/may) — 정답 우선순위를 기록하지 않았다",
   "kind(functional/validation/…) — 정답 분류를 기록하지 않았다",
   "span 정확도 — 근거 구간의 포함만 확인하고, 최소 구간인지는 기록하지 않았다",
-  "forbid_research — 웹 금지를 담은 사례가 두 말뭉치 어디에도 없다",
   "모델 제안의 recall/precision — Gold 는 오프라인 추출기만 대상으로 한다",
   "Oracle coverage — 요구사항별 검증 규칙의 정답은 designRules 쪽에서 따로 센다",
   "다중 턴 요구사항 승계 — merge 후 남아야 하는 집합의 정답을 기록하지 않았다",

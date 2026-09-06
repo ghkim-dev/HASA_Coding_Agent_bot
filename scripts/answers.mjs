@@ -58,21 +58,28 @@ import { join } from "node:path";
  * The mirror of `EXPECTED_SILENT` in `scripts/mutate.mjs`. An answer belongs
  * here only when not checking it is the decision — never because writing the
  * test is inconvenient. Keyed exactly as the report prints it.
+ *
+ * The key names the case — `file#case-id :: field = value` — and used to name
+ * the line instead. That broke twice in one afternoon: a case added anywhere
+ * above an exemption slid it, and the run then reported a stale exemption *and*
+ * a surprise, two alarms for one insertion and neither about an answer. Which
+ * case an answer belongs to is what identifies it; how far down the file it
+ * sits is not. The line number is still the fallback for a corpus with no ids.
  */
 const EXPECTED_UNCHECKED = new Map([
   [
-    'src/design/mediaCases.ts:213 :: requirements = "create"',
+    'src/design/mediaCases.ts#m-user-chooses :: requirements = "create"',
     "m-user-chooses 의 답이다. 그 문장(`사용자가 이미지와 영상 중에 고를 수 있게 해줘`)은 " +
       "일부러 읽지 않는다 — `고르다` 가 어떤 행위인지 문장이 말하지 않기 때문이다. 답은 " +
       "'읽었다면 이랬을 것' 을 적어 둔 것이고, 테스트는 그 반대(아무것도 나오지 않는다)를 " +
       "못 박는다. 그래서 이 답을 바꿔도 아무도 실패하지 않는 것이 맞다.",
   ],
   [
-    'src/design/mediaCases.ts:213 :: requirements = "이미지와 영상"',
+    'src/design/mediaCases.ts#m-user-chooses :: requirements = "이미지와 영상"',
     "위와 같은 사례의 대상 쪽. 같은 이유로 검사되지 않는다.",
   ],
   [
-    'src/eval/scenarios.ts:206 :: expectedRelation = "continue"',
+    'src/eval/scenarios.ts#S08-false-blocker :: expectedRelation = "continue"',
     "S08-face-blocker#2 와 S20-mixed-stress#6 의 답이다. 둘 다 런타임이 `refine` 으로 " +
       "읽고, 그 어긋남은 `evalScenarioRecall.test.ts` 의 " +
       "SCENARIO_RELATION_AS_BUILT 에 판정과 이유를 달아 못 박혀 있다. 못이 as-built 값을 " +
@@ -80,26 +87,26 @@ const EXPECTED_UNCHECKED = new Map([
       "그 못이 실패한다.",
   ],
   [
-    'src/eval/scenarios.ts:457 :: expectedRelation = "continue"',
+    'src/eval/scenarios.ts#S20-mixed-stress :: expectedRelation = "continue" [2]',
     "위와 같다 — S20-mixed-stress#6 쪽.",
   ],
   [
-    'src/design/consultingCases.ts:122 :: requirements = "PoC부터 전사 확산까지 단계"',
+    'src/design/consultingCases.ts#c-roadmap-range :: requirements = "PoC부터 전사 확산까지 단계"',
     "두 어절 창이 이 명사구를 자르는 자리다. `consultingCases.test.ts` 의 " +
       "KNOWN_TARGET_MISS 가 잘린 값을 못 박고 있으므로, 테스트는 정답이 아니라 못을 " +
       "주장한다 — 정답 쪽을 바꿔도 실패하지 않는 것이 맞고, 창이 넓어져 정답과 " +
       "같아지는 순간 그 못이 실패한다.",
   ],
   [
-    'src/design/consultingCases.ts:267 :: requirements = "장애 복구 시간"',
+    'src/design/consultingCases.ts#c-operate-measure-and-report :: requirements = "장애 복구 시간"',
     "위와 같다 — 세 어절 명사구의 앞머리가 잘리는 자리이고, 잘린 값이 못 박혀 있다.",
   ],
   [
-    'src/design/consultingCases.ts:298 :: requirements = "벤더 세 곳의 제안서"',
+    'src/design/consultingCases.ts#c-operate-vendor :: requirements = "벤더 세 곳의 제안서"',
     "위와 같다 — 수량 구가 남고 머리 명사가 잘리는 자리이고, 잘린 값이 못 박혀 있다.",
   ],
   [
-    'src/design/goldCases.ts:551 :: relation = "new_task"',
+    'src/design/goldCases.ts#past-failure-retry :: relation = "new_task" [2]',
     "past-failure-retry 의 두 번째 턴이다. `RELATION_AS_BUILT` 가 이 턴을 `refine` 으로 " +
       "못 박아 두었으므로 테스트는 정답이 아니라 못을 주장하고, 그래서 정답 쪽을 바꿔도 " +
       "실패하지 않는다. 알려진 어긋남을 못 박으면 그 자리의 정답이 검사되지 않게 되는 것은 " +
@@ -426,8 +433,40 @@ for (const corpus of work) {
   // The same string the report prints, so a line can be moved from one to the
   // other. They were built by two different expressions once, and the allow-list
   // silently matched nothing.
-  const keyOf = (a) =>
-    `${corpus.file}:${original.slice(0, a.start).split("\n").length} :: ${a.key} = ${JSON.stringify(a.value)}`;
+  //
+  // Named by the case it sits in, not by its line. The line number was the key
+  // and it broke twice in one afternoon: adding a case anywhere above an
+  // exemption slid it, and the run then reported both a stale exemption and a
+  // surprise — two alarms for one insertion, neither of them about an answer.
+  // Worse than noisy, it is the wrong shape: an exemption says "this answer is
+  // knowingly unchecked", and an answer is identified by which case it belongs
+  // to, never by how far down the file it happens to sit.
+  //
+  // The ordinal disambiguates two answers with the same key and value inside
+  // one case. Reordering turns within a case still moves it, which is a rarer
+  // and much more deliberate edit than inserting a case elsewhere.
+  // Computed once for every answer in the corpus, in file order, and then
+  // looked up. `keyOf` used to be a pure function of one answer and now has to
+  // count duplicates, so a version that incremented on each call would hand out
+  // a different key each of the four times it is asked about the same answer.
+  const keys = new Map();
+  {
+    const ordinals = new Map();
+    // `found` is every answer in the corpus and `missed` holds the same object
+    // references for the subset nothing caught. Concatenating them counted each
+    // missed answer twice and pushed every exemption's ordinal off by one, which
+    // reported all eight of them as both stale and surprising.
+    for (const a of [...found].sort((x, y) => x.start - y.start)) {
+      const before = original.slice(0, a.start);
+      const ids = [...before.matchAll(/\bid:\s*"([^"]+)"/g)];
+      const where = ids.length > 0 ? `#${ids[ids.length - 1][1]}` : `:${before.split("\n").length}`;
+      const base = `${corpus.file}${where} :: ${a.key} = ${JSON.stringify(a.value)}`;
+      const n = (ordinals.get(base) ?? 0) + 1;
+      ordinals.set(base, n);
+      keys.set(a, n === 1 ? base : `${base} [${n}]`);
+    }
+  }
+  const keyOf = (a) => keys.get(a) ?? `${corpus.file}:? :: ${a.key} = ${JSON.stringify(a.value)}`;
   const surprising = missed.filter((a) => !EXPECTED_UNCHECKED.has(keyOf(a)));
   allowed += missed.length - surprising.length;
   const usable = found.length - bad;

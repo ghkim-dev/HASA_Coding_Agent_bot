@@ -124,6 +124,7 @@ export class FileModelCache implements ModelCacheStore {
     const target = this.pathFor(entry.scope);
     writeSequence += 1;
     const tmp = `${target}.${process.pid}.${writeSequence}.tmp`;
+    let published = false;
     try {
       await mkdir(this.dir, { recursive: true });
       // Written 0600 and renamed into place: a half-written cache is never
@@ -131,15 +132,38 @@ export class FileModelCache implements ModelCacheStore {
       // only model ids.
       await writeFile(tmp, JSON.stringify(entry), { encoding: "utf8", mode: 0o600 });
       await rename(tmp, target);
+      published = true;
     } catch {
       // Caching is an optimisation. Losing it is not worth failing a request —
       // and when two writers race, Windows fails one of the renames outright.
       // The loser's entry is simply dropped; the winner's is whole.
     } finally {
-      // A rename that succeeded consumed the temporary file and this is a
-      // no-op. A rename that failed did not, and without this the directory
-      // fills with megabyte-sized debris — one file per lost race, forever.
-      await rm(tmp, { force: true }).catch(() => {});
+      // Only when the rename did not consume it. This used to run
+      // unconditionally, on the reasoning that deleting a file that is already
+      // gone is a no-op — true on the file system and not true in the process:
+      // it is an unlink issued against a path the writer has just published,
+      // on every single successful write.
+      //
+      // On Windows that unlink is not free. Another handle on the directory —
+      // an indexer, a scanner, another test process — can make it fail, and it
+      // can also make it succeed *late*, after a reader has listed the
+      // directory and before that reader opens what it listed. A reader that
+      // enumerates this directory then reads what it found is doing something
+      // completely reasonable, and this line was the only thing that could
+      // pull a name out from under it.
+      //
+      // Without the flag the directory fills with megabyte-sized debris — one
+      // file per lost race, forever; a measured run left 265 of them. With it,
+      // the cleanup happens exactly on the path that creates the litter.
+      //
+      // Three mutations here are caught — inverting the condition, dropping the
+      // cleanup, and setting the flag before the rename instead of after. A
+      // fourth is not: never setting `published` reverts to the unconditional
+      // cleanup this replaced, and no test can see it, because the difference
+      // is a syscall that is not issued rather than a file that is not there.
+      // Said here rather than covered by a test that would only look like it
+      // checked.
+      if (!published) await rm(tmp, { force: true }).catch(() => {});
     }
   }
 

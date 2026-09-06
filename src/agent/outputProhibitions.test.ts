@@ -46,6 +46,31 @@ describe("결과물에 대한 금지를 읽는다", () => {
     assert.equal(found[0]?.place, "결론");
   });
 
+  /**
+   * `-고` 로 이어붙인 제거형. 산출물이 동사 **뒤쪽**에 있다.
+   *
+   * 처음에는 포기했던 형태다. 스무 글자를 훑어 명사를 찾는 방식이었고, 그런
+   * 창은 다른 뜻의 문장에서도 결국 명사를 찾아낸다. `-고` 가 잇는 나머지
+   * 문장으로 경계를 바꾸면서 되살렸다.
+   */
+  test("빼고 뒤에 산출물이 오면 읽는다", () => {
+    const found = outputProhibitionsIn("벤더 이름은 빼고 보고서를 정리해 주세요.");
+    assert.equal(found.length, 1);
+    assert.equal(found[0]?.subject, "벤더 이름");
+    assert.equal(found[0]?.place, "보고서");
+  });
+
+  test("빼고 뒤에 산출물이 없으면 읽지 않는다", () => {
+    // 이 조건이 없으면 "테스트는 빼고 빌드만 해줘" 가 결과물 금지가 된다.
+    assert.deepEqual(SUBJECTS("테스트는 빼고 빌드만 해줘."), []);
+    assert.deepEqual(SUBJECTS("이 파일은 빼고 커밋해줘."), []);
+  });
+
+  test("다음 문장의 산출물은 세지 않는다", () => {
+    // 경계가 절이 아니라 문장인 이유. 마침표 뒤의 보고서는 다른 생각이다.
+    assert.deepEqual(SUBJECTS("테스트는 빼고 빌드해줘. 보고서는 나중에."), []);
+  });
+
   test("근거는 문단이 아니라 그 절이다", () => {
     const text = "후보 솔루션을 비교해 주세요. 다만 특정 벤더의 제품명은 결론에 넣지 말아 주세요.";
     const found = outputProhibitionsIn(text);

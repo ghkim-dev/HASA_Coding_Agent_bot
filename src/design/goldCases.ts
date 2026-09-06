@@ -3,7 +3,7 @@ import type { GoldCase } from "./goldRequirements.ts";
 /**
  * The answers, written from the Korean and not from the output.
  *
- * Forty-four cases, each one a sentence a person actually types at a coding
+ * Forty-five cases, each one a sentence a person actually types at a coding
  * agent. What every case records is in `goldRequirements.ts`; what matters about
  * *this* file is the discipline: when the extractor disagrees with a case, the
  * case is the thing that is right until somebody argues otherwise in the
@@ -11,7 +11,7 @@ import type { GoldCase } from "./goldRequirements.ts";
  *
  * ## This is the development set, and it is frozen
  *
- * These 44 cases have been read by the implementation, so they can no longer
+ * These 45 cases have been read by the implementation, so they can no longer
  * measure generalisation — every fix since they were written had them in view.
  * They stay as the regression set, and `holdoutCases.ts` is where an unseen
  * measurement now comes from. Its answers were written before any of the code
@@ -50,6 +50,15 @@ import type { GoldCase } from "./goldRequirements.ts";
  *      scoring survived the entire suite. No case in either corpus banned
  *      anything from the *answer*, so the axis could be deleted outright and
  *      every number this file reports would have stayed the same.
+ *   7. `no-web-repo-only` — a **case** was added (2026-09-06), same disclosure.
+ *      The web ban was the third prohibition class and no case in either
+ *      corpus carried one, so `forbid_research` sat in `UNMEASURED` from the
+ *      day it was named. It is out of that list now.
+ *
+ *      Its second requirement is why the sentence is worth having twice over.
+ *      "저장소 코드만 봐줘" produced nothing at all — `보여줘` was read and
+ *      `봐줘` was not — so this case was written as a prop for the prohibition
+ *      and caught a silent half of its own sentence.
  *
  * No answer has been changed in the other direction — to agree with output that
  * disagreed with the Korean.
@@ -181,6 +190,24 @@ export const GOLD_CASES: readonly GoldCase[] = [
             quote: "특정 벤더의 제품명은 결론에 넣지 말아 주세요",
           },
           { action: "inspect", polarity: "required", target: "후보 솔루션", quote: "후보 솔루션을 비교해 주세요" },
+        ],
+      },
+    ],
+    questions: { expected: [], max: 2 },
+    startable: true,
+    executable: true,
+  },
+  {
+    id: "no-web-repo-only",
+    category: "prohibition",
+    why: "웹 금지. 세 번째 금지 부류이고, 이 사례가 생기기 전까지 두 말뭉치 어디에서도 재지 않았다.",
+    turns: [
+      {
+        text: "웹 검색은 하지 말고 저장소 코드만 봐줘.",
+        relation: "new_task",
+        requirements: [
+          { action: "forbid_research", polarity: "forbidden", target: null, quote: "웹 검색은 하지 말고" },
+          { action: "inspect", polarity: "required", target: "저장소 코드", quote: "저장소 코드만 봐줘" },
         ],
       },
     ],
