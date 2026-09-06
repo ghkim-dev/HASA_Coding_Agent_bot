@@ -120,7 +120,42 @@ describe("sentences that forbid nothing", () => {
     "실행 결과를 보여줘.",
     "Run the tests and fix what fails.",
     "Please modify the config and restart.",
+    // 배포 부류를 들이면서 같이 들어온 자리들. 명사만 있고 금지가 없는 문장이다.
+    "배포 절차를 정리해줘.",
+    "커밋 로그를 분석해줘.",
+    "릴리스 노트를 작성해줘.",
+    "머지 충돌을 해결해줘.",
+    "푸시 알림을 보내지 마.",
   ];
+
+  /**
+   * `반영` 은 자격이 붙어야만 배포다.
+   *
+   * "운영에 반영하지 마" 는 실행 금지이고, "그 의견은 반영하지 마" 는 편집을
+   * 하지 말라는 말이다. 자격을 빼고 맨 `반영하지 마` 를 읽으면 두 번째가 실행
+   * 금지가 되고, 도구 관문은 사용자가 요청한 일을 거부한다 — 이 모듈의 머리말이
+   * 오탐을 유일하게 해로운 방향이라고 부르는 이유다.
+   *
+   * 자격을 지우는 변이가 물지 않아서 세운다. 위의 ALLOWED 목록에 한 줄로 넣으면
+   * 짝이 되는 긍정 사례가 없어 "무엇을 지키는 조건인지" 가 남지 않는다.
+   */
+  describe("반영은 자격이 붙어야 배포다", () => {
+    test("운영에 반영하지 마 · 실행 금지", () => {
+      assert.deepEqual([...prohibitionsIn("운영에 반영하지 말고 검토만 해줘.")], ["execute"]);
+    });
+
+    test("프로덕션에 반영하지 마 · 실행 금지", () => {
+      assert.deepEqual([...prohibitionsIn("프로덕션 환경에 반영하지 마.")], ["execute"]);
+    });
+
+    test("그 의견은 반영하지 마 · 실행 금지가 아니다", () => {
+      assert.deepEqual([...prohibitionsIn("그 의견은 반영하지 마.")], []);
+    });
+
+    test("피드백은 반영하지 말고 원안대로 가자 · 실행 금지가 아니다", () => {
+      assert.deepEqual([...prohibitionsIn("피드백은 반영하지 말고 원안대로 가자.")], []);
+    });
+  });
 
   for (const text of ALLOWED) {
     test(`no prohibition: ${text.slice(0, 44)}`, () => {
@@ -128,8 +163,8 @@ describe("sentences that forbid nothing", () => {
     });
   }
 
-  test("표의 줄 수 · ALLOWED 8", () => {
-    assert.equal(ALLOWED.length, 8);
+  test("표의 줄 수 · ALLOWED 13", () => {
+    assert.equal(ALLOWED.length, 13);
   });
 
   describe("a report of failure is not an instruction", () => {

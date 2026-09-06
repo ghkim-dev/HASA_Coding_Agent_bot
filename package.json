@@ -25,7 +25,8 @@
     "design:answers": "node scripts/answers.mjs",
     "audit:assertions": "node scripts/auditAssertions.mjs",
     "audit:operators": "node scripts/auditOperators.mjs",
-    "audit:numbers": "node scripts/auditNumbers.mjs"
+    "audit:numbers": "node scripts/auditNumbers.mjs",
+    "design:industry": "node scripts/industryReport.mjs"
   },
   "dependencies": {
     "fastify": "^5.2.1",

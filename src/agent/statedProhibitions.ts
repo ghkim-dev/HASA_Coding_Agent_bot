@@ -166,6 +166,17 @@ const RESEARCH_DIRECT = new RegExp(
   "i",
 );
 
+/**
+ * Putting it where users will meet it.
+ *
+ * Every one of these is unambiguous with the negation attached to it: `커밋`,
+ * `머지`, `푸시`, `배포`, `릴리스`, `롤아웃` name one act each. `푸시` is the
+ * one worth checking twice — "푸시 알림을 보내지 마" also contains it, and the
+ * negation there attaches to 보내 rather than to 푸시, so the pattern below,
+ * which requires `푸시하지 마`, does not fire on it.
+ */
+const DEPLOY = "(?:배포|커밋|머지|푸시|릴리[스즈]|롤아웃|디플로이)";
+
 const EXECUTE_DIRECT = new RegExp(
   [
     // A particle may sit between the stem and 하지: "실행도 하지 마",
@@ -180,6 +191,33 @@ const EXECUTE_DIRECT = new RegExp(
     `실행[하해]${MYEON_AN}`,
     `돌[리려]${MYEON_AN}`,
     `구동[하해]${MYEON_AN}`,
+    // Shipping it, in the words the people who ask for it actually use.
+    //
+    // "실행하지 마" was read and "배포하지 마" was not, and the second is the
+    // commoner sentence by a distance in the work this product is for: every
+    // regulated sector states it, and `consultingCases` already carried
+    // "실제로 배포하지 말고 계획만 보여줘" with a `why` saying the tool gate has
+    // to read it — over an answer that recorded no prohibition, so nothing
+    // checked that it did. It did not.
+    //
+    // `execute` rather than a class of their own, because the gate is the same:
+    // deploying, committing, merging and pushing all reach `run_command`, and a
+    // fifth class would be a fifth thing for `decideAction` to special-case for
+    // no gain. What it costs is the rendered sentence — a deploy ban reads back
+    // as "명령을 실행하지 않는다" — which is the same target-loss every act class
+    // already has, and is fixed for all of them or for none.
+    `${DEPLOY}(?:도|은|는|을|를|만)?\\s*${STEM}\\s*${NEG}${ASKING_WHETHER}`,
+    `${DEPLOY}[하해]${MYEON_AN}`,
+    `${DEPLOY}하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니`,
+    // "운영에 반영하지 마". `반영` alone is excluded on purpose: "피드백을
+    // 반영하지 마" asks for an edit not to be made, which is the modify class's
+    // business and not a deployment. The place is what makes it a release, the
+    // same way `웹` is what makes a search leave the machine.
+    `(?:운영|프로덕션|production|실서비스|본서버)\\s*(?:환경)?\\s*에\\s*반영${STEM}\\s*${NEG}${ASKING_WHETHER}`,
+    "do\\s+not\\s+(?:deploy|release|ship|merge|commit|push)",
+    "don'?t\\s+(?:deploy|release|ship|merge|commit|push)",
+    `${IMPERATIVE_START}never\\s+(?:deploy|release|ship|merge|push)\\b`,
+    "without\\s+(?:deploying|releasing|merging|committing|pushing)",
     // "실행하라는 게 아니라" — a correction rather than a prohibition, and the
     // sentence that produced this whole investigation.
     "실행하(?:라는|란)\\s*(?:게|것이|말이|건)?\\s*아니",
