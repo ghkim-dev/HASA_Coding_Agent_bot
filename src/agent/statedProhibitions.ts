@@ -144,6 +144,12 @@ const RESEARCH_DIRECT = new RegExp(
     // "웹검색하면 안 돼", "웹을 써서는 안 된다".
     `${WEB}[하해]?${MYEON_AN}`,
     `${WEB}(?:도|은|는|을|를|만)?\\s*(?:써|쓰|사용[하해])${MYEON_AN}`,
+    // "웹 검색은 쓰지 마세요" — the same verb, negated the other way. Only the
+    // `-면 안 돼` conjugation of 쓰다 was read, so a ban stated in the commoner
+    // form raised nothing: `STEM` is `하지`, and 쓰지 is not 하지. Found by
+    // asking the output-constraint reader why it was claiming this sentence,
+    // which it should never have seen.
+    `${WEB}(?:\\s*검색|\\s*조사)?(?:도|은|는|을|를|만)?\\s*(?:써|쓰|사용하)[지진](?:[는도를은])?\\s*${NEG}${ASKING_WHETHER}`,
     // "웹 검색 없이 저장소 파일만" — the absence stated as the instruction.
     `${WEB}\\s*(?:검색|조사)?\\s*없이`,
     // "인터넷 검색은 빼줘".

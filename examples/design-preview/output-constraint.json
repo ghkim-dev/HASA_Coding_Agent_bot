@@ -1,0 +1,30 @@
+{
+  "turns": [
+    "국내 제조업 DX 사례를 정리하고 후보 솔루션을 비교해 주세요. 다만 특정 벤더의 제품명은 결론에 넣지 말아 주세요."
+  ],
+  "expect": {
+    "mustContainKinds": [
+      "constraint",
+      "functional"
+    ],
+    "forbiddenActions": [
+      "output"
+    ],
+    "mustNotInvent": [
+      "실행",
+      "웹"
+    ],
+    "maxQuestions": 3,
+    "requiredQuestionCodes": [],
+    "forbiddenQuestionCodes": [
+      "AMBIGUOUS_DECIDED",
+      "TARGET_UNRESOLVED"
+    ],
+    "exactQuestionSubjects": [],
+    "mustContainText": [
+      "특정 벤더의 제품명은 결론에 넣지 않는다",
+      "후보 솔루션을 비교한다"
+    ]
+  },
+  "note": "말뭉치에 있던 금지는 전부 도구 관문(실행·수정·웹)이었고, 그래서 결과물에 대한 제약이 하나도 읽히지 않는다는 사실을 47건 어디에서도 잴 수 없었다. 이 문장은 컨설팅 요청이 실제로 달고 오는 형태다 — 요구는 긍정문에, 제약은 그 뒤 '다만' 절에. 금지 자체가 아니라 금지의 **대상**이 문장마다 다르기 때문에 부류 하나로 접을 수 없고, 그래서 답에 사용자의 말이 그대로 들어 있다."
+}

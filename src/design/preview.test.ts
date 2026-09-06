@@ -591,7 +591,7 @@ async function runCase(turns: string[]) {
 type CaseView = Awaited<ReturnType<typeof runCase>>;
 
 /**
- * 개인 사용 fixture 16개 — 사례별로, 축별로.
+ * 개인 사용 fixture 17개 — 사례별로, 축별로.
  *
  * 예전에는 반복문 하나가 모든 fixture 의 모든 축을 돌며 실패 문자열을 모아
  * `assert.deepEqual(failures, [])` 로 한 번에 터뜨렸다. 빨간 줄 하나가 "무언가
@@ -605,7 +605,7 @@ type CaseView = Awaited<ReturnType<typeof runCase>>;
  * previewDesign 은 사례당 한 번, before() 에서만 돈다. 아래 test 들은 그
  * 미리 계산된 결과를 읽기만 한다. 지표 test 들도 같은 결과를 쓴다.
  */
-describe("개인 사용 fixture 16개", () => {
+describe("개인 사용 fixture 17개", () => {
   const cases = new Map<string, CaseView>();
   let metrics: ReturnType<typeof measurePreviews> | null = null;
   let renderedCorpus = "";
@@ -677,6 +677,7 @@ describe("개인 사용 fixture 16개", () => {
       "named-source.json",
       "no-execute-show-code.json",
       "no-modify-no-execute.json",
+      "output-constraint.json",
       "regression-preserve.json",
       "retry-after-failure.json",
       "scoped-write.json",
@@ -768,8 +769,11 @@ describe("개인 사용 fixture 16개", () => {
           // 하네스(`scripts/answers.mjs`)가 execute 를 다른 값으로 바꿔도 초록인
           // 것을 보고 이 자리를 가리켰다.
           //
-          // 금지 요구사항의 id 는 `t1-forbid-execute` 꼴이고, 그 꼬리가 부류다.
-          const kinds = forbidden.map((s) => s.id.split("-forbid-")[1] ?? "");
+          // 부류는 이제 `spec.forbids` 에 필드로 있다. id 꼬리를 읽던 것은
+          // 그 필드가 없던 동안의 임시방편이었고, `t1-forbid-output-0` 처럼
+          // 꼬리에 일련번호가 붙는 부류가 생기자마자 "output-0" 을 부류로
+          // 읽었다 — 명명 규칙에 걸린 규칙이 무엇으로 깨지는지의 실례다.
+          const kinds = forbidden.map((s) => s.forbids ?? s.id.split("-forbid-")[1] ?? "");
           assert.ok(
             kinds.includes(action),
             `금지 ${action} 없음: ${JSON.stringify(kinds)} — ${JSON.stringify(forbidden.map((s) => s.text))}`,
@@ -908,15 +912,15 @@ describe("개인 사용 fixture 16개", () => {
      * 쪽인지는 사람이 정한다.
      */
     const EXPECTED: Readonly<Record<(typeof RATIOS)[number], readonly [number, number]>> = {
-      ambiguousIntentRate: [0, 27],
-      unresolvedBindingRate: [3, 27],
-      blockedRate: [6, 27],
-      semanticUnknownRate: [0, 27],
-      noDesignRuleRate: [0, 27],
-      questionCases: [5, 16],
-      remediableClosureRate: [16, 16],
-      fullyResolvedRate: [9, 16],
-      executableRate: [9, 16],
+      ambiguousIntentRate: [0, 30],
+      unresolvedBindingRate: [3, 30],
+      blockedRate: [6, 30],
+      semanticUnknownRate: [0, 30],
+      noDesignRuleRate: [0, 30],
+      questionCases: [5, 17],
+      remediableClosureRate: [17, 17],
+      fullyResolvedRate: [10, 17],
+      executableRate: [10, 17],
     };
 
     for (const name of RATIOS) {

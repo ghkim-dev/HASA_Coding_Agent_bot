@@ -361,6 +361,10 @@ function describeOracle(oracle: PreviewResult["scenarios"][number]["oracle"]): s
   if (oracle.requiredTools.length > 0) parts.push(`require[${oracle.requiredTools.join(",")}]`);
   if (oracle.requiredEvidence.length > 0) parts.push(`evidence[${oracle.requiredEvidence.join(",")}]`);
   if (oracle.writeScope.length > 0) parts.push(`scope[${oracle.writeScope.join(",")}]`);
+  // Without this line an output constraint's oracle rendered as "(없음)" — the
+  // advanced view's way of saying a scenario decides nothing, printed under a
+  // scenario that decides the one thing the user asked for.
+  if (oracle.forbiddenOutput.length > 0) parts.push(`noOutput[${oracle.forbiddenOutput.join(",")}]`);
   if (oracle.workspaceChanged !== null) parts.push(`changed=${oracle.workspaceChanged}`);
   if (oracle.verifiedCompletion !== null) parts.push(`complete=${oracle.verifiedCompletion}`);
   return parts.length === 0 ? "(없음)" : parts.join(" ");

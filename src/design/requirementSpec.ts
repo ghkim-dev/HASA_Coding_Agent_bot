@@ -1,3 +1,4 @@
+import { outputProhibitionsIn, outputProhibitionText } from "../agent/outputProhibitions.ts";
 import { prohibitionsIn, type ProhibitedClass } from "../agent/statedProhibitions.ts";
 import { exactSourcesIn, namedSourcesIn } from "../agent/sourceProvenance.ts";
 import type { TurnRelation } from "../agent/turnContract.ts";
@@ -124,6 +125,21 @@ export interface RequirementSpec {
   target?: string;
   /** Whether the act has a target. `unresolved` is open, never invented. */
   binding: Binding;
+  /**
+   * What kind of thing a `forbidden` requirement forbids.
+   *
+   * Recorded because `scenarioBlueprint` has to build a different oracle for
+   * each, and the alternative it was using is the one this file already warns
+   * about two fields up: it read `spec.text.includes("실행")` and sent
+   * everything else to the file-write gate. That was correct while the only
+   * prohibitions were the two act classes, and it silently mis-verified the
+   * first one that was neither — an output constraint arrived in the plan under
+   * "파일 수정 금지가 지켜진다", claiming a check nobody was making.
+   *
+   * Absent for `required` requirements and for prohibitions that came from a
+   * model, where the string reading remains the fallback.
+   */
+  forbids?: ProhibitedClass | "output";
   /** What the model claimed, kept as information and never as authority. */
   modelClaimedConfidence?: RequirementConfidence;
   /** Set when the span scopes the requirement to a condition nobody settled. */
@@ -236,6 +252,7 @@ function sentenceSpan(full: string, pattern: RegExp, turnId: string): SourceSpan
  */
 export function runtimeRequirements(input: { turnId: string; text: string }): RequirementSpec[] {
   const out: RequirementSpec[] = [];
+  const claimedSpans: { start: number; end: number }[] = [];
 
   for (const klass of prohibitionsIn(input.text)) {
     const span =
@@ -243,6 +260,7 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       ({ turnId: input.turnId, start: 0, end: input.text.length } as SourceSpan);
     const sourceText = input.text.slice(span.start, span.end).trim();
     const condition = conditionIn(sourceText);
+    claimedSpans.push({ start: span.start, end: span.end });
     out.push({
       id: `${input.turnId}-forbid-${klass}`,
       text: PROHIBITION_TEXT[klass],
@@ -257,6 +275,59 @@ export function runtimeRequirements(input: { turnId: string; text: string }): Re
       intent: intentFor({ derivedBy: "runtime_prohibition" }),
       // A prohibition's target is the act class itself, which the runtime named.
       binding: "resolved",
+      forbids: klass,
+      ...(condition === null ? {} : { condition }),
+      dependencies: [],
+      conflicts: [],
+      derivedBy: "runtime_prohibition",
+    });
+  }
+
+  // What the user forbade the answer to contain, which no reader had.
+  //
+  // The act classes above are a closed set, so each becomes one constant
+  // sentence. These are open — a vendor's name, a price, an unverified guess —
+  // so the requirement carries the user's own subject, and the span is the
+  // clause it was stated in rather than the whole request. `verified` for the
+  // same reason the act prohibitions are: the runtime read it and can point at
+  // the characters, and no model was asked.
+  //
+  // The spans just claimed are handed over so a sentence is read once. "웹
+  // 검색은 쓰지 마세요" is a research ban, and before that sentence was added
+  // to `RESEARCH_DIRECT` it was read by neither module — the output reader
+  // claiming it is what surfaced the gap.
+  for (const found of outputProhibitionsIn(input.text, claimedSpans)) {
+    const span: SourceSpan = { turnId: input.turnId, start: found.start, end: found.end };
+    const sourceText = input.text.slice(found.start, found.end).trim();
+    const condition = conditionIn(sourceText);
+    out.push({
+      id: `${input.turnId}-forbid-output-${out.length}`,
+      text: outputProhibitionText(found.subject, found.place),
+      sourceText,
+      span,
+      sourceTurnId: input.turnId,
+      kind: "constraint",
+      priority: "must",
+      polarity: "forbidden",
+      status: "explicit",
+      provenance: "verified",
+      intent: intentFor({ derivedBy: "runtime_prohibition" }),
+      // Resolved, for the same reason the act prohibitions are: the target is
+      // what the user wrote, quoted verbatim with a span pointing at it, and
+      // there is nothing further for the runtime to look up.
+      //
+      // `unresolved` was the first reading — "특정 벤더" names no vendor — and
+      // it was wrong twice. `executionReadiness` turns it into `blocked`, so
+      // every consulting request carrying a caveat would have reported that no
+      // run could start on it; and it would have counted in
+      // `unresolvedBindingRate`, a metric about the runtime failing to bind
+      // targets, for a target the runtime bound exactly.
+      binding: "resolved",
+      forbids: "output",
+      // The subject is the target, in the field that exists for it. The oracle
+      // needs the user's phrase and nothing else, and recovering it from the
+      // rendered sentence would be unparsing a string this layer just wrote.
+      target: found.subject,
       ...(condition === null ? {} : { condition }),
       dependencies: [],
       conflicts: [],
