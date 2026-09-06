@@ -85,6 +85,14 @@ export interface ScenarioBlueprint {
 
 const WRITE_TOOLS = ["write_file", "create_file", "apply_patch", "delete_file"];
 const READ_TOOLS = ["read_file", "search_files", "list_files"];
+/**
+ * The two that leave the machine.
+ *
+ * The same pair `statedProhibitions` says its research class denies — named
+ * here rather than inferred, so the gate a plan promises and the gate the
+ * runtime enforces are the same two strings.
+ */
+const RESEARCH_TOOLS = ["web_search", "web_fetch"];
 
 const INVARIANTS = [
   "FORBIDDEN_EXECUTION",
@@ -199,14 +207,34 @@ export function scenariosFor(spec: RequirementSpec): ScenarioBlueprint[] {
   }
 
   if (spec.polarity === "forbidden") {
-    // `forbids` when the runtime read it, the string when it did not. The
-    // string reading was the only one, and it is a two-way branch: everything
-    // that was not 실행 became a file-write ban, including the first
-    // prohibition that was neither.
-    const isExecute = spec.forbids === undefined ? spec.text.includes("실행") : spec.forbids === "execute";
-    const tools = isExecute ? ["run_command"] : WRITE_TOOLS;
-    const other = isExecute ? WRITE_TOOLS : ["run_command"];
-    const label = isExecute ? "실행" : "파일 수정";
+    // Which tools the class actually gates.
+    //
+    // This was a two-way branch on `spec.text.includes("실행")`, and everything
+    // that was not 실행 became a file-write ban. Giving `output` its own branch
+    // above fixed the case that made the defect visible and left the other one
+    // exactly as it was: a web ban — "웹 검색은 하지 말고" — arrived in the plan
+    // under "파일 수정 금지가 지켜진다", so the plan said the agent must not
+    // search the web and then verified that it had not written a file. Nobody
+    // was watching the web at all.
+    //
+    // Read from `forbids` now, with the string as the fallback for a
+    // prohibition a model proposed. `research` gates the two tools that leave
+    // the machine, which is exactly the pair `statedProhibitions` says its
+    // research class denies.
+    const klass =
+      spec.forbids ?? (spec.text.includes("실행") ? "execute" : spec.text.includes("웹") ? "research" : "modify");
+    const gate =
+      klass === "execute"
+        ? { tools: ["run_command"], label: "실행" }
+        : klass === "research"
+          ? { tools: RESEARCH_TOOLS, label: "웹 검색" }
+          : { tools: WRITE_TOOLS, label: "파일 수정" };
+    const tools = gate.tools;
+    // The counterweight scenario needs a tool the ban does *not* cover, so that
+    // "allowed things stay allowed" is about something the ban could plausibly
+    // have swept up. Anything the gate does not name will do.
+    const other = klass === "modify" ? ["run_command"] : WRITE_TOOLS;
+    const label = gate.label;
     const rule = "forbidden.v1";
 
     return [

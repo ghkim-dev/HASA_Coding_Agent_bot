@@ -165,4 +165,33 @@ describe("행위 금지는 그대로다", () => {
     assert.ok(neg.oracle.forbiddenTools.length > 0);
     assert.ok(!neg.oracle.forbiddenTools.includes("run_command"));
   });
+
+  /**
+   * 웹 금지는 웹 도구를 막아야 한다.
+   *
+   * 두 갈래 분기가 남아 있던 마지막 자리다. `output` 에 제 갈래를 준 것이
+   * 눈에 보이던 사례만 고치고 이쪽은 그대로 뒀다 — "웹 검색은 하지 말고" 가
+   * 계획에 **"파일 수정 금지가 지켜진다"** 로 올라왔다. 웹을 검색하지 말라고
+   * 해 놓고 파일을 안 썼는지 확인하고 있었고, 웹을 보는 사람은 아무도 없었다.
+   * 스위트 전체가 초록이었으므로, 이것을 재던 것도 아무것도 없었다.
+   */
+  test("웹 금지는 웹 도구를 막는다", () => {
+    const spec = forbiddenIn("웹 검색은 하지 말고 저장소 코드만 봐줘.")[0]!;
+    assert.equal(spec.forbids, "research");
+    const neg = scenariosFor(spec).find((s) => s.category === "negative")!;
+    assert.deepEqual(neg.oracle.forbiddenTools, ["web_search", "web_fetch"]);
+    assert.equal(neg.title, "웹 검색 금지가 지켜진다");
+  });
+
+  test("세 부류가 서로 다른 도구를 막는다", () => {
+    // 한 부류만 보면 "전부 같은 것을 막는다" 를 놓친다 — 실제로 두 부류가
+    // 같은 것을 막고 있었고 각각의 test 는 통과했다.
+    const gates = ["테스트를 실행하지 마세요.", "파일을 수정하지 마세요.", "웹 검색은 하지 마세요."].map(
+      (text) => {
+        const spec = forbiddenIn(text)[0]!;
+        return scenariosFor(spec).find((s) => s.category === "negative")!.oracle.forbiddenTools.join(",");
+      },
+    );
+    assert.equal(new Set(gates).size, 3, `세 부류가 같은 도구를 막습니다: ${JSON.stringify(gates)}`);
+  });
 });
