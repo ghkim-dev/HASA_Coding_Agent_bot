@@ -34,3 +34,11 @@ extension/media/chat.bundle.js.map
 # 연산자 감사의 이어붙임 기록. 실행마다 다시 생긴다.
 .audit-operators-resume.jsonl
 .audit-operators-progress.json
+
+# 변이 하네스가 원본을 잠시 옆에 놓아두는 파일. mutate.mjs 는 `.bak`,
+# answers.mjs 는 `.answerbak` 을 쓴다. 하네스가 도는 동안 `git add -A` 를 하면
+# 변조된 소스와 그 백업이 함께 커밋되는데, 이 저장소에서 실제로 한 번 일어났다
+# (4de2eae, df575ab 에서 되돌림). 무시 목록에 두는 것이 그 사고를 반쯤 막는다 —
+# 나머지 반은 하네스가 도는 동안 커밋하지 않는 것이다.
+*.bak
+*.answerbak

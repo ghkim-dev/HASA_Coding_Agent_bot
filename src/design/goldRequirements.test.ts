@@ -37,7 +37,7 @@ import type { TurnRelation } from "../agent/turnContract.ts";
  *
  * ## 집계 하나 옆에 사례 하나씩
  *
- * 집계 핀은 그대로 남는다. `{ hit: 61, of: 61 }` 은 분모를 주장하는 문장이고,
+ * 집계 핀은 그대로 남는다. `{ hit: 63, of: 63 }` 은 분모를 주장하는 문장이고,
  * 말뭉치가 사례를 잃으면 그 문장이 먼저 실패해야 하기 때문이다. 그 위에 축마다
  * 사례별 테스트를 얹는다 — 대체가 아니라 덧붙임이다. 집계는 "몇 개가 어긋났다"
  * 까지만 말하고, 사례별 테스트는 "이 사례의 이 축이 이렇게 어긋났다" 를 이름과
@@ -243,20 +243,20 @@ describe("Gold 집합 자체", () => {
 
 describe("요구사항 정확성 — 분모를 함께", () => {
   test("recall 61/61", () => {
-    assert.deepEqual(score.requirementRecall, { hit: 61, of: 61, value: 1 });
+    assert.deepEqual(score.requirementRecall, { hit: 63, of: 63, value: 1 });
     assert.deepEqual(score.missed, [], "놓친 요구사항이 있습니다");
   });
 
   test("precision 59/59 — 발명이 0이다", () => {
     // The one that must never slip. A missing requirement is visible to the user
     // as work not done; an invented one is work they never asked for.
-    assert.deepEqual(score.requirementPrecision, { hit: 61, of: 61, value: 1 });
+    assert.deepEqual(score.requirementPrecision, { hit: 63, of: 63, value: 1 });
     assert.deepEqual(score.spurious, [], "요청에 없는 요구사항을 만들었습니다");
   });
 
   test("target 정확도 61/61, span 근거 61/61", () => {
-    assert.deepEqual(score.targetAccuracy, { hit: 61, of: 61, value: 1 });
-    assert.deepEqual(score.spanGrounding, { hit: 61, of: 61, value: 1 });
+    assert.deepEqual(score.targetAccuracy, { hit: 63, of: 63, value: 1 });
+    assert.deepEqual(score.spanGrounding, { hit: 63, of: 63, value: 1 });
   });
 
   test("relation 47/48", () => {
@@ -281,7 +281,7 @@ describe("요구사항 정확성 — 분모를 함께", () => {
     // Nothing is lost by the disagreement here: both turns ask for the same
     // work, so the conversation stands at ["테스트를 실행한다", "요청한 명령을
     // 실행한다"] either way.
-    assert.deepEqual(score.relationAccuracy, { hit: 47, of: 48, value: 0.979 });
+    assert.deepEqual(score.relationAccuracy, { hit: 48, of: 49, value: 0.98 });
   });
 
   test("대상이 없는 요청은 대상을 만들어내지 않는다", () => {
@@ -591,7 +591,7 @@ describe("질문 정확성 — 분모를 함께", () => {
   });
 
   test("질문 상한을 넘는 사례가 없다", () => {
-    assert.deepEqual(score.questionCeiling, { hit: 43, of: 43, value: 1 });
+    assert.deepEqual(score.questionCeiling, { hit: 44, of: 44, value: 1 });
   });
 
   test("요구사항 하나에 질문은 하나다", () => {
@@ -688,13 +688,13 @@ describe("사례별 · 질문 상한", () => {
 describe("Startable 과 Executable 은 다른 주장이다", () => {
   test("Requirement Startability 43/43", () => {
     // Understanding the sentence. Says nothing about whether anything may run.
-    assert.deepEqual(score.requirementStartability, { hit: 43, of: 43, value: 1 });
+    assert.deepEqual(score.requirementStartability, { hit: 44, of: 44, value: 1 });
   });
 
   test("Harness Executability 43/43", () => {
     // A different claim with its own denominator: every requirement covered by a
     // design rule, and nothing the audit could not close.
-    assert.deepEqual(score.harnessExecutability, { hit: 43, of: 43, value: 1 });
+    assert.deepEqual(score.harnessExecutability, { hit: 44, of: 44, value: 1 });
   });
 
   test("두 축을 교차하면 남는 사례가 없다", () => {

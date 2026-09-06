@@ -42,11 +42,31 @@ import type { FindingCode } from "./coverageAudit.ts";
  * of information, and one replaced by a zero is a lie with a decimal point.
  */
 
-/** The acts a requirement can ask for, including the two that forbid. */
+/** The acts a requirement can ask for, including the ones that forbid. */
 export type GoldAction =
   | ActionKind
   | "forbid_execute"
   | "forbid_modify"
+  /**
+   * A ban on what the answer may contain, which gates no tool.
+   *
+   * Kept apart from the two above rather than folded into `forbid_modify`,
+   * which is where it landed while this axis was a two-way branch. A gold set
+   * that cannot name the difference cannot score it, and the score it would
+   * have reported is that the runtime read a modify ban out of a sentence that
+   * said nothing about modifying anything.
+   */
+  | "forbid_output"
+  /**
+   * A ban on going out to the web.
+   *
+   * No case in either corpus carries one, so this axis is named and unmeasured
+   * — see `UNMEASURED`. It exists because the two-way branch this replaced sent
+   * it to `forbid_modify`, and a vocabulary that cannot say "web" would keep
+   * reporting a modify ban for a sentence about the internet the moment a case
+   * does carry one.
+   */
+  | "forbid_research"
   /** Read a named external source and report only what it said. */
   | "read_source";
 
@@ -192,6 +212,7 @@ export const UNMEASURED: readonly string[] = [
   "priority(must/should/may) — 정답 우선순위를 기록하지 않았다",
   "kind(functional/validation/…) — 정답 분류를 기록하지 않았다",
   "span 정확도 — 근거 구간의 포함만 확인하고, 최소 구간인지는 기록하지 않았다",
+  "forbid_research — 웹 금지를 담은 사례가 두 말뭉치 어디에도 없다",
   "모델 제안의 recall/precision — Gold 는 오프라인 추출기만 대상으로 한다",
   "Oracle coverage — 요구사항별 검증 규칙의 정답은 designRules 쪽에서 따로 센다",
   "다중 턴 요구사항 승계 — merge 후 남아야 하는 집합의 정답을 기록하지 않았다",
@@ -220,6 +241,14 @@ export interface ExtractedRequirement {
  * reading `t1-act-modify-1` for the word `modify` would make the measurement
  * depend on a naming convention rather than on behaviour.
  */
+/** One place the class-to-axis mapping lives, so a new class cannot be silent. */
+const GOLD_ACTION: Readonly<Record<string, GoldAction>> = {
+  execute: "forbid_execute",
+  modify: "forbid_modify",
+  research: "forbid_research",
+  output: "forbid_output",
+};
+
 export function readExtraction(input: { turnId: string; text: string }): ExtractedRequirement[] {
   const specs = runtimeRequirements(input);
   // Same order the requirements were pushed in, because both iterate the same
@@ -239,15 +268,27 @@ export function readExtraction(input: { turnId: string; text: string }): Extract
     };
     switch (spec.derivedBy) {
       case "runtime_prohibition": {
-        const klass = prohibitions[prohibitionAt];
-        prohibitionAt += 1;
+        // `spec.forbids` when the runtime recorded it, the parallel walk when
+        // it did not. The walk was the only reading, and it assumed every
+        // prohibition spec had a matching entry in `prohibitionsIn` — true
+        // while all of them named a tool, and silently false the moment one
+        // did not: the output constraint read `prohibitions[n]` past the end,
+        // got `undefined`, and was scored as a file-modify ban.
+        const klass = spec.forbids ?? prohibitions[prohibitionAt];
+        if (spec.forbids === undefined) prohibitionAt += 1;
         out.push({
           ...common,
-          action: klass === "execute" ? "forbid_execute" : "forbid_modify",
-          // A prohibition's target is the act class itself, which is not a
-          // sentence target. Recorded as none so it cannot match a positive
+          action: GOLD_ACTION[klass ?? "modify"] ?? "forbid_modify",
+          // An act prohibition's target is the act class itself, which is not
+          // a sentence target. Recorded as none so it cannot match a positive
           // requirement's target by accident.
-          target: null,
+          //
+          // An output constraint is the exception, for the reason above rather
+          // than against it: its target *is* a sentence target — the runtime
+          // cut "특정 벤더의 제품명" out of the user's words, and that phrase is
+          // the whole content of the constraint. Recording it as none would
+          // score the one axis that carries the meaning as absent.
+          target: klass === "output" ? (spec.target ?? null) : null,
         });
         break;
       }

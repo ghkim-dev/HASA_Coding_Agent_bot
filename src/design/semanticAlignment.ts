@@ -1,4 +1,6 @@
+import { outputProhibitionsIn } from "../agent/outputProhibitions.ts";
 import { prohibitionsIn } from "../agent/statedProhibitions.ts";
+import { NEGATED } from "./functionalExtract.ts";
 
 /**
  * Whether a proposed requirement says what its span says.
@@ -41,6 +43,15 @@ export interface Alignment {
 const KEEP = /유지|보존|그대로|keep|preserve|retain/;
 const REMOVE = /제거|삭제|없애|바꾸|변경|rename|remove|delete|replace/;
 const EXECUTE = /실행|돌리|구동|run\b|execute/;
+
+/**
+ * Putting something into the answer — the act an output prohibition forbids.
+ *
+ * The mirror of `EXECUTE` and `REMOVE`, and needed for the same reason: the
+ * reversal check has to ask whether the proposal is about the act the span
+ * forbade, or it fires on any proposal that merely quotes a prohibition.
+ */
+const INCLUDE = /넣|포함|기재|언급|노출|삽입|담|적는|쓴다|include|mention|list|cite/;
 const ANALYSE_ONLY = /분석만|설명만|보여주기만|읽기만|analy[sz]e only|only explain/;
 const PAST_FAILURE = /못했|실패했|안\s*됐|failed|couldn't/;
 /**
@@ -104,6 +115,39 @@ export function checkAlignment(input: {
         verdict: "reversed",
         code: "polarity_reversed",
         detail: "인용한 구절은 그 동작을 금지하는데 요구사항은 그것을 요구합니다.",
+      };
+    }
+  }
+
+  // The same reversal, for the prohibition that names no tool.
+  //
+  // `prohibitionsIn` is empty for "특정 벤더의 제품명은 결론에 넣지 말아 주세요",
+  // so the check above could not see it: a model was free to quote that
+  // sentence and file "특정 벤더의 제품명을 결론에 넣는다" as a `required`
+  // requirement, and this function answered `aligned`. The span was genuinely
+  // the user's words, which is exactly the hole a span check leaves and this
+  // function exists to close.
+  //
+  // Three conditions, all necessary. The subject has to appear — otherwise any
+  // proposal built on a caveated sentence is suspect. The proposal has to be
+  // about putting it in. And the proposal must not itself be negated, because
+  // "제품명은 결론에 넣지 않는다" repeats both the subject and the verb and is
+  // the correct reading rather than its reversal.
+  //
+  // The third condition asks about negation rather than about being an output
+  // prohibition, and the difference is not cosmetic: `outputProhibitionsIn`
+  // reads what a *user* writes (넣지 마), and a requirement is written in the
+  // declarative (넣지 않는다), which that reader deliberately does not treat as
+  // a ban. Asking the wrong question there marked the correct reading as its
+  // own reversal. `NEGATED` is the extractor's own, shared rather than copied
+  // so the two cannot drift.
+  if (input.polarity === "required" && INCLUDE.test(text) && !NEGATED.test(text)) {
+    for (const banned of outputProhibitionsIn(span)) {
+      if (!text.includes(banned.subject)) continue;
+      return {
+        verdict: "reversed",
+        code: "polarity_reversed",
+        detail: "인용한 구절은 그것을 결과물에 넣지 말라고 하는데 요구사항은 넣으라고 합니다.",
       };
     }
   }

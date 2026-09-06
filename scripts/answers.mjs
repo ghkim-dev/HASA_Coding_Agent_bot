@@ -99,7 +99,7 @@ const EXPECTED_UNCHECKED = new Map([
     "위와 같다 — 수량 구가 남고 머리 명사가 잘리는 자리이고, 잘린 값이 못 박혀 있다.",
   ],
   [
-    'src/design/goldCases.ts:517 :: relation = "new_task"',
+    'src/design/goldCases.ts:551 :: relation = "new_task"',
     "past-failure-retry 의 두 번째 턴이다. `RELATION_AS_BUILT` 가 이 턴을 `refine` 으로 " +
       "못 박아 두었으므로 테스트는 정답이 아니라 못을 주장하고, 그래서 정답 쪽을 바꿔도 " +
       "실패하지 않는다. 알려진 어긋남을 못 박으면 그 자리의 정답이 검사되지 않게 되는 것은 " +

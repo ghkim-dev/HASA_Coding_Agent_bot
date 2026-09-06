@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { runtimeRequirements } from "./requirementSpec.ts";
 import { scenariosFor } from "./scenarioBlueprint.ts";
+import { checkAlignment } from "./semanticAlignment.ts";
 
 /**
  * 결과물에 대한 금지가 배선 끝까지 가는지.
@@ -89,6 +90,62 @@ describe("검증 시나리오까지 간다", () => {
       scenarios().map((s) => s.oracleCoverage),
       [["forbidden_output_absent"], ["not_over_refused"]],
     );
+  });
+});
+
+/**
+ * 모델이 금지 문장을 인용해 그 반대를 제안하는 경우.
+ *
+ * 근거 검사는 "그 말이 사용자의 것인가" 만 세운다. 인용은 진짜고 뜻만 뒤집힌
+ * 제안이 지나가는 구멍이 남는데, 그것을 막는 것이 `checkAlignment` 다. 실행
+ * 금지에 대해서는 원래 막고 있었고, 결과물 금지에 대해서는 `prohibitionsIn`
+ * 이 빈 집합을 돌려주기 때문에 열려 있었다.
+ */
+describe("금지를 인용해 그 반대를 제안하면 막힌다", () => {
+  const SPAN = "특정 벤더의 제품명은 결론에 넣지 말아 주세요.";
+
+  const verdictOf = (proposalText: string, polarity: "required" | "forbidden" = "required") =>
+    checkAlignment({ spanText: SPAN, proposalText, polarity, priority: "must" });
+
+  test("넣지 말라는 구절에서 넣으라는 요구사항이 나오면 뒤집힘이다", () => {
+    const a = verdictOf("특정 벤더의 제품명을 결론에 넣는다");
+    assert.equal(a.verdict, "reversed");
+    assert.equal(a.code, "polarity_reversed");
+  });
+
+  /**
+   * 세 조건은 각각 필요하다. `polarity: "required"` 로 넣는 이유는, forbidden
+   * 으로 넣으면 첫 조건에서 걸러져 **검사하려는 분기에 들어가지도 않기**
+   * 때문이다. 처음 쓴 세 개가 전부 그랬고, 변이 세 개가 조용히 살아남았다.
+   */
+  test("제안 자체가 금지면 뒤집힘이 아니다", () => {
+    // 주어도 겹치고 동사도 겹치지만 뜻은 같다. 모델이 polarity 를 잘못 붙여
+    // 보내는 것은 흔한 일이고, 그때 판단해야 하는 것은 라벨이 아니라 문장이다.
+    assert.equal(verdictOf("특정 벤더의 제품명은 결론에 넣지 않는다").verdict, "aligned");
+  });
+
+  test("주어가 다르면 뒤집힘이 아니다", () => {
+    // 넣는 동사가 있어도 금지된 것과 다른 것을 넣는 요구사항이다.
+    assert.equal(verdictOf("경쟁사 수를 표에 넣는다").verdict, "aligned");
+  });
+
+  test("넣는 동사가 아니면 뒤집힘이 아니다", () => {
+    // 주어가 겹쳐도 결과물에 넣으라는 말이 아니다.
+    assert.equal(verdictOf("특정 벤더의 제품명을 조사한다").verdict, "aligned");
+  });
+
+  test("금지와 무관한 요구사항은 건드리지 않는다", () => {
+    assert.equal(verdictOf("후보 솔루션을 비교한다").verdict, "aligned");
+  });
+
+  test("금지가 아닌 구절의 '넣는다' 는 그대로 통과한다", () => {
+    const a = checkAlignment({
+      spanText: "자막을 넣어줘.",
+      proposalText: "자막을 넣는다",
+      polarity: "required",
+      priority: "must",
+    });
+    assert.equal(a.verdict, "aligned");
   });
 });
 

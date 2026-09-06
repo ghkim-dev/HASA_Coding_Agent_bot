@@ -3,7 +3,7 @@ import type { GoldCase } from "./goldRequirements.ts";
 /**
  * The answers, written from the Korean and not from the output.
  *
- * Forty-three cases, each one a sentence a person actually types at a coding
+ * Forty-four cases, each one a sentence a person actually types at a coding
  * agent. What every case records is in `goldRequirements.ts`; what matters about
  * *this* file is the discipline: when the extractor disagrees with a case, the
  * case is the thing that is right until somebody argues otherwise in the
@@ -11,7 +11,7 @@ import type { GoldCase } from "./goldRequirements.ts";
  *
  * ## This is the development set, and it is frozen
  *
- * These 43 cases have been read by the implementation, so they can no longer
+ * These 44 cases have been read by the implementation, so they can no longer
  * measure generalisation — every fix since they were written had them in view.
  * They stay as the regression set, and `holdoutCases.ts` is where an unseen
  * measurement now comes from. Its answers were written before any of the code
@@ -41,6 +41,15 @@ import type { GoldCase } from "./goldRequirements.ts";
  *   5. `negation-jin-form` — a requirement was **added** (2026-08-18), same cause.
  *      "무엇이 문제인지만 알려줘" is a request; its target is `null` because the
  *      sentence names none, so the plan is right to ask which one.
+ *   6. `forbid-in-conclusion` — a **case** was added (2026-09-06), not an answer
+ *      changed. Written after the reader that handles it, so it measures
+ *      regression rather than generalisation — which is what this whole set is
+ *      for now, and `holdoutCases.ts` remains the unseen measurement.
+ *
+ *      It is here because five separate mutations to that reader and its
+ *      scoring survived the entire suite. No case in either corpus banned
+ *      anything from the *answer*, so the axis could be deleted outright and
+ *      every number this file reports would have stayed the same.
  *
  * No answer has been changed in the other direction — to agree with output that
  * disagreed with the Korean.
@@ -147,6 +156,31 @@ export const GOLD_CASES: readonly GoldCase[] = [
         requirements: [
           { action: "forbid_execute", polarity: "forbidden", target: null, quote: "실행하지 말고" },
           { action: "inspect", polarity: "required", target: "코드", quote: "코드만 보여줘" },
+        ],
+      },
+    ],
+    questions: { expected: [], max: 2 },
+    startable: true,
+    executable: true,
+  },
+  {
+    id: "forbid-in-conclusion",
+    category: "prohibition",
+    why: "결과물에 대한 금지. 어떤 도구도 막지 않고, 금지되는 것이 문장마다 달라 부류 하나로 접히지 않는다.",
+    turns: [
+      {
+        text: "후보 솔루션을 비교해 주세요. 다만 특정 벤더의 제품명은 결론에 넣지 말아 주세요.",
+        relation: "new_task",
+        requirements: [
+          {
+            action: "forbid_output",
+            polarity: "forbidden",
+            // 행위 금지와 달리 대상이 있다. 금지되는 것이 바로 이 구절이고,
+            // 이것을 null 로 적으면 이 사례가 재는 것이 없어진다.
+            target: "특정 벤더의 제품명",
+            quote: "특정 벤더의 제품명은 결론에 넣지 말아 주세요",
+          },
+          { action: "inspect", polarity: "required", target: "후보 솔루션", quote: "후보 솔루션을 비교해 주세요" },
         ],
       },
     ],

@@ -287,7 +287,7 @@ const VERBS: ReadonlyArray<VerbEntry> = [
  * 코드를 보여달라는 말이야" produced "요청한 명령을 실행한다" — the correction
  * turned into the very act it was issued against.
  */
-const NEGATED =
+export const NEGATED =
   /(?:지|진)(?:는|도|를|은)?\s*(?:마|말|않|못|안)|(?:면|서는)\s*안|(?:라|다|자|란)는?\s*(?:게|것이|건|말이)\s*아니/;
 
 /** How an act with no stated target is written down. The target stays open. */

@@ -163,8 +163,13 @@ const LOCATIVE_TAIL = /\s*([\w가-힣]+)에(?:서|는|도|만)?\s*$/;
  * Only stripped when something is left over, because "결론에 넣지 마세요" with
  * no subject at all is a sentence this module should decline rather than
  * answer with an empty string.
+ *
+ * Same character class as the tail, so "DB에 이 값 넣지 마" is read the same way
+ * whichever side the place is written on. A Latin place is not a deliverable,
+ * so what this actually buys is that the caller rejects the sentence rather
+ * than reading "DB에 이 값" as the forbidden phrase.
  */
-const LOCATIVE_HEAD = /^\s*([가-힣]+)에(?:는|도|만)?\s+/;
+const LOCATIVE_HEAD = /^\s*([\w가-힣]+)에(?:서|는|도|만)?\s+/;
 
 /** The subject marker, taken at its last occurrence before the verb. */
 const SUBJECT_MARKER = /(?:은|는|을|를|도)(?=\s|$)/g;
@@ -201,8 +206,9 @@ function clauseEnd(text: string, index: number): number {
  * What the clause says may not appear.
  *
  * The last subject marker before the verb, because Korean puts the topic first
- * and any earlier marker belongs to a different phrase: in "보고서는 짧게, 벤더
- * 이름은 빼고" the second marker is the one the removal attaches to.
+ * and any earlier marker belongs to a different phrase: in "분량은 짧게 하고
+ * 벤더 이름은 결론에 넣지 마" the second marker is the one the ban attaches to,
+ * and taking the first names the length of the report as the forbidden thing.
  */
 function subjectIn(clause: string): { subject: string; place: string | null } | null {
   // The clause ends where the verb begins, so a locative that qualifies the

@@ -43,6 +43,9 @@ pnpm build:extension
 
 VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA: Coding Agent 열기** → API Key 입력.
 
+키도 VS Code도 없이 30초 만에 확인하려면 [docs/verify-it-yourself.md](docs/verify-it-yourself.md) —
+요청 한 줄을 넣고 무엇을 읽어냈는지 보는 것부터, 여기 적힌 주장을 직접 다시 재는 것까지.
+
 기본값은 안전한 쪽이다.
 
 | | Safe (기본) | Balanced | Auto |
@@ -64,7 +67,7 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 
 | 말뭉치 | 크기 | 성격 |
 |---|---|---|
-| Gold | 43개 사례 | 개발셋. 정답을 먼저 쓰고 나중에 돌렸다 |
+| Gold | 44개 사례 | 개발셋. 정답을 먼저 쓰고 나중에 돌렸다 (44번째만 예외 — 이력에 적어 두었다) |
 | Holdout | 33개 사례, sha256 고정 | 구현이 한 번도 맞춰본 적 없다 |
 | 평가기 시나리오 | 20개 대화 / 31턴 | 키워드 정답이 손으로 붙어 있다 |
 | 생성형 미디어 (한국어) | 31문장 / 요구사항 33 | 세 가지 주제 + 적대적 7문장 |
