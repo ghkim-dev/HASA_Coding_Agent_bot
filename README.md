@@ -97,7 +97,7 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 | 적어 둔 정답이 실제로 검사되는지 | **961/969**, 예상 밖 0, 낡은 면제 0 | `pnpm design:answers` |
 | 치환 문자열이 코드와 어긋나지 않았는지 | 313/313 | `pnpm design:anchors` |
 | 정규식이 자기 이스케이프를 먹지 않았는지 | 소스 전체 | `sourceHygiene.test.ts` |
-| 시험이 정말 무언가를 검사하는지 | 블록 **3692개** 중 단언 미실행 17개(전부 분류됨) | `pnpm audit:assertions` |
+| 시험이 정말 무언가를 검사하는지 | 블록 **3567개** 중 단언 미실행 17개(전부 분류됨) | `pnpm audit:assertions` |
 | 연산자를 아무도 지키지 않는 자리 | 자동 생성 변이 전수 | `pnpm audit:operators` |
 
 아직 재지 않은 것은 재지 않았다고 말한다 — `goldRequirements.ts`의 `UNMEASURED`가 그 목록이고, 0으로 채우지 않는다.
