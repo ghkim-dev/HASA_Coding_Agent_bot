@@ -14,6 +14,7 @@ import {
   type PermissionEvidence,
 } from "./modelPermission.ts";
 import {
+  SYSTEM,
   chooseProposerModel,
   createModelProposer,
   demoteRemembered,
@@ -681,5 +682,40 @@ describe("기억이 제안자 선택을 움직인다", () => {
       "덜나쁜모델",
       "나쁜모델",
     ]);
+  });
+});
+
+/**
+ * 제안자가 근거를 어떻게 받는가.
+ *
+ * 네 모델에 열 사례씩 물어 잰 결과(`scripts/quoteVsOffset.mjs`)로 프롬프트와
+ * 파서를 함께 바꿨다. 좌표만 받을 때 `pointed` 10/64, 인용을 받을 때 33/64,
+ * 둘 다 받을 때 32/64 였고 — 두 모델은 좌표를 **0%** 맞혔다. 그런데 한 모델은
+ * 인용만 요구하면 빈 배열을 돌려주므로 둘 다 요구한다.
+ *
+ * 아래 둘은 그 결정이 배선에서 살아 있는지를 잰다. 파서 쪽 단위 테스트는
+ * `parseProposals` 를 직접 부르므로, 제안자가 **원문을 넘기는지** 는 여기서만
+ * 확인된다 — 안 넘기면 인용은 위치를 못 찾고 옛 동작으로 조용히 돌아간다.
+ */
+describe("제안자는 인용으로 지목한 근거를 쓴다", () => {
+  const now = (): number => NOW;
+  const TEXT = "로그인 오류를 고쳐주고 테스트도 돌려주세요.";
+
+  test("프롬프트가 인용을 요구한다", () => {
+    assert.match(SYSTEM, /quote/, "인용 필드를 요구하지 않습니다");
+    assert.match(SYSTEM, /그대로 베낀/, "무엇을 넣으라는 것인지 말해야 합니다");
+    // 좌표도 함께 요구해야 한다. 인용만 요구하면 그것을 못 하는 모델이 있다.
+    assert.match(SYSTEM, /start/, "좌표를 함께 요구하지 않습니다");
+  });
+
+  test("좌표 없는 인용만 와도 제안이 선다", async () => {
+    const provider = fakeProvider('[{"text":"로그인 오류를 고친다","quote":"로그인 오류를 고쳐주고"}]');
+    const propose = await createModelProposer({ provider, permission: EVIDENCE, now });
+    const out = await propose({ turnId: "t1", text: TEXT });
+    assert.equal(out.proposals.length, 1, `읽지 못했습니다: ${JSON.stringify(out.parse.outcome)}`);
+    assert.deepEqual(
+      { s: out.proposals[0]?.span.start, e: out.proposals[0]?.span.end },
+      { s: 0, e: TEXT.indexOf("로그인 오류를 고쳐주고") + "로그인 오류를 고쳐주고".length },
+    );
   });
 });

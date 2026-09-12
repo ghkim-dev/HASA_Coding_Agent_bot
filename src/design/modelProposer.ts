@@ -45,6 +45,35 @@ export const MAX_CALLS = 2;
  * write down a fact it did not know.
  */
 export const MAX_OUTPUT_TOKENS = 800;
+
+/**
+ * 이 프롬프트가 근거를 인용으로 받는 이유, 그리고 한 번 더 손대 보고 되돌린 것.
+ *
+ * 예전 지시는 "위치만 지목하고 글자를 옮겨 적지 마십시오" 였다. 네 모델에 열
+ * 사례씩 물어 재어 보니(`scripts/quoteVsOffset.mjs`) 그 형식이 모든 모델에서
+ * 최악이었다 — 합계 `pointed` 10/64. 인용을 받으면 33/64, 둘 다 받으면 32/64.
+ * `ax-3.1` 과 `qwen2.5-coder-32b` 는 좌표를 **0%** 맞혔고, 인용으로는 56%·69%
+ * 였다. 글자를 못 세는 것이지 과제를 못 하는 것이 아니다.
+ *
+ * 그런데 `exaone-4.0-32b` 은 인용만 요구하면 빈 배열을 돌려준다. 그래서 둘 다
+ * 요구하고 `parseProposals` 가 확인된 쪽을 쓴다 — 어느 모델도 예전보다 나빠지지
+ * 않는 유일한 배치다. 배송 프롬프트로 다시 재면 `ax-3.1` 0% → 44%.
+ *
+ * ## `text` 에 베끼지 말라는 줄은 뺐다
+ *
+ * 인용을 요구하자 `transcribed`(요구사항 문장이 근거를 그대로 베낀 비율)가
+ * 80%·75% 로 올랐다. 그래서 "원문을 그대로 옮기지 마십시오" 를 한 줄 더 넣고
+ * 다시 쟀더니 그 축은 0% 로 떨어졌지만 대가가 컸다:
+ *
+ *     읽음   30/64 → 19/64
+ *     지목   30/64 → 31/64
+ *     지어냄  10·40·14·25% → 33·63·50·60%
+ *
+ * 베끼지 말라고 하면 모델이 느슨하게 바꿔 말하고, 그것은 요구사항을 못 찾은
+ * 것과 지어낸 것으로 동시에 나타난다. `transcribed` 는 보고되는 축이고 어떤
+ * 관문도 그것으로 제안을 막지 않으므로, 값을 치를 이유가 없다. 넣어 봤고
+ * 되돌렸다는 것을 여기 남긴다 — 다음 사람이 같은 줄을 다시 넣지 않도록.
+ */
 const TIMEOUT_MS = 30_000;
 
 /**
@@ -56,11 +85,13 @@ const TIMEOUT_MS = 30_000;
  */
 export const SYSTEM = [
   "당신은 사용자의 요청에서 요구사항 후보를 찾아내는 보조자입니다.",
-  "요청 원문에서 근거가 되는 구간의 위치만 지목하고, 그 구간의 글자를 옮겨 적지 마십시오.",
+  "각 요구사항의 근거가 되는 구간을 요청 원문에서 글자 그대로 베껴 `quote` 에 넣고,",
+  "그 구간의 위치도 함께 적으십시오.",
   "",
   "JSON 배열 하나만 출력하십시오. 다른 문장은 쓰지 마십시오.",
   "각 항목은 다음 필드만 가질 수 있습니다.",
   '  text      요구사항을 한 문장으로',
+  '  quote     근거가 되는 구간을 요청 원문에서 그대로 베낀 것',
   '  start     요청 원문에서 근거 구간의 시작 위치 (0부터)',
   '  end       근거 구간의 끝 위치 (끝 글자 다음)',
   '  kind      functional | safety | compatibility | quality | validation | ux | security | constraint',
@@ -357,12 +388,12 @@ export async function createModelProposer(options: ProposerOptions): Promise<Pro
         throw err;
       }
       last = response.text;
-      const parse = parseProposals(last, turnId);
+      const parse = parseProposals(last, turnId, text);
       if (parse.proposals.length > 0) return { proposals: parse.proposals, modelId, calls, parse };
       // An empty answer is a legitimate outcome — some turns state no new
       // requirement — so one retry and then stop rather than insisting.
     }
-    const parse = parseProposals(last, turnId);
+    const parse = parseProposals(last, turnId, text);
     return { proposals: parse.proposals, modelId, calls, parse };
   };
 }

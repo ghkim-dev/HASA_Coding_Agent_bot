@@ -190,3 +190,79 @@ describe("preview 는 malformed 와 empty 를 다르게 집계한다", () => {
     assert.equal(new Set(outcomes).size, answers.length, "두 사유가 한 결과로 뭉쳤습니다");
   });
 });
+
+/**
+ * 근거를 인용으로 지목하는 길.
+ *
+ * 예전에는 `start`/`end` 가 없으면 그 항목을 버렸다. 네 모델에 열 사례씩 물어
+ * 재어 보니(`scripts/quoteVsOffset.mjs`) 좌표만 받을 때 `pointed` 가 10/64,
+ * 인용을 받을 때 33/64 였고, 두 모델(`ax-3.1`·`qwen2.5-coder-32b`)은 좌표를
+ * **0%** 맞혔다 — 과제를 못 하는 것이 아니라 글자를 못 세는 것이다.
+ *
+ * 그런데 `exaone-4.0-32b` 은 인용만 요구하면 빈 배열을 돌려준다. 그래서 프롬프트는
+ * 둘 다 요구하고, 파서는 **확인된 쪽**을 쓴다. 아래가 그 규칙 전부다.
+ */
+describe("인용으로 지목한 근거", () => {
+  const TEXT = "로그인 오류를 고쳐주고 테스트도 돌려주세요.";
+
+  test("좌표가 없어도 인용이 원문에 있으면 읽는다", () => {
+    const r = parseProposals('[{"text":"로그인 오류를 고친다","quote":"로그인 오류를 고쳐주고"}]', T, TEXT);
+    assert.equal(r.outcome, "parsed_candidate");
+    assert.equal(r.proposals.length, 1);
+    assert.deepEqual(
+      { start: r.proposals[0]?.span.start, end: r.proposals[0]?.span.end },
+      { start: 0, end: 12 },
+    );
+  });
+
+  test("좌표가 틀려도 인용이 이긴다", () => {
+    // 확인된 것과 주장된 것 중 확인된 쪽을 쓴다. 좌표는 모델이 센 숫자이고
+    // 인용은 원문에 있는지 우리가 본 것이다.
+    const r = parseProposals(
+      '[{"text":"테스트를 돌린다","quote":"테스트도 돌려주세요","start":0,"end":3}]',
+      T,
+      TEXT,
+    );
+    assert.equal(r.proposals[0]?.span.start, TEXT.indexOf("테스트도 돌려주세요"));
+  });
+
+  test("원문에 없는 인용은 좌표로 물러난다", () => {
+    // 지어낸 인용이다. 그 자리에서 버리지 않고 모델이 준 좌표를 쓰는 이유는,
+    // 좌표 쪽은 `checkSpan` 이 다시 보기 때문이다 — 검사가 두 번 있다.
+    const r = parseProposals(
+      '[{"text":"배포한다","quote":"배포해 주세요","start":0,"end":6}]',
+      T,
+      TEXT,
+    );
+    assert.equal(r.outcome, "parsed_candidate");
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: 6 });
+  });
+
+  test("두 번 나오는 인용도 좌표로 물러난다", () => {
+    // 어디를 가리키는지 모른다. 첫 번째를 고르면 우리가 고른 것이지 모델이
+    // 가리킨 것이 아니다.
+    // 좌표는 인용의 **첫 등장과 다른 자리**로 둔다. 같게 두면 두 번 나오는 인용을
+    // 그대로 쓰는 변이가 물지 않는다 — 실제로 물지 않아서 이 줄이 생겼다.
+    const twice = "로그를 고쳐주고 로그를 고쳐주세요.";
+    const r = parseProposals('[{"text":"로그를 고친다","quote":"로그를 고쳐","start":9,"end":15}]', T, twice);
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 9, e: 15 });
+  });
+
+  test("원문을 주지 않으면 인용은 위치를 정하지 못한다", () => {
+    // 옛 호출자들이 그대로 도는 자리. 인용은 기록으로 남고 좌표가 자리를 정한다.
+    const r = parseProposals('[{"text":"고친다","quote":"로그인 오류를 고쳐주고","start":0,"end":6}]', T);
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: 6 });
+    assert.equal(r.proposals[0]?.quote, "로그인 오류를 고쳐주고");
+  });
+
+  test("인용도 좌표도 쓸 수 없으면 항목이 아니다", () => {
+    const r = parseProposals('[{"text":"무언가","quote":"원문에 없는 말"}]', T, TEXT);
+    assert.equal(r.outcome, "malformed_item");
+    assert.equal(r.proposals.length, 0);
+  });
+
+  test("인용이 길이 0이면 좌표로 물러난다", () => {
+    const r = parseProposals('[{"text":"고친다","quote":"   ","start":0,"end":6}]', T, TEXT);
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: 6 });
+  });
+});

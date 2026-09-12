@@ -208,7 +208,10 @@ export function scoreProposerCase(input: {
   raw: string;
 }): CaseOutcome {
   const { testCase, raw } = input;
-  const parse = parseProposals(raw, testCase.turnId);
+  // 원문을 함께 넘긴다. 런타임이 그렇게 부르기 때문이다 — 여기서만 빼면 이
+  // 측정은 제품이 하지 않는 일을 재게 되고, 인용으로 지목한 근거가 전부
+  // 버려진 것처럼 보인다.
+  const parse = parseProposals(raw, testCase.turnId, testCase.text);
 
   // Coordinates are checked by the runtime that owns them. Re-deciding here
   // what a valid span is would be a second definition, free to drift from the

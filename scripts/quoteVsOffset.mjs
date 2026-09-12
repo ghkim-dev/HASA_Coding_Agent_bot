@@ -53,6 +53,24 @@ const SYSTEM_QUOTE = SYSTEM.replace(
     "  quote     근거가 되는 구간을 요청 원문에서 그대로 베낀 것",
   );
 
+/**
+ * C팔 — 좌표와 인용을 **둘 다** 요구한다.
+ *
+ * A/B 는 한 모델(exaone)이 반대로 움직였다. 인용을 요구하자 빈 배열을 돌려주고,
+ * 좌표로는 19% 를 맞춘다. 나머지 셋은 정반대다. 형식을 하나로 고정하면 어느 쪽을
+ * 골라도 누군가는 손해이므로, 둘 다 받아 두고 **런타임이 인용을 우선**하되 인용이
+ * 없거나 못 찾으면 좌표로 떨어지는 쪽을 잰다.
+ *
+ * 이것이 A·B 어느 쪽보다도 낫다면 모델별 형식 선택 같은 기계는 필요 없다.
+ */
+const SYSTEM_BOTH = SYSTEM.replace(
+  "요청 원문에서 근거가 되는 구간의 위치만 지목하고, 그 구간의 글자를 옮겨 적지 마십시오.",
+  "각 요구사항의 근거가 되는 구간을 원문에서 글자 그대로 베껴 `quote` 에 넣고, 그 구간의 위치도 함께 적으십시오.",
+).replace(
+  "  end       근거 구간의 끝 위치 (끝 글자 다음)",
+  "  end       근거 구간의 끝 위치 (끝 글자 다음)\n  quote     근거가 되는 구간을 요청 원문에서 그대로 베낀 것",
+);
+
 async function askOnce(modelId, system, text) {
   return fetch(`${BASE}/chat/completions`, {
     method: "POST",
@@ -97,7 +115,7 @@ async function ask(modelId, system, text) {
  * 좌표를 비우는 쪽으로 처리한다 — A팔의 틀린 좌표와 같은 자리에서 떨어지게
  * 하려는 것이고, 이쪽만 살려 주면 비교가 아니다.
  */
-function quotesToOffsets(raw, text) {
+function quotesToOffsets(raw, text, keepOffsets = false) {
   let parsed;
   try {
     const m = /\[[\s\S]*\]/.exec(raw);
@@ -113,18 +131,21 @@ function quotesToOffsets(raw, text) {
     if (typeof p !== "object" || p === null) return p;
     const quote = typeof p.quote === "string" ? p.quote.trim() : null;
     const { quote: _drop, ...rest } = p;
+    // `keepOffsets` 는 C팔이다. 인용이 자리를 못 잡으면 모델이 준 좌표가 남고,
+    // 그것이 이 팔의 요점이다 — 둘 중 되는 쪽을 쓴다.
+    const fallback = keepOffsets ? rest : { ...rest, start: undefined, end: undefined };
     if (quote === null || quote.length === 0) {
       missing += 1;
-      return rest;
+      return fallback;
     }
     const first = text.indexOf(quote);
     if (first === -1) {
       missing += 1;
-      return rest;
+      return fallback;
     }
     if (text.indexOf(quote, first + 1) !== -1) {
       ambiguous += 1;
-      return rest;
+      return fallback;
     }
     located += 1;
     return { ...rest, start: first, end: first + quote.length };
@@ -132,7 +153,7 @@ function quotesToOffsets(raw, text) {
   return { raw: JSON.stringify(out), located, missing, ambiguous };
 }
 
-async function arm(modelId, system, convert) {
+async function arm(modelId, system, convert, keepOffsets = false) {
   const outcomes = [];
   let unanswered = 0;
   let truncated = 0;
@@ -146,7 +167,7 @@ async function arm(modelId, system, convert) {
     }
     let raw = answer.raw;
     if (convert) {
-      const c = quotesToOffsets(answer.raw, testCase.text);
+      const c = quotesToOffsets(answer.raw, testCase.text, keepOffsets);
       raw = c.raw;
       located.ok += c.located;
       located.missing += c.missing;
@@ -184,17 +205,18 @@ console.log(`모델 ${ids.length}개 · 사례 ${PROPOSER_SWEEP.length} · 원�
 const pct = (r) => (r.value === null ? "  —  " : `${String(Math.round(r.value * 100)).padStart(3)}%`);
 const rows = [];
 console.log(
-  "모델".padEnd(24) + " │ " + "A 좌표 직접".padEnd(26) + " │ " + "B 인용 후 런타임이 찾음",
+  "모델".padEnd(22) + " │ " + "A 좌표만".padEnd(23) + " │ " + "B 인용만".padEnd(23) + " │ C 둘 다",
 );
-console.log("".padEnd(24) + " │ shape named point inv │ shape named point inv  찾음/없음/모호");
-console.log("─".repeat(96));
+console.log("".padEnd(22) + " │ shape named point inv │ shape named point inv │ shape named point inv  찾음/없음/모호");
+console.log("─".repeat(120));
 for (const id of ids) {
   const a = await arm(id, SYSTEM, false);
   const b = await arm(id, SYSTEM_QUOTE, true);
-  rows.push({ modelId: id, a: a.score, b: b.score, located: b.located });
+  const c = await arm(id, SYSTEM_BOTH, true, true);
+  rows.push({ modelId: id, a: a.score, b: b.score, c: c.score, located: b.located, locatedC: c.located });
   const cell = (s) => `${pct(s.shape)} ${pct(s.named)} ${pct(s.pointed)} ${pct(s.invented)}`;
   console.log(
-    `${id.padEnd(24)} │ ${cell(a.score)} │ ${cell(b.score)}  ${b.located.ok}/${b.located.missing}/${b.located.ambiguous}`,
+    `${id.padEnd(22)} │ ${cell(a.score)} │ ${cell(b.score)} │ ${cell(c.score)}  ${c.located.ok}/${c.located.missing}/${c.located.ambiguous}`,
   );
 }
 
@@ -203,6 +225,9 @@ writeFileSync(".probe/quoteVsOffset.json", JSON.stringify({ takenAt: Date.now(),
 
 const sum = (pick) => rows.reduce((acc, r) => ({ hit: acc.hit + pick(r).hit, of: acc.of + pick(r).of }), { hit: 0, of: 0 });
 const show = (label, x) => `${label} ${x.hit}/${x.of} (${x.of === 0 ? "—" : Math.round((x.hit / x.of) * 100) + "%"})`;
-console.log("─".repeat(96));
-console.log(`합계  A ${show("pointed", sum((r) => r.a.pointed))} · ${show("named", sum((r) => r.a.named))}`);
-console.log(`      B ${show("pointed", sum((r) => r.b.pointed))} · ${show("named", sum((r) => r.b.named))}`);
+console.log("─".repeat(120));
+for (const [label, pick] of [["A", (r) => r.a], ["B", (r) => r.b], ["C", (r) => r.c]]) {
+  console.log(
+    `합계 ${label}  ${show("pointed", sum((r) => pick(r).pointed))} · ${show("named", sum((r) => pick(r).named))} · ${show("shape", sum((r) => pick(r).shape))}`,
+  );
+}

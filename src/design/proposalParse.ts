@@ -67,13 +67,58 @@ function tally(items: readonly ParseOutcome[]): ParseOutcome {
 }
 
 /**
+ * Where a quote sits in the turn, or nowhere this can use.
+ *
+ * Null for three different situations that all mean the same thing here — the
+ * quote does not identify one place in the text: it is absent (the model made
+ * it up), it appears twice (it names two places), or there is no text to look
+ * in. The caller falls back to the coordinates the model gave.
+ *
+ * Exactly the check `buildProposerCase` runs when a case is written, which is
+ * the point: a quote is safe to trust *because* it can be verified, and the
+ * verification already existed.
+ */
+function locate(quote: string, text: string | undefined): { start: number; end: number } | null {
+  if (text === undefined || quote.length === 0) return null;
+  const first = text.indexOf(quote);
+  if (first === -1) return null;
+  if (text.indexOf(quote, first + 1) !== -1) return null;
+  return { start: first, end: first + quote.length };
+}
+
+/**
  * Reads an answer without losing why it failed.
  *
  * `forbidden_field` items are still emitted as proposals, deliberately. The
  * refusal has to be *recorded* by the checker rather than avoided here — a
  * boundary that quietly drops the attempt is one nobody can audit.
+ *
+ * ## Why `text` is here
+ *
+ * So a model can point at its evidence by **quoting** it instead of counting
+ * characters to it. Measured across four models on this gateway, ten cases
+ * each, `scripts/quoteVsOffset.mjs`:
+ *
+ *     근거를 어떻게 지목하는가   pointed
+ *     좌표만 (예전)             10/64
+ *     인용만                    33/64
+ *     둘 다, 인용 우선           32/64
+ *
+ * Two of the four — `ax-3.1` and `qwen2.5-coder-32b` — score **zero** on
+ * coordinates and 56%/69% on quotes. They are not bad at the task; they cannot
+ * count characters. And `ax-3.1` is what the designer picks by catalogue order.
+ *
+ * A third read the other way: `exaone-4.0-32b` returns empty arrays when asked
+ * for quotes only. So neither format is right for everyone, and the shipped
+ * prompt asks for both. This function prefers the quote when it locates one and
+ * keeps the model's coordinates when it does not, which is the only arrangement
+ * where no model does worse than it did before.
+ *
+ * `text` stays optional because two callers — the fixtures and the sweep — have
+ * always passed the raw answer alone, and a required parameter would make them
+ * pass something they do not have.
  */
-export function parseProposals(raw: string, turnId: string): ParseResult {
+export function parseProposals(raw: string, turnId: string, text?: string): ParseResult {
   const none = (outcome: ParseOutcome): ParseResult => ({
     outcome,
     proposals: [],
@@ -123,17 +168,28 @@ export function parseProposals(raw: string, turnId: string): ParseResult {
     const row = item as Record<string, unknown>;
     const reaching = FORBIDDEN_FIELDS.filter((f) => row[f] !== undefined);
 
-    if (typeof row["text"] !== "string" || typeof row["start"] !== "number" || typeof row["end"] !== "number") {
+    const quote = typeof row["quote"] === "string" ? row["quote"].trim() : null;
+    const located = quote === null ? null : locate(quote, text);
+    const hasOffsets = typeof row["start"] === "number" && typeof row["end"] === "number";
+
+    // A quote that landed is enough on its own. A model that quotes well and
+    // counts badly used to be rejected here for the counting.
+    if (typeof row["text"] !== "string" || (located === null && !hasOffsets)) {
       itemOutcomes.push(reaching.length > 0 ? "forbidden_field" : "malformed_item");
       if (reaching.length > 0) forbiddenFieldItems += 1;
       continue;
     }
 
-    const span: SourceSpan = { turnId, start: row["start"], end: row["end"] };
+    // The quote wins when it landed. It is the one of the two that was checked
+    // against the text rather than asserted about it.
+    const span: SourceSpan =
+      located === null
+        ? { turnId, start: row["start"] as number, end: row["end"] as number }
+        : { turnId, start: located.start, end: located.end };
     proposals.push({
       text: row["text"],
       span,
-      ...(typeof row["quote"] === "string" ? { quote: row["quote"] } : {}),
+      ...(quote === null ? {} : { quote }),
       ...(typeof row["kind"] === "string" ? { kind: row["kind"] as never } : {}),
       ...(typeof row["priority"] === "string" ? { priority: row["priority"] as never } : {}),
       ...(typeof row["polarity"] === "string" ? { polarity: row["polarity"] as never } : {}),
