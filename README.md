@@ -46,6 +46,9 @@ VS Code에서 이 폴더를 열고 `F5`. 새 창에서 `Ctrl+Shift+P` → **HASA
 키도 VS Code도 없이 30초 만에 확인하려면 [docs/verify-it-yourself.md](docs/verify-it-yourself.md) —
 요청 한 줄을 넣고 무엇을 읽어냈는지 보는 것부터, 여기 적힌 주장을 직접 다시 재는 것까지.
 
+무엇이 있고 그중 무엇이 실제로 도는지는 [docs/handoff-2026-09-12.md](docs/handoff-2026-09-12.md) —
+배선된 것과 함수만 있는 것을 갈라 적은 재고 조사다.
+
 모델을 바꾸지 않고 추론 성능을 올리는 방향은 [docs/inference-performance.md](docs/inference-performance.md).
 근거를 좌표 대신 인용으로도 받게 하자 좌표 정확도가 **12/64 → 36/64** 로 올랐다(한 게이트웨이의
 모델 4개 · 사례 10개 · 실행 1회). 같은 실험을 세 번 돌렸고 실행마다 값이 다르므로, 그 문서는
