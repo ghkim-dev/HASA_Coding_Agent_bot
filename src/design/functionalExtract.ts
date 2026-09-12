@@ -121,8 +121,12 @@ const verb = (stem: string, tail: string, action: ActionKind, render?: string): 
 };
 
 const VERBS: ReadonlyArray<VerbEntry> = [
-  verb("재실행", "(?:하|해|시켜)", "execute"),
-  verb("실행", "(?:하|해|시켜)", "execute"),
+  // 사동 `시키다` 의 어간은 `시키-` 이고 `시켜` 는 그것의 아/어형일 뿐이다.
+  // 어미로 `시켜` 만 적어 두면 "학습시켜줘" 는 읽히고 "학습시키고" 는 읽히지
+  // 않는다 — 연결형이 오히려 흔한 쪽인데. 산업군 말뭉치의 "발전 설비 예측 정비
+  // 모델을 학습시키고 정확도를 평가해줘" 가 요청 둘 중 하나를 통째로 잃었다.
+  verb("재실행", "(?:하|해|시[키켜])", "execute"),
+  verb("실행", "(?:하|해|시[키켜])", "execute"),
   // `되돌려` is not `돌려`: "의존성을 되돌려줘" is a revert, and this pattern was
   // matching the tail of it and producing "의존성 되를 실행한다" — a made-up target
   // for an act the user did not ask for.
@@ -137,8 +141,8 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   // "다운로드해줘" are the verbs a model-selection request is made of, and each
   // produced no requirement at all.
   verb("설치", "(?:하|해)", "execute"),
-  verb("학습", "(?:하|해|시켜)", "execute"),
-  verb("훈련", "(?:하|해|시켜)", "execute"),
+  verb("학습", "(?:하|해|시[키켜])", "execute"),
+  verb("훈련", "(?:하|해|시[키켜])", "execute"),
   verb("다운로드", "(?:하|해|받)", "execute"),
   verb("배포", "(?:하|해)", "execute"),
   verb("추론", "(?:하|해)", "execute"),
@@ -184,6 +188,28 @@ const VERBS: ReadonlyArray<VerbEntry> = [
   // other changes it to something new. The comment on `돌려` above already says
   // this verb is the one that gets confused; this is the other half of it.
   { pattern: /되돌[리려](?:줘|주세요|주|기|고|되)?/, action: "modify", phrase: "되돌린다" },
+  /**
+   * `문서로 정리해줘` — 정리한 결과가 문서일 때.
+   *
+   * `정리하다` 는 이 저장소에서 줄곧 `modify` 였고 그 판단에는 근거가 있다:
+   * "기술 부채를 정리해줘", "외부 연동만 정리해줘", "로그 포맷도 정리해줘" 는
+   * 전부 있던 것을 손보는 일이다. 산업군 말뭉치가 반대쪽을 잔뜩 가져왔을 뿐이고
+   * (탐지 룰·상위 원인·지연 구간·탐지 기준), 그 둘은 같은 동사의 두 뜻이다.
+   *
+   * 기본값을 뒤집어 보고 되돌렸다 — `inspect` 로 바꾸면 이 말뭉치 5건이 맞는
+   * 대신 consulting 4건과 gold 의 `named-source` 사슬이 깨진다. 말뭉치끼리
+   * 서로 다르게 답해 둔 상태이고, 그것은 이 파일이 혼자 정할 일이 아니다.
+   *
+   * 여기서 가르는 것은 문장이 **결과의 형태를 말한 경우** 하나뿐이다. `-로`
+   * 앞에 문서·보고서·요약이 있으면 정리된 것이 산출물이지 저장소가 아니고,
+   * 그때는 파일이 바뀌는지 확인하는 하네스가 틀린 것을 확인하게 된다.
+   * 나머지 넷은 `INDUSTRY_GAPS` 에 어긋남으로 남는다.
+   */
+  {
+    pattern: /(?:문서|보고서|리포트|요약|표|목록)(?:으)?로\s*정리[하해]/,
+    action: "inspect",
+    phrase: "정리한다",
+  },
   verb("정리", "(?:하|해)", "modify"),
   verb("갱신", "(?:하|해)", "modify"),
   verb("번역", "(?:하|해)", "modify"),
@@ -1148,8 +1174,48 @@ export function objectParticle(object: string): string {
  * out as a lone preserve and the rename it was contrasted with vanished. A space
  * after a Hangul syllable is required, so "안 되" and "적용되었다" are untouched.
  */
-const BOUNDARIES =
-  /(?<=[.!?。])(?=\s|$)|(?<=[가-힣]고\s)|(?<=[가-힣]되\s)|(?<=한\s*뒤\s)|(?<=한\s*다음\s)|(?<=면서\s)|(?<=,\s)|(?<=[해어아여]서\s)(?=[^.!?。]*[을를]\s)/;
+/**
+ * 연결어미 `-고` 는 용언 어간에 붙는다. 명사가 `고` 로 끝나는 것과는 다르다.
+ *
+ * 경계는 `[가-힣]고\s` 였다 — 앞이 무엇이든 `고` 로 끝나고 띄어쓰기가 오면 절이
+ * 끊겼다. 그래서 **창고·재고·보고·사고·참고·광고·신고** 가 전부 절 경계가 됐고,
+ * 그 앞의 명사는 목적어에서 사라졌다:
+ *
+ *     창고 로그를 분석해줘.        → 로그를 분석한다      ("창고" 없음)
+ *     재고 수량을 확인해줘.        → 수량을 확인한다      ("재고" 없음)
+ *     사고 이력을 조회해줘.        → (아무것도 없음)
+ *
+ * 물류·서버·주문·결제 로 바꾸면 멀쩡했다. 산업군 요청에서 재고·창고·사고·보고·
+ * 신고는 핵심 명사이므로 이것은 작은 구멍이 아니고, 스위트 전체가 초록이었으므로
+ * 재고 있던 것도 없었다.
+ *
+ * 고치는 방향을 **닫힌 긍정 목록**으로 잡았다. "고로 끝나는 명사" 를 빼는 목록은
+ * 열려 있고 빠뜨린 명사마다 같은 결함이 남지만, "고가 붙을 수 있는 용언" 은
+ * 한자어를 통째로 덮는 경동사 `하/되/시키` 와 흔한 고유어 한 줌이면 거의 닫힌다.
+ * 빠뜨렸을 때의 결과도 반대다 — 절을 안 끊어 두 요청이 하나로 읽히는 쪽이고,
+ * 그것은 다른 관문들이 다시 잡는다.
+ */
+const NATIVE_VERB_GO =
+  // 부정 보조용언이 맨 앞이다. `-지 말고` 는 이 저장소가 가장 많이 읽는 연결형이고
+  // ("수정하지 말고 설명만 해줘"), 빠뜨리자 금지 절이 뒤 절과 한 덩어리가 되어
+  // **"수정하지를 설명한다"** 라는 요구사항이 나왔다 — 사용자가 하지 말라고 한
+  // 것을 목적어로 삼은 문장이다.
+  "(?:말|않|만들|주|받|가|오|먹|읽|쓰|찾|잡|걸|넣|빼|놓|두|들|내|남|맡|보내|바꾸|고치|돌리|살피|다루|묶|열|닫|올리|내리|끄|켜|모으|나누|더하)";
+
+const BOUNDARIES = new RegExp(
+  [
+    "(?<=[.!?。])(?=\\s|$)",
+    // 한자어 용언 전부를 덮는 경동사, 그리고 고유어 한 줌.
+    `(?<=(?:하|되|시키|시켜)고\\s)`,
+    `(?<=${NATIVE_VERB_GO}고\\s)`,
+    "(?<=[가-힣]되\\s)",
+    "(?<=한\\s*뒤\\s)",
+    "(?<=한\\s*다음\\s)",
+    "(?<=면서\\s)",
+    "(?<=,\\s)",
+    "(?<=[해어아여]서\\s)(?=[^.!?。]*[을를]\\s)",
+  ].join("|"),
+);
 
 /**
  * Functional candidates in one turn.

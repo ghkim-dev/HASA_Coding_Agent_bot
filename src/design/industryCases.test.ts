@@ -144,7 +144,7 @@ describe("요청을 읽는다", () => {
     // 갱신하면서 `INDUSTRY_GAPS` 에서 해당 줄을 지우게 된다.
     assert.deepEqual(
       { 요구: [req, total], 대상: [tgt, total], 금지: [bans, INDUSTRY_CASES.length] },
-      { 요구: [31, 38], 대상: [15, 38], 금지: [24, 24] },
+      { 요구: [33, 38], 대상: [17, 38], 금지: [24, 24] },
     );
   });
 });

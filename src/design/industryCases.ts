@@ -81,7 +81,12 @@ export const INDUSTRY_CASES: readonly IndustryCase[] = [
     sector: "manufacturing",
     text: "MES와 ERP 사이 재고 수량이 어긋나는 원인을 찾아줘. 운영 DB는 건드리지 마.",
     why: "원인 분석 + 범위가 붙은 수정 금지. 규제·운영 환경 요청의 기본형이다.",
-    requirements: [{ action: "inspect", target: "재고 수량이 어긋나는 원인" }],
+    // 답을 **넓혔다**(2026-09-07). 처음에는 `재고 수량이 어긋나는 원인` 이라고
+    // 적었는데, "MES와 ERP 사이" 는 `어긋나는` 을 꾸미는 부사어이므로 관형절
+    // 안이고 따라서 목적어구 안이다. KLUE-DP 에서 관형절 안의 부사어가 목적어구에
+    // 드는 비율을 재면서 같은 구조를 확인했다. 출력이 그렇게 말해서가 아니라
+    // 문장이 그렇기 때문에 고친다 — 순서가 반대였다면 이 줄은 없어야 한다.
+    requirements: [{ action: "inspect", target: "MES와 ERP 사이 재고 수량이 어긋나는 원인" }],
     forbids: ["modify"],
   },
 
@@ -358,7 +363,6 @@ export interface IndustryGap {
  */
 const WINDOW_TRUNCATED = [
   "mfg-anomaly-pipeline",
-  "mfg-stock-mismatch",
   "hc-emr-slow-query",
   "log-route-optimise",
   "log-warehouse-no-web",
@@ -399,12 +403,6 @@ export const INDUSTRY_GAPS: readonly IndustryGap[] = [
       "혼자 정하고 있고, 그래서 이 요청은 파일을 바꾸는 하네스를 받는다.",
   },
   {
-    caseId: "hc-export-no-phi",
-    axis: "requirement",
-    verdict: "defect",
-    reason: "위와 같다 — `문서로 정리해줘` 가 `modify` 로 읽힌다.",
-  },
-  {
     caseId: "rtl-store-sales-compare",
     axis: "requirement",
     verdict: "defect",
@@ -430,13 +428,5 @@ export const INDUSTRY_GAPS: readonly IndustryGap[] = [
       "`재현하고 고쳐줘` 의 두 번째 절이 사라진다. 목적어가 없는 요청은 요구사항이 아니라 " +
       "질문거리라는 것이 이 저장소의 판단인데, gold `no-connective-as-target` 은 같은 모양을 " +
       "요구사항으로 답해 두었다. 두 답이 서로 다르므로 하나는 틀렸다.",
-  },
-  {
-    caseId: "eng-predictive-maintenance",
-    axis: "requirement",
-    verdict: "defect",
-    reason:
-      "`학습시키다` 를 읽는 동사가 없다. 모델을 학습시키는 것은 명령을 돌리는 일이고, " +
-      "이 산업군 요청의 절반이 그 동사로 시작한다.",
   },
 ];
