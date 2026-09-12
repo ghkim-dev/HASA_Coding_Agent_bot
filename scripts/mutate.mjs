@@ -404,8 +404,13 @@ const MUTATIONS = [
     'case "system_baseline":\n      return "confirmed";\n    case "runtime_action":\n      return "ambiguous";', "preview"],
   ["M27", "부정문에서 긍정 action 생성", "src/design/functionalExtract.ts",
     "if (NEGATED.test(clause.slice(match.index, match.index + match[0].length + 8))) continue;", "", "extract"],
+  // `-고` 경계가 정규식 한 줄에서 목록으로 바뀌었다. 예전 치환 문자열은
+  // `|(?<=[가-힣]고\\s)` 였고, 그 패턴이 **명사가 `고` 로 끝나기만 해도** 절을
+  // 끊던 것이 결함이었다(창고·재고·사고). 지금은 경동사 줄과 고유어 줄 둘이다.
   ["M28", "절 경계에서 -고 연결을 제거", "src/design/functionalExtract.ts",
-    "|(?<=[가-힣]고\\s)", "", "extract"],
+    "    `(?<=(?:하|되|시키|시켜)고\\\\s)`,", "", "extract"],
+  ["M28b", "고유어 용언의 -고 연결을 제거 — `말고`·`만들고` 가 안 끊김", "src/design/functionalExtract.ts",
+    "    `(?<=${NATIVE_VERB_GO}고\\\\s)`,", "", "extract"],
   // Removing an assertion from a test file cannot make that file fail, so a
   // mutation that deletes the required-question check would always read as
   // "does not bite". The check is load-bearing only if a production change it
@@ -1021,12 +1026,13 @@ const MUTATIONS = [
     "  if (stem === \"\" || wide.includes(stem)) return wide;",
     "  return wide;", "recall"],
   // ---- C4.24: `-어서` as a boundary, and only where it is safe -----------------
+  // 같은 이유로 다시 겨눴다. 경계가 한 줄 정규식에서 배열로 바뀌었으므로,
+  // `-어서` 줄 하나만 집어 지우거나 그 줄의 뒷조건만 떼어낸다.
   ["M235", "`-어서` 를 다시 경계에서 뺌 — `확인해서 모델 목록을 알려줘` 의 뒤 절이 사라짐", "src/design/functionalExtract.ts",
-    "  /(?<=[.!?。])(?=\\s|$)|(?<=[가-힣]고\\s)|(?<=[가-힣]되\\s)|(?<=한\\s*뒤\\s)|(?<=한\\s*다음\\s)|(?<=면서\\s)|(?<=,\\s)|(?<=[해어아여]서\\s)(?=[^.!?。]*[을를]\\s)/;",
-    "  /(?<=[.!?。])(?=\\s|$)|(?<=[가-힣]고\\s)|(?<=[가-힣]되\\s)|(?<=한\\s*뒤\\s)|(?<=한\\s*다음\\s)|(?<=면서\\s)|(?<=,\\s)/;", "recall"],
+    '    "(?<=[해어아여]서\\\\s)(?=[^.!?。]*[을를]\\\\s)",', "", "recall"],
   ["M236", "뒤 절이 제 대상을 부르는지 보지 않고 자름 — `찾아서 정리해줘` 가 통째로 사라짐", "src/design/functionalExtract.ts",
-    "  /(?<=[.!?。])(?=\\s|$)|(?<=[가-힣]고\\s)|(?<=[가-힣]되\\s)|(?<=한\\s*뒤\\s)|(?<=한\\s*다음\\s)|(?<=면서\\s)|(?<=,\\s)|(?<=[해어아여]서\\s)(?=[^.!?。]*[을를]\\s)/;",
-    "  /(?<=[.!?。])(?=\\s|$)|(?<=[가-힣]고\\s)|(?<=[가-힣]되\\s)|(?<=한\\s*뒤\\s)|(?<=한\\s*다음\\s)|(?<=면서\\s)|(?<=,\\s)|(?<=[해어아여]서\\s)/;", "recall"],
+    '"(?<=[해어아여]서\\\\s)(?=[^.!?。]*[을를]\\\\s)"',
+    '"(?<=[해어아여]서\\\\s)"', "recall"],
   // ---- C4.25: a comma-cut piece with no verb of its own ------------------------
   ["M237", "동사 없는 조각을 다시 버림 — `웹과 Hugging Face` 가 사라짐", "src/design/functionalExtract.ts",
     "    if (!speaks && /,\\s*$/u.test(joined)) {",

@@ -14,6 +14,7 @@ import {
   type PermissionEvidence,
 } from "./modelPermission.ts";
 import {
+  MAX_OUTPUT_TOKENS,
   SYSTEM,
   chooseProposerModel,
   createModelProposer,
@@ -59,16 +60,21 @@ const EVIDENCE: PermissionEvidence = {
 };
 
 /** A provider that hands back the catalogue and records every call made. */
-function fakeProvider(answer = "[]"): LlmProvider & { asked: string[] } {
+function fakeProvider(answer = "[]"): LlmProvider & { asked: string[]; budgets: number[] } {
   const asked: string[] = [];
+  // 보낸 예산을 적어 둔다. 상수가 옳아도 호출이 그것을 쓰지 않으면 소용없고,
+  // 그 둘은 따로 재야 구별된다.
+  const budgets: number[] = [];
   const provider = {
     id: "hasa" as const,
     displayName: "fake",
     baseUrl: BASE,
     asked,
+    budgets,
     listModels: async () => ({ models: CATALOGUE.map((id) => ({ id, ownedBy: "x" })), fetchedAt: 0 }),
-    chat: async (req: { modelId: string }): Promise<ProviderChatResponse> => {
+    chat: async (req: { modelId: string; maxOutputTokens?: number }): Promise<ProviderChatResponse> => {
       asked.push(req.modelId);
+      budgets.push(req.maxOutputTokens ?? -1);
       return {
         modelId: req.modelId,
         text: answer,
@@ -85,7 +91,7 @@ function fakeProvider(answer = "[]"): LlmProvider & { asked: string[] } {
       throw new Error("not used");
     },
   };
-  return provider as unknown as LlmProvider & { asked: string[] };
+  return provider as unknown as LlmProvider & { asked: string[]; budgets: number[] };
 }
 
 describe("공개 목록은 이 키의 호출 권한이 아니다", () => {
@@ -717,5 +723,39 @@ describe("제안자는 인용으로 지목한 근거를 쓴다", () => {
       { s: out.proposals[0]?.span.start, e: out.proposals[0]?.span.end },
       { s: 0, e: TEXT.indexOf("로그인 오류를 고쳐주고") + "로그인 오류를 고쳐주고".length },
     );
+  });
+});
+
+/**
+ * 출력 예산은 모델의 능력과 구별되지 않는다.
+ *
+ * 800 이었고, 네 모델 중 둘이 그 예산에서 `finish_reason: "length"` 와 함께 빈
+ * 문자열을 돌려줬다 — 못 하는 것이 아니라 예산이 끊은 것이다. 빈 문자열은 "못
+ * 한다" 와 글자가 같으므로, 그 상태로 재면 예산에 대한 사실이 모델에 대한 사실로
+ * 기록된다. 실제로 첫 스윕이 네 모델을 0/16 으로 적었다.
+ *
+ * 4800 은 그 넷 전부가 답한 가장 낮은 값이다. 응답 시간과 단조롭지 않은 곡선까지
+ * 상수의 주석에 있다.
+ */
+describe("출력 예산", () => {
+  const now = (): number => NOW;
+
+  test("재어 둔 바닥 위에 있다", () => {
+    // 트립와이어다. 내리려면 `scripts/budgetFloor.mjs` 를 다시 돌리고 상수의
+    // 주석을 고쳐야 한다 — 숫자만 내리면 이 줄이 먼저 운다.
+    assert.ok(
+      MAX_OUTPUT_TOKENS >= 4800,
+      `${MAX_OUTPUT_TOKENS} 은 네 모델 중 둘이 빈 답을 내던 구간입니다`,
+    );
+  });
+
+  test("제안자가 그 예산으로 부른다", async () => {
+    // 상수와 호출은 다른 것이다. 상수를 올려 두고 호출이 옛 숫자를 쓰면
+    // 아무것도 바뀌지 않는데 주석은 바뀌었다고 말한다.
+    const provider = fakeProvider();
+    const propose = await createModelProposer({ provider, permission: EVIDENCE, now });
+    await propose({ turnId: "t1", text: "로그인 오류를 고쳐줘." });
+    assert.ok(provider.budgets.length > 0, "호출이 없었습니다");
+    for (const b of provider.budgets) assert.equal(b, MAX_OUTPUT_TOKENS);
   });
 });

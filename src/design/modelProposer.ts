@@ -38,13 +38,36 @@ export const MAX_CALLS = 2;
  * The output budget every proposer call runs under.
  *
  * Exported because it is not an implementation detail: `proposerEvidence`
- * established that a model's score and its budget are one fact — six of the
- * eighteen chat models on this gateway return an empty string at this number
- * and answer well above it — so anything recording what a model did has to
- * record the budget it did it under. A caller that had to guess 800 would
- * write down a fact it did not know.
+ * established that a model's score and its budget are one fact — a model that
+ * thinks before it answers spends the budget on thinking and then has nothing
+ * left to write with — so anything recording what a model did has to record
+ * the budget it did it under. A caller that had to guess would write down a
+ * fact it did not know.
+ *
+ * ## 800 에서 4800 으로, 재고 나서
+ *
+ * 800 이 낮다는 것은 알려져 있었고 **얼마가 맞는지는 재지 않았다.** 그래서 같은
+ * 사례를 예산만 바꿔 물었다(`scripts/budgetFloor.mjs`, 그리고 응답 시간까지 본
+ * 확인 실행):
+ *
+ *     모델                 800              4800
+ *     exaone-4.0-32b     3.8s 답 있음      4.7s 답 있음
+ *     gpt-oss-20b        2.7s 빈 답        9.2s 답 있음
+ *     gpt-oss-120b       3.8s 빈 답        4.9s 답 있음
+ *     ax-3.1             1.7s 답 있음      2.0s 답 있음
+ *
+ * 빈 답 둘은 `finish_reason: "length"` 로 왔다 — 모델이 못 한 것이 아니라 예산이
+ * 끊은 것이고, 그 둘은 예산만 올리면 답한다. 넷 중 둘이 그랬다.
+ *
+ * 4800 인 이유는 그것이 이 네 모델 전부가 세 사례 모두에 답한 가장 낮은 값이기
+ * 때문이다. 더 낮게 잡을 수도 있었다 — `gpt-oss-120b` 는 3200 에서도 답했다 —
+ * 그러나 그 모델의 곡선은 단조롭지 않았고(2/3 → 1/3 → 2/3 → 1/3 → 3/3), 그것은
+ * 예산 말고 실행 편차가 섞여 있다는 뜻이다. 관측된 바닥이지 증명된 문턱이 아니다.
+ *
+ * 올리는 값은 상한이지 청구가 아니다. 필요 없는 모델은 `stop` 으로 훨씬 일찍
+ * 끝내고(+0.3~0.9초), 가장 오래 걸린 것이 9.2초로 `TIMEOUT_MS` 30초 안이다.
  */
-export const MAX_OUTPUT_TOKENS = 800;
+export const MAX_OUTPUT_TOKENS = 4800;
 
 /**
  * 이 프롬프트가 근거를 인용으로 받는 이유, 그리고 한 번 더 손대 보고 되돌린 것.
