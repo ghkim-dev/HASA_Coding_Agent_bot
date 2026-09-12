@@ -59,7 +59,7 @@ import { parseProposals } from "./proposalParse.ts";
  * 추가한다". The answer moved because the rendering was corrected, not because
  * the reading changed: the act, the target and the relation are all as they were.
  */
-const HOLDOUT_DIGEST = "1cdbfd1c823ce2ac35440dc3450ffc46e304f522bf08ec16e149ee7f6e611e46";
+const HOLDOUT_DIGEST = "4b96c4a9c1ec9af204280071a0916ed8dba413b8a155dc02d8e3e761da03c815";
 
 /** The content this digest is over. One definition, used to pin and to verify. */
 function normalise(source: string): string {

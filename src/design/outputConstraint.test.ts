@@ -3,6 +3,8 @@ import { describe, test } from "node:test";
 import { runtimeRequirements } from "./requirementSpec.ts";
 import { scenariosFor } from "./scenarioBlueprint.ts";
 import { checkAlignment } from "./semanticAlignment.ts";
+import { previewDesign, type Proposer } from "./preview.ts";
+import { parseProposals } from "./proposalParse.ts";
 
 /**
  * 결과물에 대한 금지가 배선 끝까지 가는지.
@@ -193,5 +195,135 @@ describe("행위 금지는 그대로다", () => {
       },
     );
     assert.equal(new Set(gates).size, 3, `세 부류가 같은 도구를 막습니다: ${JSON.stringify(gates)}`);
+  });
+});
+
+/**
+ * 모델이 금지문의 **일부만** 인용해 그 금지를 지우는 경우.
+ *
+ * 외부 검토가 "잘린 부정어" 로 짚었고, 실제로 뚫려 있었다. "배포는 하지 마세요"
+ * 에서 `배포는 하지` 까지만 인용하면 부정어가 구간 밖으로 나가고, 그 구간에
+ * `prohibitionsIn` 을 대면 아무것도 금지하지 않는다. 그 위에 **"배포한다"** 라는
+ * 요구사항이 수용됐다 — 사용자가 방금 하지 말라고 한 것을, 사용자의 말을 근거로.
+ *
+ * 구간의 끝을 정하는 것이 모델이라는 것이 문제의 전부다. 그래서 금지 검사는
+ * 구간이 아니라 **그 구간이 속한 문장**에 대고 한다. 인용을 요구하기 전에도
+ * 좌표로 같은 일을 할 수 있었지만, 좌표는 모델이 틀리는 쪽이라 우연히 빠지기는
+ * 어려웠다. 인용은 쉽다.
+ */
+describe("잘라 낸 금지는 금지로 남는다", () => {
+  const verdictOf = (spanText: string, proposalText: string) =>
+    checkAlignment({
+      spanText,
+      proposalText,
+      polarity: "required",
+      priority: "must",
+      sentenceText: "배포는 하지 마세요.",
+    });
+
+  test("부정어를 뺀 인용 위의 긍정 요구는 뒤집힘이다", () => {
+    const a = verdictOf("배포는 하지", "배포한다");
+    assert.equal(a.verdict, "reversed");
+    assert.equal(a.code, "polarity_reversed");
+  });
+
+  test("문장을 주지 않으면 예전처럼 구간만 본다", () => {
+    // 문서 없이 부르는 호출자가 둘 있다. 그쪽 동작을 바꾸지 않는다는 것을
+    // 고정해 둔다 — 바뀌면 그 둘이 조용히 다른 규칙을 따르게 된다.
+    const a = checkAlignment({
+      spanText: "배포는 하지",
+      proposalText: "배포한다",
+      polarity: "required",
+      priority: "must",
+    });
+    assert.equal(a.verdict, "aligned");
+  });
+
+  test("같은 문장의 다른 요구는 막히지 않는다", () => {
+    // 문장으로 넓히면 과잉 거부가 위험해진다. 금지와 무관한 제안은 통과해야
+    // 한다 — 판단은 "제안이 그 금지에 **대한** 것인가" 이고, 그 검사는 그대로다.
+    assert.equal(verdictOf("배포는 하지", "문서를 정리한다").verdict, "aligned");
+  });
+
+  /**
+   * 결과물 금지도 같은 방식으로 잘라 낼 수 있다.
+   *
+   * "…결론에 넣지 말아 주세요" 에서 `넣지` 까지만 인용하면 `NEG`(마/말/않고)가
+   * 구간 밖으로 나가고, `outputProhibitionsIn` 은 아무것도 못 읽는다. 도구를
+   * 막지 않는 금지라 관문도 없으므로, 여기서 놓치면 막는 것이 하나도 없다.
+   */
+  test("결과물 금지도 잘라 내면 뚫린다 — 문장으로 막는다", () => {
+    const sentence = "특정 벤더의 제품명은 결론에 넣지 말아 주세요.";
+    const cut = "특정 벤더의 제품명은 결론에 넣지";
+    const ask = "특정 벤더의 제품명을 결론에 넣는다";
+    assert.equal(
+      checkAlignment({ spanText: cut, proposalText: ask, polarity: "required", priority: "must" }).verdict,
+      "aligned",
+      "문장 없이는 잘린 금지를 볼 수 없다 — 이것이 막을 대상이다",
+    );
+    assert.equal(
+      checkAlignment({
+        spanText: cut,
+        proposalText: ask,
+        polarity: "required",
+        priority: "must",
+        sentenceText: sentence,
+      }).verdict,
+      "reversed",
+    );
+  });
+
+  test("배포·커밋·머지가 실행 행위로 인식된다", () => {
+    // 금지 부류에는 넣고 제안 쪽 패턴에는 넣지 않아서 처음엔 물지 않았다.
+    // 같은 부류의 양쪽 끝이므로 함께 자라야 한다.
+    for (const act of ["배포한다", "커밋한다", "머지한다", "푸시한다"]) {
+      assert.equal(verdictOf("배포는 하지", act).verdict, "reversed", act);
+    }
+  });
+});
+
+/**
+ * 배선까지 간다.
+ *
+ * `checkAlignment` 를 직접 부르는 test 는 함수가 옳다는 것만 말한다. 호출자가
+ * 문장을 넘기지 않으면 함수는 그대로인데 제품은 옛 동작으로 조용히 돌아간다 —
+ * 이 저장소에서 이미 한 번 겪은 모양이라 따로 세운다.
+ */
+describe("잘린 금지는 수용 경로에서 거부된다", () => {
+  const TURN = "로그인 오류를 고쳐주고 테스트도 돌려주세요. 배포는 하지 마세요.";
+
+  const proposing = (raw: string): Proposer =>
+    async ({ turnId }) => {
+      const parse = parseProposals(raw, turnId, TURN);
+      return { proposals: parse.proposals, modelId: "t", calls: 1, parse };
+    };
+
+  test("부정어를 뺀 인용 위의 긍정 요구는 수용되지 않는다", async () => {
+    const r = await previewDesign({
+      turns: [TURN],
+      propose: proposing('[{"text":"배포한다","quote":"배포는 하지"}]'),
+    });
+    assert.deepEqual(
+      r.requirements.filter((s) => s.derivedBy === "model_proposal").map((s) => s.text),
+      [],
+      "사용자가 금지한 것이 요구사항으로 섰습니다",
+    );
+    assert.ok(
+      r.rejected.some((x) => x.reasons.includes("semantics_reversed")),
+      `거부 사유: ${JSON.stringify(r.rejected.map((x) => x.reasons))}`,
+    );
+  });
+
+  test("같은 턴의 무관한 요구는 그대로 수용된다", async () => {
+    // 문장으로 넓힌 검사가 과잉 거부로 가지 않는지. 이것이 없으면 "전부
+    // 거부하는 하네스" 도 위 test 를 통과한다.
+    const r = await previewDesign({
+      turns: [TURN],
+      propose: proposing('[{"text":"로그인 오류를 고친다","quote":"로그인 오류를 고쳐주고"}]'),
+    });
+    assert.deepEqual(
+      r.requirements.filter((s) => s.derivedBy === "model_proposal").map((s) => s.text),
+      ["로그인 오류를 고친다"],
+    );
   });
 });

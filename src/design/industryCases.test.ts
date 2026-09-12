@@ -119,14 +119,33 @@ describe("요청을 읽는다", () => {
     });
   }
 
+  /**
+   * 금지 지표를 둘로 나눈다.
+   *
+   * 24/24 를 "금지문 24개를 모두 인식했다" 로 읽으면 분모가 거짓말을 한다.
+   * 외부 검토가 짚은 자리다 — 명시적 금지가 있는 사례는 **7건**이고, 나머지
+   * 17건은 금지가 **없는 것이 정답**이라 빈 목록이 맞은 것이다. 앞쪽은 읽어내는
+   * 능력이고 뒤쪽은 지어내지 않는 능력이며, 둘은 다른 방식으로 고장 난다:
+   * 전부 빈 목록을 내는 판독기는 17/17 을 얻고 7/7 을 잃는다.
+   */
   test("분자와 분모 — 요구·대상·금지", () => {
     let req = 0;
     let tgt = 0;
     let total = 0;
-    let bans = 0;
+    let bansFound = 0;
+    let bansTotal = 0;
+    let quietFound = 0;
+    let quietTotal = 0;
     for (const c of INDUSTRY_CASES) {
       const got = readCase(c);
-      if (JSON.stringify(got.bans) === JSON.stringify([...c.forbids].sort())) bans += 1;
+      const right = JSON.stringify(got.bans) === JSON.stringify([...c.forbids].sort());
+      if (c.forbids.length > 0) {
+        bansTotal += 1;
+        if (right) bansFound += 1;
+      } else {
+        quietTotal += 1;
+        if (right) quietFound += 1;
+      }
       // 사례별 test 와 같은 다중집합 셈. 여기만 느슨하게 세면 합계가 각 사례가
       // 믿지 않는 숫자를 보고하게 된다.
       const pool = got.acts.map((a) => a.action);
@@ -143,8 +162,13 @@ describe("요청을 읽는다", () => {
     // 못이지 목표가 아니다. 올라가면 이 줄이 실패하고, 그때 올린 쪽이 숫자를
     // 갱신하면서 `INDUSTRY_GAPS` 에서 해당 줄을 지우게 된다.
     assert.deepEqual(
-      { 요구: [req, total], 대상: [tgt, total], 금지: [bans, INDUSTRY_CASES.length] },
-      { 요구: [33, 38], 대상: [17, 38], 금지: [24, 24] },
+      {
+        요구: [req, total],
+        대상: [tgt, total],
+        "금지를 읽어냄": [bansFound, bansTotal],
+        "금지를 지어내지 않음": [quietFound, quietTotal],
+      },
+      { 요구: [33, 38], 대상: [17, 38], "금지를 읽어냄": [7, 7], "금지를 지어내지 않음": [17, 17] },
     );
   });
 });

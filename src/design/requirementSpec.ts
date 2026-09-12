@@ -496,6 +496,9 @@ export function acceptProposals(input: {
       proposalText: proposal.text,
       polarity,
       priority,
+      // 구간이 아니라 그 구간이 속한 문장을 금지 검사에 넘긴다. 구간의 끝을
+      // 정하는 것은 모델이고, 부정어만 잘라 내면 금지가 검사에서 사라진다.
+      sentenceText: sentenceAround(input.userText, proposal.span.start),
     });
     if (alignment.verdict === "reversed") {
       rejected.push({ proposal, reasons: ["semantics_reversed"] });

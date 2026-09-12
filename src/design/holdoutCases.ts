@@ -59,6 +59,17 @@ import type { RequirementPriority, RequirementKind } from "./requirementSpec.ts"
  *      the user's verb with a representative of its class, so "리팩터링해줘" now
  *      reads back as 리팩터링. Had the action or the target moved, the answer
  *      would be the thing that is right.
+ *   7. `h-inherit-three-turns` again — `extras.standing` "마이그레이션 스크립트를
+ *      추가한다" → "만든다" (커밋 `b3344b4`). 앞의 여섯과 달리 **이것은 출력에
+ *      맞춘 변경이다.** 렌더러가 `만들다` 를 옮겨 적는 말을 바꿨고, 답이 그 말을
+ *      담고 있었으므로 따라 바뀌었다. 행위도 대상도 그대로이고 바뀐 것은 한국어
+ *      동사형 하나뿐이지만, 성질이 다른 변경을 같은 목록에 섞어 두면 "정답이
+ *      틀려서 고쳤다" 는 이 목록의 주장이 약해지므로 갈라 적는다.
+ *
+ *      외부 검토가 "해시가 고정되었다는 사실만으로 독립 평가가 되지 않는다,
+ *      정답을 보고 구현을 수정한 이력이 있는지 확인하라" 고 짚어 찾아낸 항목이다.
+ *      이 파일이 여전히 개발셋보다 나은 측정인 것은 맞지만, **한 번도 맞춰본 적이
+ *      없다** 고 말하는 것은 이제 정확하지 않다.
  *
  * The first run's numbers, before any of this, are in the commit message: recall
  * 37/43, precision 37/38, target accuracy 31/37. They are the honest first

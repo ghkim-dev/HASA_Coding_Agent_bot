@@ -266,3 +266,56 @@ describe("인용으로 지목한 근거", () => {
     assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: 6 });
   });
 });
+
+/**
+ * 인용으로 지목하게 하면서 열린 자리들.
+ *
+ * 외부 검토가 짚어 준 목록이다 — 같은 인용의 반복, 인용과 좌표가 서로 다른 유효
+ * 구간을 가리키는 경우, 앞뒤 공백, 이모지, **잘린 부정어**, 원문에 없는 인용과
+ * 유효한 좌표, 빈 응답, 여러 요구를 한 구간으로 묶는 경우. 실제 호출 없이 파서와
+ * 검증기만으로 전부 확인할 수 있고, 그래서 확인했다.
+ *
+ * 이 중 하나는 진짜 구멍이었다. 아래 `잘린 부정어` 를 보라.
+ */
+describe("인용 입력 계약의 경계", () => {
+  const TEXT = "로그인 오류를 고쳐주고 테스트도 돌려주세요. 배포는 하지 마세요.";
+
+  test("앞뒤 공백은 떼고 찾는다", () => {
+    const r = parseProposals('[{"text":"고친다","quote":"  로그인 오류를 고쳐주고  "}]', T, TEXT);
+    assert.equal(r.outcome, "parsed_candidate");
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: 12 });
+  });
+
+  test("이모지가 든 원문에서도 자리를 찾는다", () => {
+    // 자바스크립트 문자열 길이는 코드 단위라 이모지가 둘을 차지한다. 인용으로
+    // 찾으면 그 셈을 아무도 하지 않아도 된다 — 좌표로 물을 때와 다른 점이다.
+    const emoji = "로그인 오류 🔧 를 고쳐주세요.";
+    const r = parseProposals('[{"text":"고친다","quote":"로그인 오류 🔧"}]', T, emoji);
+    assert.equal(emoji.slice(r.proposals[0]?.span.start, r.proposals[0]?.span.end), "로그인 오류 🔧");
+  });
+
+  test("인용과 좌표가 둘 다 유효하면 인용이 이긴다", () => {
+    // 둘 다 원문 안의 진짜 구간이다. 어느 쪽도 `checkSpan` 에 걸리지 않으므로
+    // 규칙이 결정한다 — 확인된 쪽을 쓴다.
+    const r = parseProposals(
+      '[{"text":"돌린다","quote":"테스트도 돌려주세요","start":0,"end":12}]',
+      T,
+      TEXT,
+    );
+    assert.equal(TEXT.slice(r.proposals[0]?.span.start, r.proposals[0]?.span.end), "테스트도 돌려주세요");
+  });
+
+  test("quote 가 문자열이 아니면 좌표로 물러난다", () => {
+    const r = parseProposals('[{"text":"고친다","quote":123,"start":0,"end":6}]', T, TEXT);
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: 6 });
+  });
+
+  test("원문 전체를 인용해도 파서는 막지 않는다", () => {
+    // 파서의 일이 아니다. 근거가 문장 전체라는 것은 약한 근거이지 없는 근거가
+    // 아니고, 그것을 판단하는 자리는 `checkSpan`·`checkAlignment` 다. 여기서
+    // 막으면 두 군데가 같은 규칙을 따로 갖게 된다.
+    const r = parseProposals(`[{"text":"전부","quote":${JSON.stringify(TEXT)}}]`, T, TEXT);
+    assert.equal(r.outcome, "parsed_candidate");
+    assert.deepEqual({ s: r.proposals[0]?.span.start, e: r.proposals[0]?.span.end }, { s: 0, e: TEXT.length });
+  });
+});

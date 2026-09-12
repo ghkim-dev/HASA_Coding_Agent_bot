@@ -42,7 +42,15 @@ export interface Alignment {
 
 const KEEP = /유지|보존|그대로|keep|preserve|retain/;
 const REMOVE = /제거|삭제|없애|바꾸|변경|rename|remove|delete|replace/;
-const EXECUTE = /실행|돌리|구동|run\b|execute/;
+/**
+ * 제안이 실행 행위를 말하는가.
+ *
+ * 배포·커밋·머지·푸시가 뒤늦게 붙었다. `statedProhibitions` 의 실행 부류에는
+ * 넣어 두고 여기에는 넣지 않아서, "배포는 하지 마세요" 를 금지로 읽고도
+ * "배포한다" 라는 제안이 그 금지에 **대한** 것인 줄 몰랐다 — 두 목록이 같은
+ * 부류의 양쪽 끝인데 한쪽만 자랐던 것이다.
+ */
+const EXECUTE = /실행|돌리|구동|배포|커밋|머지|푸시|릴리[스즈]|롤아웃|run\b|execute|deploy|release|merge|commit|push/;
 
 /**
  * Putting something into the answer — the act an output prohibition forbids.
@@ -100,12 +108,34 @@ export function checkAlignment(input: {
   proposalText: string;
   polarity: "required" | "forbidden";
   priority: "must" | "should" | "may";
+  /**
+   * The sentence the span sits in, when the caller has it.
+   *
+   * The prohibition check runs on this rather than on the span, and the reason
+   * is that **the model chooses where the span ends.** Asking for a quote made
+   * that easy to exploit: given "배포는 하지 마세요", a model that quotes
+   * `배포는 하지` — the prohibition with its negation cut off — gets a span
+   * that `prohibitionsIn` reads as forbidding nothing, and the proposal
+   * "배포한다" was accepted on it. A requirement to do the thing the user had
+   * just forbidden, grounded in the user's own words.
+   *
+   * Found by an outside review that listed truncated negation as a case to
+   * check. It was reachable before quotes too — a model could have given the
+   * coordinates — but coordinates are the thing models get wrong, so the hole
+   * was hard to fall into by accident and easy to fall into on purpose.
+   *
+   * Optional because two callers pass a span with no document behind it. When
+   * it is absent the check is what it was: the span, and nothing wider.
+   */
+  sentenceText?: string;
 }): Alignment {
   const span = input.spanText;
   const text = input.proposalText;
 
   // The span forbids something and the proposal requires it, or the reverse.
-  const forbidden = prohibitionsIn(span);
+  // Read on the sentence, so cutting the negation out of the quote does not
+  // cut the prohibition out of the check.
+  const forbidden = prohibitionsIn(input.sentenceText ?? span);
   if (forbidden.size > 0 && input.polarity === "required") {
     const about =
       (forbidden.has("execute") && EXECUTE.test(text)) ||
@@ -142,7 +172,9 @@ export function checkAlignment(input: {
   // own reversal. `NEGATED` is the extractor's own, shared rather than copied
   // so the two cannot drift.
   if (input.polarity === "required" && INCLUDE.test(text) && !NEGATED.test(text)) {
-    for (const banned of outputProhibitionsIn(span)) {
+    // 여기도 문장으로 읽는다. "제품명은 결론에 넣지 마세요" 에서 `넣지` 까지만
+    // 인용하면 같은 방식으로 금지가 사라진다.
+    for (const banned of outputProhibitionsIn(input.sentenceText ?? span)) {
       if (!text.includes(banned.subject)) continue;
       return {
         verdict: "reversed",
